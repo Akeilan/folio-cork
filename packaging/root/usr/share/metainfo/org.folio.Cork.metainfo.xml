@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>org.folio.Cork</id>
+  <name>Folio Cork</name>
+  <summary>Diagrams, whiteboards and mood boards</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>LicenseRef-proprietary</project_license>
+  <description>
+    <p>Folio Cork draws diagrams and runs whiteboards with a ribbon: shapes and stencils, glued connectors,
+    sticky notes, pen, frames, voting, templates, mood boards, comments and layers. It opens and saves Visio
+    drawings and exports PNG, SVG and PDF. Everything stays on this computer.</p>
+  </description>
+  <launchable type="desktop-id">org.folio.Cork.desktop</launchable>
+  <provides><binary>folio-cork</binary></provides>
+  <releases><release version="0.1.0" date="2026-10-31"/></releases>
+</component>

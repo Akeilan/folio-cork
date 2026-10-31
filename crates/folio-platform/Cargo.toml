@@ -1,0 +1,9 @@
+[package]
+name = "folio-platform"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+arboard = "3.7.0"
+softbuffer = "0.4"
+winit = "0.30"
