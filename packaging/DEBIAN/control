@@ -1,0 +1,19 @@
+Package: folio-cork
+Version: 0.1.0
+Section: graphics
+Priority: optional
+Architecture: amd64
+Installed-Size: 12000
+Depends: libc6 (>= 2.35), libgcc-s1, libx11-6, libx11-xcb1, libxcursor1, libxi6, libxcb1, libxkbcommon0, libxkbcommon-x11-0, libwayland-client0
+Recommends: cups-client, xdg-utils, fonts-dejavu-core
+Suggests: libreoffice-draw
+Maintainer: Ron Shillings <ron.shillings@gmail.com>
+Description: diagrams, whiteboards and mood boards
+ Folio Cork draws diagrams and runs whiteboards with a ribbon interface,
+ KeyTips and ScreenTips: shapes and stencils (flowchart, network, UML,
+ database, floor plan, electrical and electronic symbols), connectors that
+ stay glued and route around shapes, sticky notes, pen, frames, voting,
+ templates, mood boards with colour palettes picked from pictures, comments,
+ layers, automatic layout and org charts from a spreadsheet. Opens and saves
+ Visio drawings (.vsdx), exports PNG, SVG and PDF, and lets people on the same
+ network work on one board together. Everything stays on this computer.

@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Folio Cork
+GenericName=Diagrams and Whiteboard
+Comment=Draw diagrams, flowcharts, mind maps and mood boards
+Exec=folio-cork %F
+Icon=folio-cork
+Terminal=false
+Categories=Graphics;VectorGraphics;Office;Chart;FlowChart;
+MimeType=application/vnd.ms-visio.drawing.main+xml;application/vnd.visio;
+Keywords=diagram;flowchart;visio;whiteboard;mind map;org chart;mood board;sticky;schematic;
+StartupWMClass=folio-cork

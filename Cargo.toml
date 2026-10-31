@@ -1,0 +1,21 @@
+[workspace]
+resolver = "2"
+members = ["crates/folio-platform", "crates/folio-kit", "folio-cork"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 4
+strip = true
+panic = "unwind"
+
+[profile.dev]
+opt-level = 1
+debug = "line-tables-only"
+[profile.dev.package."*"]
+opt-level = 3
+debug = false

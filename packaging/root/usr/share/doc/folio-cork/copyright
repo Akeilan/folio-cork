@@ -1,0 +1,10 @@
+Folio Cork
+Copyright 2026 Ron Shillings. Part of Folio Studio.
+
+Folio Cork is written in Rust on Folio's own platform layer and toolkit, with these
+open-source libraries compiled in (MIT or Apache-2.0 unless noted): winit, softbuffer,
+arboard (windows, pixels, clipboard); tiny-skia and resvg (drawing, MPL-2.0 for parts of
+resvg's dependencies); cosmic-text, swash, fontdb, harfrust (text, fonts); image (pictures);
+zip, quick-xml, calamine (files); pdf-writer, miniz_oxide (PDF); serde, serde_json;
+chacha20poly1305, pbkdf2, sha2 (encryption for working together).
+Icons are original.
