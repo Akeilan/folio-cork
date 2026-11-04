@@ -23,7 +23,7 @@ Every Folio app written in Rust follows these rules. `tools/check-portability.sh
 - The pixel tests use only the fonts that ship with Folio (`Text::bundled`), so a page draws the same on every machine.
 - Checked by:
   - `cargo test`: the stored pictures in `crates/folio-kit/tests/golden` and the stored fingerprints of rendered pages and exported SVG and PDF in `folio-cork/tests/golden.txt`;
-  - the release run, which repeats the tests built for the baseline x86-64 CPU and for the build machine's own CPU (AVX2) and compares the two.
+  - the release run, which repeats the tests built for the build machine's own CPU (AVX2, FMA), and again for ARM64 (the Pi 4B's CPU, with the renderer's NEON paths) under qemu. All of them must give the stored pixels and file fingerprints.
 - Known limit: the renderer works out its own curve geometry with the system's maths library in two places (rotating by an angle, which Folio doesn't use, and splitting some cubic curves). That can move an anti-aliased edge pixel on screen between systems. Saved files and exported SVG and PDF are not affected.
 
 ## 4. File formats are defined to the byte

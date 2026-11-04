@@ -179,6 +179,7 @@ struct Runner<A: App> {
     clicks: ClickCounter,
     next_tick: Option<Instant>,
     shown: bool,
+    failed: bool,
 }
 
 impl<A: App> Runner<A> {
@@ -295,7 +296,15 @@ impl<A: App> ApplicationHandler for Runner<A> {
             attrs = WindowAttributesExtX11::with_name(attrs, self.spec.app_id.clone(), self.spec.app_id.clone());
             attrs = WindowAttributesExtWayland::with_name(attrs, self.spec.app_id.clone(), "");
         }
-        let window = Rc::new(el.create_window(attrs).expect("create window"));
+        let window = match el.create_window(attrs) {
+            Ok(w) => Rc::new(w),
+            Err(e) => {
+                eprintln!("Can't open a window: {e}");
+                self.failed = true;
+                el.exit();
+                return;
+            }
+        };
         let context = softbuffer::Context::new(window.clone()).expect("display");
         let surface = softbuffer::Surface::new(&context, window.clone()).expect("surface");
         let size = window.inner_size();
@@ -430,10 +439,11 @@ pub fn run<A: App + 'static>(app: A, spec: WindowSpec) -> i32 {
         clicks: ClickCounter::default(),
         next_tick: None,
         shown: false,
+        failed: false,
     };
     if let Err(e) = el.run_app(&mut r) {
         eprintln!("{e}");
         return 1;
     }
-    r.app.exit_code()
+    if r.failed { 1 } else { r.app.exit_code() }
 }
