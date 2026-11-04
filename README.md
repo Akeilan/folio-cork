@@ -1,13 +1,26 @@
 # Folio Cork
 
-Diagrams, whiteboards and mood boards for Folio Studio, written in Rust on Folio's portable platform
-layer and toolkit.
+Diagrams, whiteboards and mood boards for Folio Studio. Cork is written in Rust on Folio's portable platform layer and toolkit, the base every Folio app moves to.
 
-- `crates/folio-platform` — the only code that talks to the operating system (window, input,
-  clipboard, printing). Linux X11 and Wayland today; Windows and macOS through the same layer.
-- `crates/folio-kit` — the Folio toolkit: software renderer, text, ribbon with KeyTips and
-  ScreenTips, title bar in the app colour, menus, dialogs, file browser, light and dark themes.
-- `folio-cork` — the app.
+- `crates/folio-platform`: the only code that talks to the operating system.
+  - Covers the window, input, clipboard, sound, files, sockets, threads and printing.
+  - Linux (X11 and Wayland) today. Windows and macOS come through the same layer.
+  - Its contract is in [docs/PLATFORM.md](docs/PLATFORM.md).
+- `crates/folio-kit`: the Folio toolkit.
+  - A software renderer, text, and the ribbon with KeyTips and ScreenTips.
+  - A title bar in the app colour, menus, dialogs, a file browser, light and dark themes.
+  - Deterministic maths.
+- `folio-cork`: the app.
+- `fonts`: the fonts that ship with Folio (Carlito, Liberation Serif, Liberation Mono; Latin, Greek and Cyrillic).
+- `docs`: [portability rules](docs/PORTABILITY.md), [file and wire formats](docs/FORMATS.md), [platform contract](docs/PLATFORM.md).
 
-Build and test: `cargo test`, then `cargo run -- --ui-test DIR` (window test, X11 or Wayland).
-Release: `tools/release.sh` (tests, .deb built on 22.04, installed tests on three machines, Wayland).
+## Commands
+
+| Command | What it does |
+|---|---|
+| `cargo test --workspace` | Unit tests, pixel tests, the platform conformance tests, and the full window test without a display. |
+| `tools/check-portability.sh` | The portability rules that a machine can check. |
+| `tools/conformance.sh` | Window conformance on a real display (X11, or Wayland through Weston). |
+| `folio-cork --ui-test DIR [--headless]` | The window test, in a window or in memory. |
+| `folio-cork --bench` | The Raspberry Pi 4B budgets. |
+| `tools/release.sh` | All of the above, the .deb built on 22.04, the installed tests on three machines, and the Wayland pass. |

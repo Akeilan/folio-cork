@@ -1,9 +1,17 @@
 [package]
 name = "folio-platform"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 
 [dependencies]
 arboard = "3.7.0"
+getrandom = "0.3.4"
+cpal = { version = "0.18.2", optional = true }
 softbuffer = "0.4"
 winit = "0.30"
+
+[features]
+audio = ["dep:cpal"]
+
+[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
+smithay-clipboard = "0.7.3"

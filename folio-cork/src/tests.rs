@@ -209,3 +209,113 @@ fn write_sample() {
     let mut t = Text::new();
     crate::export::png(&e.doc, &[0], &std::path::Path::new(&out).with_extension("png"), &mut t, &mut images, 1.0).unwrap();
 }
+
+fn fnv(b: &[u8]) -> String {
+    let mut h: u64 = 0xcbf29ce484222325;
+    for x in b {
+        h = (h ^ *x as u64).wrapping_mul(0x100000001b3);
+    }
+    format!("{h:016x}")
+}
+
+/// X3-12: every template renders and exports to the same bytes on every machine and CPU. The
+/// fingerprints are stored in tests/golden.txt; `FOLIO_UPDATE_GOLDEN=1` rewrites them after a
+/// deliberate change to drawing or export.
+#[test]
+fn templates_render_identically_everywhere() {
+    let dir = folio_kit::platform::temp_dir().join(format!("folio-cork-golden-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut got = String::new();
+    for (key, _, _) in crate::templates::LIST {
+        let mut e = ed();
+        crate::templates::apply(key, &mut e);
+        let mut t = Text::bundled();
+        let mut images = crate::render::Images::default();
+        let pages: Vec<usize> = (0..e.doc.pages.len()).collect();
+        let png = dir.join(format!("{key}.png"));
+        let svg = dir.join(format!("{key}.svg"));
+        let pdf = dir.join(format!("{key}.pdf"));
+        let vsdx = dir.join(format!("{key}.vsdx"));
+        crate::export::png(&e.doc, &[0], &png, &mut t, &mut images, 1.0).unwrap();
+        crate::export::svg(&e.doc, &[0], &svg, &mut t).unwrap();
+        crate::export::pdf(&e.doc, &pages, &pdf, &mut t, &mut images, true, false).unwrap();
+        crate::files::save(&e.doc, &vsdx).unwrap();
+        let px = folio_kit::gfx::decode_image(&std::fs::read(&png).unwrap()).unwrap();
+        for (kind, bytes) in [("pixels", px.data().to_vec()), ("svg", std::fs::read(&svg).unwrap()), ("pdf", std::fs::read(&pdf).unwrap()), ("vsdx", std::fs::read(&vsdx).unwrap())] {
+            got.push_str(&format!("{key} {kind} {}\n", fnv(&bytes)));
+        }
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden.txt");
+    if std::env::var_os("FOLIO_UPDATE_GOLDEN").is_some() || !path.exists() {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, &got).unwrap();
+        return;
+    }
+    let want = std::fs::read_to_string(&path).unwrap();
+    let diff: Vec<String> = want.lines().zip(got.lines()).filter(|(a, b)| a != b).map(|(a, b)| format!("want {a} / got {b}")).collect();
+    assert!(diff.is_empty() && want.lines().count() == got.lines().count(), "output changed:\n{}", diff.join("\n"));
+}
+
+/// X3-14: the whole window test, with no window and no display server.
+#[test]
+fn ui_test_runs_headless() {
+    let dir = folio_kit::platform::temp_dir().join(format!("folio-cork-ui-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    folio_kit::platform::set_setting("FOLIO_UI_DIR", &dir);
+    folio_kit::platform::set_setting("FOLIO_CONFIG_DIR", &dir.join("config"));
+    folio_kit::platform::set_setting("FOLIO_FONTS_ONLY", std::path::Path::new("1"));
+    let mut a = crate::app::CorkApp::new(Document::default(), None);
+    a.settings = crate::settings::Settings::default();
+    a.test = Some(crate::uitest::UiTest::new(dir.clone()));
+    let mut frame = Vec::new();
+    let code = folio_kit::platform::run_headless(&mut a, 1280, 800, 1.0, 20_000, &mut frame);
+    assert_eq!(code, Some(0), "window test failed (screenshots in {})", dir.display());
+    assert!(dir.join("ui-final.png").exists());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Redrawing only what changed (scrolling, typing, moving a shape) must give exactly the
+/// pixels a full redraw gives.
+#[test]
+fn partial_redraw_matches_full_redraw() {
+    use folio_kit::platform::{App, Event, Headless};
+    let (w, h) = (1280u32, 800u32);
+    let mut host = Headless::default();
+    let mut a = crate::app::CorkApp::new(Document::default(), None);
+    a.settings = crate::settings::Settings::default();
+    let mut px = vec![0u8; (w * h * 4) as usize];
+    App::event(&mut a, &Event::Resized { w, h, scale: 1.0 }, &mut host);
+    crate::bench::busy_board(&mut a);
+    App::paint(&mut a, &mut px, w, h, &mut host);
+    App::event(&mut a, &Event::MouseMove { x: 640.0, y: 400.0 }, &mut host);
+    for dy in [-3.0, -2.0, 1.0, -4.0] {
+        App::event(&mut a, &Event::Wheel { dx: 0.0, dy }, &mut host);
+        App::paint(&mut a, &mut px, w, h, &mut host);
+    }
+    App::event(&mut a, &Event::Wheel { dx: -2.0, dy: 0.0 }, &mut host);
+    App::paint(&mut a, &mut px, w, h, &mut host);
+    let id = a.ed.pg().shapes.iter().find(|s| !s.is_connector() && s.x > 300.0 && s.y > 200.0).map(|s| s.id).unwrap();
+    a.ed.sel = vec![id];
+    for c in "Moved".chars() {
+        App::event(&mut a, &Event::Text(c.to_string()), &mut host);
+        App::paint(&mut a, &mut px, w, h, &mut host);
+    }
+    a.ed.end_edit();
+    App::paint(&mut a, &mut px, w, h, &mut host);
+    // Move the shape: its old and new places, and the lines glued to it, change.
+    if let Some(s) = a.ed.pgm().get_mut(id) {
+        s.x += 37.0;
+        s.y += 11.0;
+    }
+    a.ed.changed();
+    App::paint(&mut a, &mut px, w, h, &mut host);
+    let partial = px.clone();
+    a.forget_layer();
+    App::paint(&mut a, &mut px, w, h, &mut host);
+    let diff = partial.chunks(4).zip(px.chunks(4)).filter(|(a, b)| a != b).count();
+    if diff > 0 {
+        let _ = std::fs::write("/tmp/partial.rgba", &partial);
+    }
+    assert_eq!(diff, 0, "partial redraw differs from a full redraw in {diff} pixels");
+}

@@ -16,6 +16,10 @@ struct WinHost {
     window: Rc<Window>,
     start: Instant,
     clipboard: Option<arboard::Clipboard>,
+    /// On Wayland, text goes through the compositor's own clipboard (arboard only reaches the
+    /// X11 one, which a session without XWayland doesn't have).
+    #[cfg(all(unix, not(target_os = "macos")))]
+    wl_clip: Option<smithay_clipboard::Clipboard>,
     want_redraw: bool,
     want_close: bool,
     last_cursor: Option<Cursor>,
@@ -89,9 +93,18 @@ impl Host for WinHost {
         }
     }
     fn clipboard_text(&mut self) -> Option<String> {
+        #[cfg(all(unix, not(target_os = "macos")))]
+        if let Some(w) = &self.wl_clip {
+            return w.load().ok();
+        }
         self.clip()?.get_text().ok()
     }
     fn set_clipboard_text(&mut self, text: &str) {
+        #[cfg(all(unix, not(target_os = "macos")))]
+        if let Some(w) = &self.wl_clip {
+            w.store(text);
+            return;
+        }
         if let Some(c) = self.clip() {
             let _ = c.set_text(text.to_string());
         }
@@ -111,6 +124,16 @@ impl Host for WinHost {
     }
     fn now(&self) -> Duration {
         self.start.elapsed()
+    }
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn wayland_clipboard(window: &Window) -> Option<smithay_clipboard::Clipboard> {
+    use winit::raw_window_handle::{HasDisplayHandle, RawDisplayHandle};
+    match window.display_handle().ok()?.as_raw() {
+        // SAFETY: the display outlives the window, and the clipboard lives in the window's host.
+        RawDisplayHandle::Wayland(h) => Some(unsafe { smithay_clipboard::Clipboard::new(h.display.as_ptr()) }),
+        _ => None,
     }
 }
 
@@ -155,6 +178,7 @@ struct Runner<A: App> {
     mods: Mods,
     clicks: ClickCounter,
     next_tick: Option<Instant>,
+    shown: bool,
 }
 
 impl<A: App> Runner<A> {
@@ -282,6 +306,8 @@ impl<A: App> ApplicationHandler for Runner<A> {
             window: window.clone(),
             start: Instant::now(),
             clipboard: None,
+            #[cfg(all(unix, not(target_os = "macos")))]
+            wl_clip: wayland_clipboard(&window),
             want_redraw: true,
             want_close: false,
             last_cursor: None,
@@ -294,7 +320,17 @@ impl<A: App> ApplicationHandler for Runner<A> {
 
     fn window_event(&mut self, el: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
         match event {
-            WindowEvent::RedrawRequested => self.paint(),
+            WindowEvent::RedrawRequested => {
+                self.paint();
+                if !self.shown {
+                    // A newly started app takes the keyboard once it's on screen (a bare X
+                    // server has no window manager to give it).
+                    self.shown = true;
+                    if let Some(h) = &self.host {
+                        h.window.focus_window();
+                    }
+                }
+            }
             WindowEvent::Resized(s) => {
                 self.size = (s.width, s.height);
                 let scale = self.scale;
@@ -393,6 +429,7 @@ pub fn run<A: App + 'static>(app: A, spec: WindowSpec) -> i32 {
         mods: Mods::NONE,
         clicks: ClickCounter::default(),
         next_tick: None,
+        shown: false,
     };
     if let Err(e) = el.run_app(&mut r) {
         eprintln!("{e}");

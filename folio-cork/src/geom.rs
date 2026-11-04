@@ -1,5 +1,6 @@
 //! Shape outlines, connection points and hit testing.
 
+use folio_kit::math::Det;
 use crate::model::Shape;
 use crate::stencils;
 use folio_kit::sk;
@@ -146,7 +147,7 @@ pub fn geometry(s: &Shape) -> Geo {
             for i in 0..10 {
                 let a = (-90.0 + i as f32 * 36.0).to_radians();
                 let r = if i % 2 == 0 { 0.5 } else { 0.2 };
-                pts.push((w / 2.0 + a.cos() * r * w, h / 2.0 + a.sin() * r * h * 1.05));
+                pts.push((w / 2.0 + a.dcos() * r * w, h / 2.0 + a.dsin() * r * h * 1.05));
             }
             Geo { subs: vec![filled(poly(&pts))], points: sides(w, h), text: inset(0.32) }
         }
@@ -201,7 +202,7 @@ pub fn geometry(s: &Shape) -> Geo {
             let (cx, cy, rx, ry) = (w / 2.0, h / 2.0, w * 0.42, h * 0.38);
             let pt = |i: usize| {
                 let a = (i as f32 / n as f32) * std::f32::consts::TAU - std::f32::consts::FRAC_PI_2;
-                (cx + rx * a.cos(), cy + ry * a.sin())
+                (cx + rx * a.dcos(), cy + ry * a.dsin())
             };
             let mut segs = vec![];
             let p0 = pt(0);
@@ -331,7 +332,7 @@ fn regular(n: usize, w: f32, h: f32, start: f32) -> Vec<(f32, f32)> {
     let mut pts: Vec<(f32, f32)> = (0..n)
         .map(|i| {
             let a = (start + i as f32 * 360.0 / n as f32).to_radians();
-            (a.cos(), a.sin())
+            (a.dcos(), a.dsin())
         })
         .collect();
     let (mut x0, mut y0, mut x1, mut y1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
@@ -354,8 +355,15 @@ pub fn shape_xf(s: &Shape) -> sk::Transform {
     let fy = if s.flip_v { -1.0 } else { 1.0 };
     sk::Transform::from_translate(-cx, -cy)
         .post_scale(fx, fy)
-        .post_rotate(s.rot)
+        .post_concat(rotation(s.rot))
         .post_translate(s.x + cx, s.y + cy)
+}
+
+/// A rotation in degrees from Folio's own sine and cosine (X3-12), not the system's.
+pub fn rotation(deg: f32) -> sk::Transform {
+    let r = deg.to_radians();
+    let (c, s) = (r.dcos(), r.dsin());
+    sk::Transform::from_row(c, s, -s, c, 0.0, 0.0)
 }
 
 pub fn to_path(segs: &[Seg]) -> Option<sk::Path> {
@@ -443,7 +451,7 @@ pub fn dist_seg(p: (f32, f32), a: (f32, f32), b: (f32, f32)) -> f32 {
     let l2 = dx * dx + dy * dy;
     let t = if l2 > 0.0 { (((p.0 - a.0) * dx + (p.1 - a.1) * dy) / l2).clamp(0.0, 1.0) } else { 0.0 };
     let (qx, qy) = (a.0 + t * dx, a.1 + t * dy);
-    ((p.0 - qx).powi(2) + (p.1 - qy).powi(2)).sqrt()
+    ((p.0 - qx).sq() + (p.1 - qy).sq()).sqrt()
 }
 
 pub fn dist_polyline(p: (f32, f32), pts: &[(f32, f32)]) -> f32 {
@@ -506,7 +514,7 @@ pub fn boundary_point(s: &Shape, toward: (f32, f32)) -> (f32, f32) {
     for poly in &polys {
         for w in poly.windows(2) {
             if let Some(p) = seg_intersect(c, far, w[0], w[1]) {
-                let dd = (p.0 - c.0).powi(2) + (p.1 - c.1).powi(2);
+                let dd = (p.0 - c.0).sq() + (p.1 - c.1).sq();
                 if best.map(|b| dd > b.1).unwrap_or(true) {
                     best = Some((p, dd));
                 }

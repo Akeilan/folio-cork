@@ -275,7 +275,7 @@ impl UiTest {
             app.ed.go_page(0);
             key(app, h, r, Key::Char('s'), Mods { ctrl: true, shift: true, ..Mods::NONE });
             check(app.backstage.is_some(), "Save As didn't open")?;
-            let dir = std::env::var("FOLIO_UI_DIR").unwrap_or_else(|_| "/tmp".into());
+            let dir = folio_kit::platform::setting("FOLIO_UI_DIR").unwrap_or_else(|| "/tmp".into());
             let path = PathBuf::from(&dir).join("ui-test.vsdx");
             let _ = std::fs::remove_file(&path);
             if let Some(b) = app.backstage.as_mut() {
@@ -293,7 +293,7 @@ impl UiTest {
             check(doc.pages[0].shapes.len() == app.ed.doc.pages[0].shapes.len(), "shape count differs after reopening")
         });
         step!("export PNG, SVG and PDF", |app: &mut CorkApp, _h: &mut dyn Host, r: &mut Res| {
-            let dir = PathBuf::from(std::env::var("FOLIO_UI_DIR").unwrap_or_else(|_| "/tmp".into()));
+            let dir = PathBuf::from(folio_kit::platform::setting("FOLIO_UI_DIR").unwrap_or_else(|| "/tmp".into()));
             crate::export::png(&app.ed.doc, &[0], &dir.join("ui-test.png"), &mut r.text, &mut r.images, 1.0)?;
             crate::export::svg(&app.ed.doc, &[0], &dir.join("ui-test.svg"), &mut r.text)?;
             crate::export::pdf(&app.ed.doc, &[0, 1, 2], &dir.join("ui-test.pdf"), &mut r.text, &mut r.images, true, false)?;
@@ -309,9 +309,10 @@ impl UiTest {
             app.command("zoom.fit", h, r);
             app.theme = folio_kit::theme::Theme::new(true, folio_kit::theme::app_colors::CORK, crate::app::ACCENT);
             let pm = shot_into(app, r);
-            let dir = PathBuf::from(std::env::var("FOLIO_UI_DIR").unwrap_or_else(|_| "/tmp".into()));
+            let dir = PathBuf::from(folio_kit::platform::setting("FOLIO_UI_DIR").unwrap_or_else(|| "/tmp".into()));
             let _ = std::fs::write(dir.join("ui-dark.png"), gfx::encode_png(&pm));
-            let px = pm.pixel(app.w as u32 / 2, (app.ribbon.rect.y + 60.0) as u32).ok_or("no pixel")?;
+            // An empty part of the ribbon, right of the last group.
+            let px = pm.pixel(app.w as u32 - 60, (app.ribbon.rect.y + 60.0) as u32).ok_or("no pixel")?;
             check(px.red() < 80, "ribbon not dark")
         });
         UiTest { steps, i: 0, done: false, fails: vec![], passed: 0, dir }

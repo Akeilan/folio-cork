@@ -10,5 +10,6 @@ pub mod text;
 pub mod theme;
 pub mod ui;
 
+pub mod math;
 pub use folio_platform as platform;
 pub use gfx::{sk, Color, Rect};

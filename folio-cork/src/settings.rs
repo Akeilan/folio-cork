@@ -69,7 +69,7 @@ impl Settings {
         let d = dir();
         let _ = std::fs::create_dir_all(&d);
         if let Ok(s) = serde_json::to_string_pretty(self) {
-            let _ = std::fs::write(d.join("settings.json"), s);
+            let _ = folio_kit::platform::atomic_write(&d.join("settings.json"), s.as_bytes());
         }
     }
 
@@ -82,14 +82,26 @@ impl Settings {
     }
 
     pub fn my_shapes(&self) -> Vec<MyShape> {
-        std::fs::read_to_string(dir().join("my-shapes.json")).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
+        // Read again only when the file changed (another Cork window may have added one); the
+        // shapes pane asks on every frame.
+        let path = dir().join("my-shapes.json");
+        let stamp = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
+        MY.with(|c| {
+            let mut c = c.borrow_mut();
+            if c.0 != stamp || c.2 != path {
+                let v = std::fs::read_to_string(&path).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+                *c = (stamp, v, path);
+            }
+            c.1.clone()
+        })
     }
 
     fn write_my(&self, v: &[MyShape]) {
+        MY.with(|c| c.borrow_mut().0 = None);
         let d = dir();
         let _ = std::fs::create_dir_all(&d);
         if let Ok(s) = serde_json::to_string(v) {
-            let _ = std::fs::write(d.join("my-shapes.json"), s);
+            let _ = folio_kit::platform::atomic_write(&d.join("my-shapes.json"), s.as_bytes());
         }
     }
 
@@ -137,7 +149,7 @@ pub fn store_clip(shapes: &[Shape], images: &[(String, ImageData)], img: &folio_
     let d = dir();
     let _ = std::fs::create_dir_all(&d);
     if let Ok(s) = serde_json::to_string(&c) {
-        let _ = std::fs::write(d.join("clipboard.json"), s);
+        let _ = folio_kit::platform::atomic_write(&d.join("clipboard.json"), s.as_bytes());
     }
 }
 
@@ -149,4 +161,8 @@ pub fn match_clip(img: &folio_kit::platform::Image) -> Option<(Vec<Shape>, Vec<(
     } else {
         None
     }
+}
+
+thread_local! {
+    static MY: std::cell::RefCell<(Option<std::time::SystemTime>, Vec<MyShape>, std::path::PathBuf)> = Default::default();
 }

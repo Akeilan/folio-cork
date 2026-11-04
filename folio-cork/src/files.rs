@@ -7,13 +7,8 @@ pub fn save(doc: &Document, path: &Path) -> Result<(), String> {
     let mut doc = doc.clone();
     doc.prune_images();
     let bytes = crate::vsdx::write(&doc)?;
-    // Write next to the target first so a failed save never damages the old file.
-    let tmp = path.with_extension("vsdx.saving");
-    std::fs::write(&tmp, &bytes).map_err(|e| format!("Can't save {}: {e}", path.display()))?;
-    std::fs::rename(&tmp, path).map_err(|e| {
-        let _ = std::fs::remove_file(&tmp);
-        format!("Can't save {}: {e}", path.display())
-    })
+    // Written beside the target first, so a failed save never damages the old file.
+    folio_kit::platform::atomic_write(path, &bytes)
 }
 
 pub fn load(path: &Path) -> Result<Document, String> {
@@ -38,19 +33,17 @@ pub fn load(path: &Path) -> Result<Document, String> {
 /// Older binary .vsd files go through the system's converter (LibreOffice, when installed),
 /// which turns each page into a picture.
 fn load_vsd(path: &Path) -> Result<Document, String> {
-    let out = std::env::temp_dir().join(format!("folio-cork-vsd-{}", std::process::id()));
-    let _ = std::fs::create_dir_all(&out);
-    let soffice = ["soffice", "libreoffice"].iter().find(|c| std::process::Command::new(c).arg("--version").output().map(|o| o.status.success()).unwrap_or(false)).copied();
-    let Some(cmd) = soffice else {
-        return Err("Older Visio files (.vsd) need LibreOffice to convert them, and it isn't installed. In Visio, save the drawing as .vsdx.".into());
-    };
-    let r = std::process::Command::new(cmd).args(["--headless", "--convert-to", "png", "--outdir"]).arg(&out).arg(path).output().map_err(|e| e.to_string())?;
-    if !r.status.success() {
-        return Err("LibreOffice couldn't convert the drawing.".into());
-    }
-    let png = out.join(path.with_extension("png").file_name().unwrap());
+    let png = folio_kit::platform::convert_with_office(path, "png").map_err(|e| {
+        if e.contains("isn't installed") {
+            "Older Visio files (.vsd) need LibreOffice to convert them, and it isn't installed. In Visio, save the drawing as .vsdx.".to_string()
+        } else {
+            "LibreOffice couldn't convert the drawing.".to_string()
+        }
+    })?;
     let bytes = std::fs::read(&png).map_err(|_| "LibreOffice couldn't convert the drawing.".to_string())?;
-    let _ = std::fs::remove_dir_all(&out);
+    if let Some(d) = png.parent() {
+        let _ = std::fs::remove_dir_all(d);
+    }
     let mut doc = Document::default();
     let key = doc.add_image(bytes.clone());
     let pm = folio_kit::gfx::decode_image(&bytes).ok_or("The converted drawing can't be read.")?;
