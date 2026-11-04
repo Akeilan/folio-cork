@@ -1,0 +1,11 @@
+Folio Graze
+Copyright 2026 Ron Shillings. Part of Folio Studio.
+
+Folio Graze is written in Rust on Folio's own platform layer and toolkit. Web pages are shown
+by the system's WebKitGTK engine (LGPL-2.1), which is installed from the distribution, not
+bundled. Compiled in (MIT or Apache-2.0 unless noted): gtk-rs, webkit2gtk-rs and
+javascriptcore-rs (bindings); winit, softbuffer, arboard, smithay-clipboard; tiny-skia and
+resvg (drawing); cosmic-text, swash, fontdb, harfrust (text, fonts); image; serde,
+serde_json; libm; getrandom.
+
+Icons are original.

@@ -147,7 +147,7 @@ impl WinHost {
 }
 
 /// GNOME and its relatives (Zorin, Ubuntu) keep the dark preference in gsettings.
-fn linux_dark_preference() -> Option<bool> {
+pub(crate) fn linux_dark_preference() -> Option<bool> {
     if !cfg!(target_os = "linux") {
         return None;
     }

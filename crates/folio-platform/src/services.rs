@@ -119,6 +119,12 @@ pub fn sleep(d: Duration) {
     std::thread::sleep(d)
 }
 
+/// Start another copy of this program (a second window of the app), with these arguments.
+pub fn spawn_self(args: &[&str]) -> Result<(), String> {
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    std::process::Command::new(exe).args(args).spawn().map(|_| ()).map_err(|e| e.to_string())
+}
+
 /// Convert a document with the system's office suite (LibreOffice), when installed. Returns
 /// the converted file.
 pub fn convert_with_office(path: &Path, to: &str) -> Result<PathBuf, String> {
