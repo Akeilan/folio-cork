@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>folio-graze</id>
+  <name>Folio Graze</name>
+  <summary>Simple, private web browser</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>LicenseRef-proprietary</project_license>
+  <description>
+    <p>A small web browser on the system's WebKitGTK engine, with tabs, an address bar that searches, zoom, find in page and print. Only encrypted pages, third-party cookies blocked, tracking prevention on, and private windows that keep nothing.</p>
+  </description>
+  <launchable type="desktop-id">folio-graze.desktop</launchable>
+  <releases><release version="0.1.0" date="2026-11-05"/></releases>
+</component>

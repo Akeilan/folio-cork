@@ -12,6 +12,12 @@ winit = "0.30"
 
 [features]
 audio = ["dep:cpal"]
+# A web engine for Folio Graze (X3-13): WebKitGTK on Linux.
+web = ["dep:gtk", "dep:webkit2gtk", "dep:javascriptcore-rs", "dep:cairo-rs"]
 
 [target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
 smithay-clipboard = "0.7.3"
+gtk = { version = "0.18", optional = true }
+webkit2gtk = { version = "2.0.2", optional = true, features = ["v2_40"] }
+javascriptcore-rs = { version = "1.1.2", optional = true }
+cairo-rs = { version = "0.18", optional = true, features = ["png"] }

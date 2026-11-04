@@ -8,12 +8,18 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 mod backend;
+#[cfg(feature = "web")]
+mod web;
 #[cfg(feature = "audio")]
 pub mod audio;
 pub mod services;
+mod netaddr;
 pub mod sys;
 
 pub use backend::run;
+#[cfg(feature = "web")]
+pub use web::run_web;
+pub use netaddr::{host_of, is_local_host};
 pub use services::*;
 
 /// Physical-pixel window events, already turned into Folio's own vocabulary.
@@ -38,6 +44,72 @@ pub enum Event {
     CloseRequested,
     /// A timer tick requested through [`App::next_tick`].
     Tick,
+    /// News from a web view (apps run with [`run_web`] only).
+    Web(WebEvent),
+}
+
+/// A web view inside the window, made with [`Host::web_new_view`].
+pub type ViewId = u32;
+
+/// What a web view reports (X3-13, the web engine part of the contract).
+#[derive(Clone, Debug, PartialEq)]
+pub enum WebEvent {
+    Title { view: ViewId, title: String },
+    Uri { view: ViewId, uri: String },
+    /// Loading progress, 0.0 to 1.0.
+    Progress { view: ViewId, value: f64 },
+    Loading { view: ViewId, loading: bool },
+    History { view: ViewId, back: bool, forward: bool },
+    /// The page asked for a link in a new tab (middle click, Ctrl+click, target=_blank, window.open).
+    OpenTab { view: ViewId, uri: String },
+    /// A page couldn't be loaded.
+    Failed { view: ViewId, uri: String, message: String },
+    /// HTTPS-only stopped a page that only works without encryption; the view shows why.
+    Insecure { view: ViewId, uri: String },
+    /// Find in page: how many matches (0 = none).
+    Found { view: ViewId, count: u32 },
+    Zoom { view: ViewId, level: f64 },
+    /// The page took the keyboard (the user clicked into it).
+    PageFocus { view: ViewId },
+    /// Result of [`WebCommand::Script`], as text (tests).
+    ScriptResult { view: ViewId, value: String },
+}
+
+/// What an app can ask a web view to do.
+#[derive(Clone, Debug, PartialEq)]
+pub enum WebCommand {
+    Load(String),
+    Back,
+    Forward,
+    Reload,
+    Stop,
+    Zoom(f64),
+    Find(String),
+    FindNext,
+    FindPrevious,
+    FindEnd,
+    Print,
+    /// Give the page the keyboard.
+    Focus,
+    /// Run a script in the page and report its result as text (tests only).
+    Script(String),
+    /// Save a picture of the visible page as PNG (tests); reported as ScriptResult "snapshot".
+    Snapshot(PathBuf),
+}
+
+/// Privacy settings a web window starts with (B3-03).
+#[derive(Clone, Debug)]
+pub struct WebPolicy {
+    /// Keep nothing on disk: cookies, cache and history end with the window.
+    pub private: bool,
+    /// Only encrypted pages; plain http:// is upgraded, and a site without encryption shows a
+    /// page that says so (this computer's own addresses are exempt).
+    pub https_only: bool,
+    pub block_third_party_cookies: bool,
+    /// The engine's tracking prevention (it removes cross-site tracking storage).
+    pub tracking_protection: bool,
+    /// Where cookies and site data are kept when not private.
+    pub data_dir: PathBuf,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -147,6 +219,23 @@ pub trait Host {
     fn set_clipboard_image(&mut self, img: &Image);
     /// Time since the app started (tests may run on a virtual clock).
     fn now(&self) -> Duration;
+
+    // ---- web views (apps run with run_web); other hosts have none
+    /// A new, hidden web view.
+    fn web_new_view(&mut self) -> Option<ViewId> {
+        None
+    }
+    /// Show this view below the app's own drawing (the others are hidden).
+    fn web_show(&mut self, _view: ViewId) {}
+    fn web_close(&mut self, _view: ViewId) {}
+    fn web(&mut self, _view: ViewId, _cmd: WebCommand) {}
+    /// The app draws the top `height` pixels of the window (its chrome) and takes the mouse in
+    /// `input` (x, y, w, h, in pixels: the chrome and any open menu); the page fills the rest.
+    fn set_chrome(&mut self, _height: u32, _input: &[(u32, u32, u32, u32)]) {}
+    /// Take the keyboard for the app's own drawing (the address bar, a find box).
+    fn focus_chrome(&mut self) {}
+    /// The key event being handled was used by the app: don't pass it on to the page.
+    fn set_handled(&mut self) {}
 }
 
 /// An app run by the platform layer.
@@ -187,6 +276,12 @@ pub struct Headless {
     pub closed: bool,
     pub redraws: u32,
     pub dark: Option<bool>,
+    /// Web views and what was asked of them, for tests: "new 1", "show 1", "1 Load(..)".
+    pub web_log: Vec<String>,
+    pub web_views: u32,
+    pub chrome: (u32, Vec<(u32, u32, u32, u32)>),
+    pub handled: bool,
+    pub chrome_focus: bool,
 }
 
 impl Host for Headless {
@@ -230,6 +325,29 @@ impl Host for Headless {
     }
     fn now(&self) -> Duration {
         self.clock
+    }
+    fn web_new_view(&mut self) -> Option<ViewId> {
+        self.web_views += 1;
+        self.web_log.push(format!("new {}", self.web_views));
+        Some(self.web_views)
+    }
+    fn web_show(&mut self, view: ViewId) {
+        self.web_log.push(format!("show {view}"));
+    }
+    fn web_close(&mut self, view: ViewId) {
+        self.web_log.push(format!("close {view}"));
+    }
+    fn web(&mut self, view: ViewId, cmd: WebCommand) {
+        self.web_log.push(format!("{view} {cmd:?}"));
+    }
+    fn set_chrome(&mut self, height: u32, input: &[(u32, u32, u32, u32)]) {
+        self.chrome = (height, input.to_vec());
+    }
+    fn focus_chrome(&mut self) {
+        self.chrome_focus = true;
+    }
+    fn set_handled(&mut self) {
+        self.handled = true;
     }
 }
 

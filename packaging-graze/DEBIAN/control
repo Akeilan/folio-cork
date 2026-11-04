@@ -1,0 +1,17 @@
+Package: folio-graze
+Version: 0.1.0
+Section: web
+Priority: optional
+Architecture: amd64
+Installed-Size: 8000
+Depends: libc6 (>= 2.35), libgcc-s1, libgtk-3-0, libwebkit2gtk-4.1-0 (>= 2.40), libjavascriptcoregtk-4.1-0, libcairo2, libglib2.0-0
+Recommends: xdg-utils
+Maintainer: Ron Shillings <ron.shillings@gmail.com>
+Description: simple, private web browser
+ Folio Graze is a small web browser on the system's WebKitGTK engine: tabs,
+ an address bar that goes to an address or searches, back, forward, reload,
+ zoom, find in page and print. Private by default: only encrypted pages
+ (plain http:// is upgraded, and a site without encryption says so),
+ third-party cookies blocked, tracking prevention on, private windows that
+ keep nothing. No account, no sync, nothing sent anywhere but the sites you
+ visit.
