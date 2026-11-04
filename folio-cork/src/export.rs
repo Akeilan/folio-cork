@@ -5,7 +5,7 @@ use crate::model::*;
 use crate::render::{self, DrawOpts, Images, Surface};
 use folio_kit::gfx::{self, sk, Color};
 use folio_kit::text::Text;
-use std::collections::HashMap;
+use std::collections::BTreeMap as HashMap; // ordered: exports must be byte-identical every time (X3-12)
 use std::path::{Path, PathBuf};
 
 const MARGIN: f32 = 24.0;

@@ -1,6 +1,7 @@
 //! Folio Cork: diagrams, whiteboards and mood boards.
 
 mod app;
+mod bench;
 mod collab;
 mod commands;
 mod editor;
@@ -28,7 +29,7 @@ use std::path::PathBuf;
 
 fn usage() {
     println!(
-        "Folio Cork {}\n\nUsage:\n  folio-cork [FILE.vsdx]          open a drawing\n  folio-cork --export IN OUT      export every page of IN to OUT (.png, .svg or .pdf)\n  folio-cork --ui-test [DIR]      run the window test, saving screenshots in DIR\n  folio-cork --version",
+        "Folio Cork {}\n\nUsage:\n  folio-cork [FILE.vsdx]          open a drawing\n  folio-cork --export IN OUT      export every page of IN to OUT (.png, .svg or .pdf)\n  folio-cork --ui-test [DIR]      run the window test, saving screenshots in DIR\n  folio-cork --ui-test DIR --headless   the same test with no window or display\n  folio-cork --bench              measure against the Raspberry Pi 4B budgets (X3-12)\n  folio-cork --version",
         app::VERSION
     );
 }
@@ -37,6 +38,7 @@ fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut file: Option<PathBuf> = None;
     let mut ui_test: Option<PathBuf> = None;
+    let mut headless = false;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -73,22 +75,24 @@ fn main() {
                 });
             }
             "--ui-test" => {
-                let dir = args.get(i + 1).filter(|a| !a.starts_with("--")).cloned().unwrap_or_else(|| std::env::temp_dir().join("folio-cork-ui").to_string_lossy().to_string());
+                let dir = args.get(i + 1).filter(|a| !a.starts_with("--")).cloned().unwrap_or_else(|| folio_kit::platform::temp_dir().join("folio-cork-ui").to_string_lossy().to_string());
                 if args.get(i + 1).map(|a| !a.starts_with("--")).unwrap_or(false) {
                     i += 1;
                 }
                 ui_test = Some(PathBuf::from(dir));
             }
+            "--headless" => headless = true,
+            "--bench" => std::process::exit(bench::run()),
             a if !a.starts_with("--") => file = Some(PathBuf::from(a)),
             _ => {}
         }
         i += 1;
     }
     if let Some(d) = &ui_test {
-        std::env::set_var("FOLIO_UI_DIR", d);
+        folio_kit::platform::set_setting("FOLIO_UI_DIR", d);
         // Tests never touch the user's settings.
-        if std::env::var_os("FOLIO_CONFIG_DIR").is_none() {
-            std::env::set_var("FOLIO_CONFIG_DIR", d.join("config"));
+        if folio_kit::platform::setting("FOLIO_CONFIG_DIR").is_none() {
+            folio_kit::platform::set_setting("FOLIO_CONFIG_DIR", &d.join("config"));
         }
     }
     let (doc, path, err) = match &file {
@@ -108,6 +112,12 @@ fn main() {
     if let Some(d) = ui_test {
         a.settings = settings::Settings::default();
         a.test = Some(uitest::UiTest::new(d));
+    }
+    if headless {
+        // No window at all (X3-14): the same app, painted into memory on a virtual clock.
+        let mut frame = Vec::new();
+        let code = folio_kit::platform::run_headless(&mut a, 1280, 800, 1.0, 20_000, &mut frame).unwrap_or(3);
+        std::process::exit(code);
     }
     let icon = folio_kit::icons::render_svg(icons::app_icon_svg(), 64, 64).map(|pm| Image { w: 64, h: 64, rgba: folio_kit::gfx::rgba_from_pixmap(&pm) });
     let code = run(a, WindowSpec { title: "Folio Cork".into(), app_id: "folio-cork".into(), width: 1280, height: 800, icon });

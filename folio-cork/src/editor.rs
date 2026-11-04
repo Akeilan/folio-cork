@@ -1,6 +1,7 @@
 //! The editing engine: tools, selection, dragging with snapping, connector glue, text editing
 //! and undo. Works in page coordinates; the window layer converts mouse positions.
 
+use folio_kit::math::Det;
 use crate::geom;
 use crate::model::*;
 use crate::render::{self, View};
@@ -128,7 +129,7 @@ impl Editor {
             layer: None,
             path: None,
             dirty: false,
-            author: std::env::var("USER").or_else(|_| std::env::var("USERNAME")).unwrap_or_else(|_| "Me".into()),
+            author: folio_kit::platform::user_name(),
             status: String::new(),
             new_style: None,
             new_tstyle: None,
@@ -282,7 +283,7 @@ impl Editor {
                 continue;
             }
             for (i, q) in geom::conn_points(s).into_iter().enumerate() {
-                let d = ((q.0 - p.0).powi(2) + (q.1 - p.1).powi(2)).sqrt();
+                let d = ((q.0 - p.0).sq() + (q.1 - p.1).sq()).sqrt();
                 if d < reach && best.map(|b| d < b.1).unwrap_or(true) {
                     best = Some(((s.id, i), d));
                 }
@@ -565,7 +566,7 @@ impl Editor {
                 self.checkpoint(if h == 8 { "Rotate" } else { "Resize" }, "");
                 if h == 8 {
                     let c = (bbox.0 + bbox.2 / 2.0, bbox.1 + bbox.3 / 2.0);
-                    let start = (p.1 - c.1).atan2(p.0 - c.0).to_degrees();
+                    let start = (p.1 - c.1).datan2(p.0 - c.0).to_degrees();
                     self.drag = Drag::Rotate { ids: self.sel.clone(), center: c, start, orig };
                 } else {
                     self.drag = Drag::Resize { handle: h, start: p, orig, bbox, keep: false };
@@ -691,7 +692,7 @@ impl Editor {
             Drag::Move { start, orig, .. } => self.drag_move(start, orig, p, shift, alt),
             Drag::Resize { handle, start, orig, bbox, .. } => self.drag_resize(handle, start, &orig, bbox, p, shift, alt),
             Drag::Rotate { ids, center, start, orig } => {
-                let a = (p.1 - center.1).atan2(p.0 - center.0).to_degrees();
+                let a = (p.1 - center.1).datan2(p.0 - center.0).to_degrees();
                 let mut d = a - start;
                 if !alt {
                     // Snap to 15 degree steps.
@@ -706,7 +707,7 @@ impl Editor {
                             continue;
                         }
                         let (cx, cy) = (o.cx() - center.0, o.cy() - center.1);
-                        let (nx, ny) = (cx * rad.cos() - cy * rad.sin(), cx * rad.sin() + cy * rad.cos());
+                        let (nx, ny) = (cx * rad.dcos() - cy * rad.dsin(), cx * rad.dsin() + cy * rad.dcos());
                         s.x = center.0 + nx - o.w / 2.0;
                         s.y = center.1 + ny - o.h / 2.0;
                         s.rot = (o.rot + d).rem_euclid(360.0);
@@ -714,7 +715,7 @@ impl Editor {
                             s.rot = 0.0;
                             s.points = o.points.iter().map(|&(px, py)| {
                                 let (ax, ay) = (o.x + px - center.0, o.y + py - center.1);
-                                (center.0 + ax * rad.cos() - ay * rad.sin() - s.x, center.1 + ax * rad.sin() + ay * rad.cos() - s.y)
+                                (center.0 + ax * rad.dcos() - ay * rad.dsin() - s.x, center.1 + ax * rad.dsin() + ay * rad.dcos() - s.y)
                             }).collect();
                         }
                     }
@@ -1084,8 +1085,8 @@ impl Editor {
             }
             Drag::Connect { from, to, target } => {
                 let dist = match from.shape.and_then(|id| self.pg().get(id)) {
-                    Some(s) => ((s.cx() - to.0).powi(2) + (s.cy() - to.1).powi(2)).sqrt(),
-                    None => ((from.x - to.0).powi(2) + (from.y - to.1).powi(2)).sqrt(),
+                    Some(s) => ((s.cx() - to.0).sq() + (s.cy() - to.1).sq()).sqrt(),
+                    None => ((from.x - to.0).sq() + (from.y - to.1).sq()).sqrt(),
                 };
                 if dist * self.view().zoom < 8.0 && target.is_none() {
                     self.tool_done();

@@ -108,18 +108,7 @@ impl FilePane {
     }
 
     fn places_list() -> Vec<(String, PathBuf)> {
-        let home = folio_platform::home_dir();
-        let mut v = vec![("Home".to_string(), home.clone()), ("Documents".to_string(), folio_platform::documents_dir())];
-        for (n, d) in [("Desktop", "Desktop"), ("Pictures", "Pictures"), ("Downloads", "Downloads")] {
-            let p = home.join(d);
-            if p.is_dir() {
-                v.push((n.into(), p));
-            }
-        }
-        if cfg!(unix) {
-            v.push(("Computer".into(), PathBuf::from("/")));
-        }
-        v
+        folio_platform::places()
     }
 
     pub fn paint(&mut self, cx: &mut Ctx, r: Rect) {

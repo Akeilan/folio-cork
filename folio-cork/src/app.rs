@@ -1,5 +1,6 @@
 //! The Cork window: title bar, ribbon, Shapes pane, board, side panes, page tabs, File view.
 
+use folio_kit::math::Det;
 use crate::editor::{handle_points, Drag, Editor, Tool};
 use crate::model::*;
 use crate::render::{self, Images, View};
@@ -88,11 +89,12 @@ pub struct CorkApp {
     pub left: Rect,
     pub right: Rect,
     pub bar: Rect,
-    cache: Option<(u64, View, (u32, u32), bool, Option<Id>, sk::Pixmap)>,
+    cache: Option<CanvasCache>,
     pm: Option<sk::Pixmap>,
     tiles: Vec<(String, Rect)>,
     cats: Vec<(String, Rect)>,
     thumbs: HashMap<(String, u32, bool), sk::Pixmap>,
+    mini: Option<((u64, usize, [u32; 5], bool), sk::Pixmap)>,
     pub search: TextField,
     pub collapsed: HashSet<String>,
     left_scroll: f32,
@@ -155,6 +157,7 @@ impl CorkApp {
             tiles: vec![],
             cats: vec![],
             thumbs: HashMap::new(),
+            mini: None,
             search: TextField::new(""),
             collapsed: ["Org chart", "Network", "UML", "Database (ERD)", "Floor plan", "Electrical", "Electronic", "Block diagram"].iter().map(|s| s.to_string()).collect(),
             left_scroll: 0.0,
@@ -1955,7 +1958,7 @@ impl CorkApp {
                     "printer" => b.printer = if b.printers.is_empty() { 0 } else { (b.printer + 1) % b.printers.len() },
                     "do-print" => {
                         let pages: Vec<usize> = if b.print_all { (0..self.ed.doc.pages.len()).collect() } else { vec![self.ed.page] };
-                        let tmp = std::env::temp_dir().join(format!("folio-cork-print-{}.pdf", std::process::id()));
+                        let tmp = folio_kit::platform::temp_file("folio-cork-print", "pdf");
                         let res = export::pdf(&self.ed.doc, &pages, &tmp, &mut r.text, &mut r.images, b.print_fit, true)
                             .and_then(|_| folio_kit::platform::print_pdf(&tmp, b.copies, b.printers.get(b.printer).map(|s| s.as_str())));
                         match res {
@@ -2085,6 +2088,7 @@ impl CorkApp {
         let theme = self.theme.clone();
         let s = self.s;
         pm.fill(theme.window.to_sk());
+
         let title = self.window_title();
         let maximized = false;
         {
@@ -2102,12 +2106,14 @@ impl CorkApp {
         } else {
             self.paint_canvas(pm, r);
             self.paint_left(pm, r);
+
             self.paint_right(pm, r);
             self.paint_bar(pm, r);
             let st = self.state_snapshot();
             let mut cx = Ctx { pm, text: &mut r.text, icons: &mut r.icons, theme: &theme, s };
             let rr = Rect::new(0.0, TITLE_H * s, self.w, self.ribbon.height(s));
             self.ribbon.paint(&mut cx, rr, &st, self.now);
+
         }
         let mut cx = Ctx { pm, text: &mut r.text, icons: &mut r.icons, theme: &theme, s };
         let win = Rect::new(0.0, 0.0, self.w, self.h);
@@ -2137,24 +2143,18 @@ impl CorkApp {
         let theme = self.theme.clone();
         let s = self.s;
         let v = self.ed.view();
-        let page = self.ed.pg().clone();
         let (cw, ch) = (c.w.max(1.0) as u32, c.h.max(1.0) as u32);
         let hide = self.ed.edit.as_ref().map(|e| e.id);
-        let key_ok = matches!(&self.cache, Some((ver, vv, size, dark, h, _)) if *ver == self.ed.version && *vv == v && *size == (cw, ch) && *dark == theme.dark && *h == hide);
-        if !key_ok {
-            let mut layer = sk::Pixmap::new(cw, ch).unwrap();
-            layer.fill(page.background.to_sk());
-            self.paint_grid(&mut layer, &page, v);
-            render::draw_page(&mut layer, &self.ed.doc, &page, &mut r.text, &mut r.images, v.xf(), &render::DrawOpts { hide_text: hide, ..Default::default() });
-            self.cache = Some((self.ed.version, v, (cw, ch), theme.dark, hide, layer));
-        }
-        if let Some((.., layer)) = &self.cache {
-            pm.draw_pixmap(c.x as i32, c.y as i32, layer.as_ref(), &sk::PixmapPaint::default(), sk::Transform::identity(), None);
+        self.update_layer(r, v, (cw, ch), theme.dark, hide);
+
+        if let Some(cc) = &self.cache {
+            gfx::blit_copy(pm, &cc.layer, c.x as i32, c.y as i32);
         }
         // Overlays in a clipped sub-canvas.
         let mut ov = sk::Pixmap::new(cw, ch).unwrap();
         self.paint_overlays(&mut ov, r, v);
-        pm.draw_pixmap(c.x as i32, c.y as i32, ov.as_ref(), &sk::PixmapPaint::default(), sk::Transform::identity(), None);
+
+        gfx::blit_over(pm, &ov, c.x as i32, c.y as i32);
         if self.settings.rulers {
             self.paint_rulers(pm, r);
         }
@@ -2162,6 +2162,89 @@ impl CorkApp {
             self.paint_minimap(pm, r);
         }
         let _ = s;
+    }
+
+    /// Bring the drawing layer up to date, redrawing as little as possible (X3-12: 60 fps on a
+    /// Pi): when the view only moved, the old pixels shift and only the strips that came into
+    /// view are drawn; when a few shapes changed, only the boxes around them are redrawn.
+    /// Everything else (zoom, page, layers, grid, theme) redraws the whole layer.
+    fn update_layer(&mut self, r: &mut Res, v: View, size: (u32, u32), dark: bool, hide: Option<Id>) {
+        let (cw, ch) = size;
+        if matches!(&self.cache, Some(cc) if cc.ver == self.ed.version && cc.view == v && cc.size == size && cc.dark == dark && cc.hide == hide) {
+            return;
+        }
+        let page = self.ed.pg();
+        let vis = |v: View| {
+            let (x0, y0) = v.to_page(0.0, 0.0);
+            let (x1, y1) = v.to_page(cw as f32, ch as f32);
+            (x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1))
+        };
+        let pkey = self.page_key(page, v.zoom, dark, hide, size);
+        let prints = render::shape_prints(page, vis(v));
+        let full_only = folio_kit::platform::setting("FOLIO_FULL_REDRAW").is_some();
+        let mut dirty: Vec<(i32, i32, i32, i32)> = vec![];
+        let mut reuse = None;
+        if let Some(mut cc) = self.cache.take() {
+            let (dx, dy) = (v.ox - cc.view.ox, v.oy - cc.view.oy);
+            let shift_ok = cc.pkey == pkey && cc.size == size && dx.fract() == 0.0 && dy.fract() == 0.0 && dx.abs() < cw as f32 && dy.abs() < ch as f32;
+            if shift_ok && !full_only && !render::jumps_changed(page, &cc.prints, &prints) {
+                let (dx, dy) = (dx as i32, dy as i32);
+                if dx != 0 || dy != 0 {
+                    let old = cc.layer.clone();
+                    gfx::blit_copy(&mut cc.layer, &old, dx, dy);
+                    if dx > 0 { dirty.push((0, 0, dx, ch as i32)); }
+                    if dx < 0 { dirty.push((cw as i32 + dx, 0, cw as i32, ch as i32)); }
+                    if dy > 0 { dirty.push((0, 0, cw as i32, dy)); }
+                    if dy < 0 { dirty.push((0, ch as i32 + dy, cw as i32, ch as i32)); }
+                }
+                // Shapes that changed, appeared or went: their old and new boxes, on screen now.
+                let boxes = render::changed_boxes(&cc.prints, &prints);
+                for b in boxes {
+                    let (x0, y0) = v.to_screen(b.0, b.1);
+                    let (x1, y1) = v.to_screen(b.2, b.3);
+                    dirty.push(((x0.floor() as i32) - 2, (y0.floor() as i32) - 2, (x1.ceil() as i32) + 2, (y1.ceil() as i32) + 2));
+                }
+                reuse = Some(cc.layer);
+            } else if cc.layer.width() == cw && cc.layer.height() == ch {
+                reuse = Some(cc.layer);
+                dirty.push((0, 0, cw as i32, ch as i32));
+            } else {
+                dirty.push((0, 0, cw as i32, ch as i32));
+            }
+        } else {
+            dirty.push((0, 0, cw as i32, ch as i32));
+        }
+        let mut layer = reuse.unwrap_or_else(|| sk::Pixmap::new(cw, ch).unwrap());
+        let rects = gfx::merge_boxes(dirty, cw as i32, ch as i32);
+        for (x0, y0, x1, y1) in rects {
+            let (w, h) = ((x1 - x0) as u32, (y1 - y0) as u32);
+            if w == 0 || h == 0 {
+                continue;
+            }
+            // The box drawn on its own, with the view moved so the box's corner is at 0, 0.
+            let sv = View { zoom: v.zoom, ox: v.ox - x0 as f32, oy: v.oy - y0 as f32 };
+            let mut sub = sk::Pixmap::new(w, h).unwrap();
+            sub.fill(page.background.to_sk());
+            self.paint_grid(&mut sub, page, sv);
+            let opts = render::DrawOpts { hide_text: hide, visible: Some(vis_box(sv, w, h)), ..Default::default() };
+            render::draw_page(&mut sub, &self.ed.doc, page, &mut r.text, &mut r.images, sv.xf(), &opts);
+            gfx::blit_copy(&mut layer, &sub, x0, y0);
+        }
+        self.cache = Some(CanvasCache { ver: self.ed.version, view: v, size, dark, hide, pkey, prints, layer });
+    }
+
+    /// Everything about the page other than its shapes that changes how the layer looks.
+    /// Drop the drawn layer so the next frame draws everything (tests compare the two).
+    pub(crate) fn forget_layer(&mut self) {
+        self.cache = None;
+    }
+
+    fn page_key(&self, page: &Page, zoom: f32, dark: bool, hide: Option<Id>, size: (u32, u32)) -> u64 {
+        let mut h = render::Fnv::default();
+        use std::fmt::Write;
+        let tiles = if self.settings.page_breaks { render::content_bounds(page).map(|b| (b.0 + b.2, b.1 + b.3)) } else { None };
+        let _ = write!(h, "{} {:?} {:?} {:?} {} {} {} {:?} {:?} {:?} {:?}", page.id, page.paper.px(), page.background, page.layers, self.ed.grid, self.ed.grid_size, self.settings.page_breaks, tiles, zoom.to_bits(), (dark, hide), size);
+        h.0
     }
 
     fn paint_grid(&self, pm: &mut sk::Pixmap, page: &Page, v: View) {
@@ -2559,8 +2642,7 @@ impl CorkApp {
     fn paint_minimap(&mut self, pm: &mut sk::Pixmap, r: &mut Res) {
         let s = self.s;
         let c = self.canvas;
-        let page = self.ed.pg().clone();
-        let Some(b) = render::content_bounds(&page) else { return };
+        let Some(b) = render::content_bounds(self.ed.pg()) else { return };
         let v = self.ed.view();
         let (vx0, vy0) = v.to_page(0.0, 0.0);
         let (vx1, vy1) = v.to_page(c.w, c.h);
@@ -2571,17 +2653,27 @@ impl CorkApp {
         let (mw, mh) = (200.0 * s, 130.0 * s);
         let z = (mw / (x1 - x0).max(1.0)).min(mh / (y1 - y0).max(1.0));
         let mr = Rect::new(c.right() - mw - 14.0 * s, c.bottom() - mh - 14.0 * s, mw, mh).round();
-        let mut mini = sk::Pixmap::new(mw as u32, mh as u32).unwrap();
-        mini.fill(page.background.to_sk());
         let ox = (mw - (x1 - x0) * z) / 2.0 - x0 * z;
         let oy = (mh - (y1 - y0) * z) / 2.0 - y0 * z;
-        let xf = sk::Transform::from_row(z, 0.0, 0.0, z, ox, oy);
-        render::draw_page(&mut mini, &self.ed.doc, &page, &mut r.text, &mut r.images, xf, &render::DrawOpts::default());
+        // The drawing in the minimap only changes with the drawing or its scale: keep it.
+        let key = (self.ed.version, self.ed.page, [z, ox, oy, mw, mh].map(f32::to_bits), self.theme.dark);
+        let mut mini = match &self.mini {
+            Some((k, p)) if *k == key => p.clone(),
+            _ => {
+                let mut p = sk::Pixmap::new(mw as u32, mh as u32).unwrap();
+                let page = self.ed.pg();
+                p.fill(page.background.to_sk());
+                let xf = sk::Transform::from_row(z, 0.0, 0.0, z, ox, oy);
+                render::draw_overview(&mut p, page, xf);
+                self.mini = Some((key, p.clone()));
+                p
+            }
+        };
         let vr = Rect::new(vx0 * z + ox, vy0 * z + oy, (vx1 - vx0) * z, (vy1 - vy0) * z);
         gfx::fill_rect(&mut mini, vr, ACCENT.with_alpha(30));
         gfx::stroke_round(&mut mini, vr, 0.0, ACCENT, 1.5);
         gfx::shadow(pm, mr, 4.0 * s, self.theme.dark);
-        pm.draw_pixmap(mr.x as i32, mr.y as i32, mini.as_ref(), &sk::PixmapPaint::default(), sk::Transform::identity(), None);
+        gfx::blit_copy(pm, &mini, mr.x as i32, mr.y as i32);
         gfx::stroke_round(pm, mr, 4.0 * s, self.theme.border, 1.0);
     }
 
@@ -2908,7 +3000,7 @@ impl CorkApp {
         let sl = Rect::new(zo.right() + 6.0 * s, b.cy() - 1.0 * s, 100.0 * s, 2.0 * s);
         gfx::fill_rect(cx.pm, sl, t.border);
         let z = self.ed.view().zoom;
-        let pos = ((z.ln() - 0.1f32.ln()) / (8.0f32.ln() - 0.1f32.ln())).clamp(0.0, 1.0);
+        let pos = ((z.dln() - 0.1f32.dln()) / (8.0f32.dln() - 0.1f32.dln())).clamp(0.0, 1.0);
         gfx::fill_round(cx.pm, Rect::new(sl.x + pos * sl.w - 4.0 * s, b.cy() - 7.0 * s, 8.0 * s, 14.0 * s), 2.0 * s, t.text);
         let zi = Rect::new(sl.right() + 6.0 * s, b.y + 4.0 * s, 22.0 * s, b.h - 8.0 * s);
         cx.icon("zoom-in", zi.inset(3.0 * s));
@@ -3139,6 +3231,25 @@ impl CorkApp {
 
 /// Command state for the ribbon.
 #[derive(Clone)]
+/// The drawing as last drawn, and what it was drawn from.
+struct CanvasCache {
+    ver: u64,
+    view: View,
+    size: (u32, u32),
+    dark: bool,
+    hide: Option<Id>,
+    pkey: u64,
+    prints: HashMap<Id, (u64, (f32, f32, f32, f32))>,
+    layer: sk::Pixmap,
+}
+
+/// The page-space box a view shows in a w×h pixel area.
+fn vis_box(v: View, w: u32, h: u32) -> (f32, f32, f32, f32) {
+    let (x0, y0) = v.to_page(0.0, 0.0);
+    let (x1, y1) = v.to_page(w as f32, h as f32);
+    (x0.min(x1), y0.min(y1), x0.max(x1), y0.max(y1))
+}
+
 pub struct St {
     pub has_sel: bool,
     pub multi: bool,

@@ -4,6 +4,7 @@
 //! so stickies, ink, votes and comments come back exactly. When the Visio pages have been
 //! changed by another program since, Cork reads the Visio shapes instead.
 
+use folio_kit::math::Det;
 use crate::geom::{self, Seg};
 use crate::model::*;
 use crate::route;
@@ -352,7 +353,7 @@ fn connector_xml(cx: &mut Ctx, s: &Shape) -> String {
     let e = to(*pts.last().unwrap());
     let (dx, dy) = (e.0 - b.0, e.1 - b.1);
     let len = (dx * dx + dy * dy).sqrt().max(0.0001);
-    let ang = dy.atan2(dx);
+    let ang = dy.datan2(dx);
     let mut cells = String::new();
     cells += &cellu("PinX", (b.0 + e.0) / 2.0, "IN");
     cells += &cellu("PinY", (b.1 + e.1) / 2.0, "IN");
@@ -373,7 +374,7 @@ fn connector_xml(cx: &mut Ctx, s: &Shape) -> String {
     if c.jumps {
         cells += &cell("ConLineJumpStyle", "2");
     }
-    let (ca, sa) = ((-ang).cos(), (-ang).sin());
+    let (ca, sa) = ((-ang).dcos(), (-ang).dsin());
     let mut rows = String::new();
     for (i, p) in pts.iter().enumerate() {
         let q = to(*p);
@@ -752,7 +753,7 @@ impl Xf {
         }
     }
     fn angle(&self) -> f32 {
-        self.b.atan2(self.a)
+        self.b.datan2(self.a)
     }
 }
 
@@ -883,7 +884,7 @@ impl<'a> Reader<'a> {
         let fx = sh.cell("FlipX").map(|v| v == "1").unwrap_or(false);
         let fy = sh.cell("FlipY").map(|v| v == "1").unwrap_or(false);
         // Local -> parent.
-        let (ca, sa) = (ang.cos(), ang.sin());
+        let (ca, sa) = (ang.dcos(), ang.dsin());
         let flip = Xf { a: if fx { -1.0 } else { 1.0 }, b: 0.0, c: 0.0, d: if fy { -1.0 } else { 1.0 }, e: 0.0, f: 0.0 };
         let local = Xf { a: 1.0, b: 0.0, c: 0.0, d: 1.0, e: -lx, f: -ly }.then(&flip).then(&Xf { a: ca, b: sa, c: -sa, d: ca, e: pinx, f: piny });
         let to_page = match parent_xf {

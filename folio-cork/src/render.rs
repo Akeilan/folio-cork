@@ -69,6 +69,8 @@ pub struct DrawOpts {
     pub hide_text: Option<Id>,
     /// Shapes not to draw at all (being dragged as a preview).
     pub skip: Vec<Id>,
+    /// Only what touches this page-space box needs drawing (x0, y0, x1, y1): the screen.
+    pub visible: Option<(f32, f32, f32, f32)>,
 }
 
 /// Where shapes are drawn: the screen's pixel buffer, or a recorder for SVG and PDF export.
@@ -416,16 +418,224 @@ pub fn draw_page(pm: &mut dyn Surface, doc: &Document, page: &Page, text: &mut T
         }
         let hide = opts.hide_text == Some(s.id);
         if s.is_connector() {
+            let off = opts.visible.map(|v| route::rough_box(page, s).map(|b| b.2 < v.0 || b.0 > v.2 || b.3 < v.1 || b.1 > v.3).unwrap_or(true) || draw_box(page, s).map(|b| b.2 < v.0 || b.0 > v.2 || b.3 < v.1 || b.1 > v.3).unwrap_or(true)).unwrap_or(false);
+            if off && !s.conn.as_ref().map(|c| c.jumps).unwrap_or(false) {
+                continue;
+            }
             let pl = draw_connector(pm, page, s, text, view, &earlier, hide);
             earlier.push(pl);
+        } else if opts.visible.map(|v| !touches(v, s)).unwrap_or(false) {
+            continue;
         } else {
             draw_shape(pm, doc, s, text, images, view, hide);
         }
     }
 }
 
+/// A page as an overview (the minimap): shapes as blocks of their colour, lines as lines, no
+/// text. At that size text can't be read, and this stays fast while typing on a big board.
+pub fn draw_overview(pm: &mut sk::Pixmap, page: &Page, view: sk::Transform) {
+    for s in &page.shapes {
+        if !page.visible(s) || s.is_group() {
+            continue;
+        }
+        if s.is_connector() {
+            let pl = route::route(page, s).polyline();
+            let mut pb = sk::PathBuilder::new();
+            for (i, p) in pl.iter().enumerate() {
+                if i == 0 { pb.move_to(p.0, p.1) } else { pb.line_to(p.0, p.1) }
+            }
+            if let Some(path) = pb.finish() {
+                let st = sk::Stroke { width: (1.0 / view.sx).max(s.style.width), ..Default::default() };
+                pm.stroke_path(&path, &paint(s.style.line, s.style.opacity), &st, view, None);
+            }
+            continue;
+        }
+        let (x, y, w, h) = geom::bounds(s);
+        let c = if s.style.fill.a > 0 { s.style.fill } else { s.style.line };
+        if let Some(r) = sk::Rect::from_xywh(x, y, w.max(1.0), h.max(1.0)) {
+            pm.fill_rect(r, &paint(c, s.style.opacity), view, None);
+        }
+    }
+}
+
+/// FNV-1a over text written into it (`write!`): a quick, exact-enough fingerprint.
+#[derive(Default)]
+pub struct Fnv(pub u64);
+impl Fnv {
+    pub fn bits(&mut self, v: f32) {
+        use std::fmt::Write;
+        let _ = self.write_str("");
+        self.0 = (self.0 ^ v.to_bits() as u64).wrapping_mul(0x100000001b3);
+    }
+}
+impl std::io::Write for Fnv {
+    fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+        if self.0 == 0 {
+            self.0 = 0xcbf29ce484222325;
+        }
+        for x in b {
+            self.0 = (self.0 ^ *x as u64).wrapping_mul(0x100000001b3);
+        }
+        Ok(b.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+impl std::fmt::Write for Fnv {
+    fn write_str(&mut self, s: &str) -> std::fmt::Result {
+        if self.0 == 0 {
+            self.0 = 0xcbf29ce484222325;
+        }
+        for b in s.bytes() {
+            self.0 = (self.0 ^ b as u64).wrapping_mul(0x100000001b3);
+        }
+        Ok(())
+    }
+}
+
+/// The page-space box a shape may draw into: its outline with room for lines, shadows and text.
+pub fn draw_box(page: &Page, s: &Shape) -> Option<(f32, f32, f32, f32)> {
+    if s.is_connector() {
+        let pl = route::route(page, s).polyline();
+        if pl.is_empty() {
+            return None;
+        }
+        let (mut a, mut b, mut c, mut d) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+        for p in pl {
+            a = a.min(p.0);
+            b = b.min(p.1);
+            c = c.max(p.0);
+            d = d.max(p.1);
+        }
+        // Arrowheads and the label in the middle.
+        let m = 16.0 + s.style.width * 4.0 + if s.text.is_empty() { 0.0 } else { s.tstyle.size * 2.0 + s.text.chars().count() as f32 * s.tstyle.size * 0.4 };
+        return Some((a - m, b - m, c + m, d + m));
+    }
+    let (x, y, w, h) = geom::bounds(s);
+    let m = 40.0 + s.style.width * 2.0 + s.tstyle.size * 2.0;
+    Some((x - m, y - m, x + w + m, y + h + m))
+}
+
+/// A fingerprint and drawing box for each shape that touches the visible area: when either
+/// changes between two frames, that part of the screen needs drawing again.
+pub fn shape_prints(page: &Page, vis: (f32, f32, f32, f32)) -> std::collections::HashMap<Id, (u64, (f32, f32, f32, f32))> {
+    use std::fmt::Write;
+    let mut out = std::collections::HashMap::new();
+    for s in &page.shapes {
+        if s.is_connector() && route::rough_box(page, s).map(|b| b.2 < vis.0 || b.0 > vis.2 || b.3 < vis.1 || b.1 > vis.3).unwrap_or(true) {
+            continue;
+        }
+        let Some(b) = draw_box(page, s) else { continue };
+        if b.2 < vis.0 || b.0 > vis.2 || b.3 < vis.1 || b.1 > vis.3 {
+            continue;
+        }
+        let mut h = Fnv::default();
+        let _ = serde_json::to_writer(&mut h, s);
+        let _ = write!(h, "{}", page.visible(s));
+        if s.is_connector() {
+            for p in route::route(page, s).pts {
+                h.bits(p.0);
+                h.bits(p.1);
+            }
+        }
+        if let Some(g) = s.group {
+            let _ = write!(h, "{g}");
+        }
+        out.insert(s.id, (h.0, b));
+    }
+    out
+}
+
+/// The page-space boxes of shapes whose fingerprint changed, that appeared or that went.
+pub fn changed_boxes(old: &std::collections::HashMap<Id, (u64, (f32, f32, f32, f32))>, new: &std::collections::HashMap<Id, (u64, (f32, f32, f32, f32))>) -> Vec<(f32, f32, f32, f32)> {
+    let mut v = vec![];
+    for (id, (h, b)) in new {
+        match old.get(id) {
+            Some((oh, ob)) if oh == h && ob == b => {}
+            Some((_, ob)) => {
+                v.push(*ob);
+                v.push(*b);
+            }
+            None => v.push(*b),
+        }
+    }
+    for (id, (_, ob)) in old {
+        if !new.contains_key(id) {
+            v.push(*ob);
+        }
+    }
+    v
+}
+
+/// Line jumps depend on every earlier connector: when a connector changed on a page that uses
+/// them, the whole drawing is redrawn rather than worked out piece by piece.
+pub fn jumps_changed(page: &Page, old: &std::collections::HashMap<Id, (u64, (f32, f32, f32, f32))>, new: &std::collections::HashMap<Id, (u64, (f32, f32, f32, f32))>) -> bool {
+    if !page.shapes.iter().any(|s| s.conn.as_ref().map(|c| c.jumps).unwrap_or(false)) {
+        return false;
+    }
+    page.shapes.iter().filter(|s| s.is_connector()).any(|s| old.get(&s.id).map(|x| x.0) != new.get(&s.id).map(|x| x.0))
+}
+
+/// Whether a shape (with room for its line, shadow and text spilling out) touches a box.
+fn touches(v: (f32, f32, f32, f32), s: &Shape) -> bool {
+    let (x, y, w, h) = geom::bounds(s);
+    let m = 40.0 + s.style.width * 2.0 + s.tstyle.size * 2.0;
+    !(x + w + m < v.0 || x - m > v.2 || y + h + m < v.1 || y - m > v.3)
+}
+
 /// The page-space box around everything drawn on a page.
 pub fn content_bounds(page: &Page) -> Option<(f32, f32, f32, f32)> {
+    // Asked for on every frame (minimap, page breaks): keep the answer while nothing moved.
+    let fp = page_fingerprint(page);
+    if let Some(b) = BOUNDS.with(|c| c.borrow().get(&fp).copied()) {
+        return b;
+    }
+    let b = content_bounds_now(page);
+    BOUNDS.with(|c| {
+        let mut c = c.borrow_mut();
+        if c.len() > 64 {
+            c.clear();
+        }
+        c.insert(fp, b);
+    });
+    b
+}
+
+thread_local! {
+    static BOUNDS: std::cell::RefCell<std::collections::HashMap<u64, Option<(f32, f32, f32, f32)>>> = Default::default();
+}
+
+/// Everything about a page's shapes that their outlines depend on, as one number.
+pub fn page_fingerprint(page: &Page) -> u64 {
+    let mut h: u64 = 0xcbf29ce484222325;
+    let mut f = |v: u64| h = (h ^ v).wrapping_mul(0x100000001b3);
+    for l in &page.layers {
+        f(l.id ^ (l.visible as u64) << 63);
+    }
+    for s in &page.shapes {
+        f(s.id);
+        f(s.layer);
+        for v in [s.x, s.y, s.w, s.h, s.rot, s.style.width] {
+            f(v.to_bits() as u64);
+        }
+        f(s.group.unwrap_or(0));
+        if let Some(c) = &s.conn {
+            for e in [&c.a, &c.b] {
+                f(e.shape.unwrap_or(u64::MAX));
+                f(e.point.map(|p| p as u64).unwrap_or(u64::MAX));
+                f(e.x.to_bits() as u64 | (e.y.to_bits() as u64) << 32);
+            }
+            f(c.route as u64);
+        }
+        f(s.kind.len() as u64);
+        f(s.points.len() as u64);
+    }
+    h
+}
+
+fn content_bounds_now(page: &Page) -> Option<(f32, f32, f32, f32)> {
     let (mut x0, mut y0, mut x1, mut y1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
     let mut any = false;
     for s in &page.shapes {

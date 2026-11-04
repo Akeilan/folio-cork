@@ -1,6 +1,7 @@
 //! Mood boards (K3-11): pictures, palettes picked from them, tidy layouts, sections; and voting
 //! results for whiteboards.
 
+use folio_kit::math::Det;
 use crate::editor::{bbox_of, Editor};
 use crate::geom;
 use crate::model::*;
@@ -94,7 +95,7 @@ pub fn palette(pm: &folio_kit::sk::Pixmap, crop: (f32, f32, f32, f32), k: usize)
 }
 
 fn dist2(a: &[f32; 3], b: &[f32; 3]) -> f32 {
-    (a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)
+    (a[0] - b[0]).sq() + (a[1] - b[1]).sq() + (a[2] - b[2]).sq()
 }
 
 /// Add swatches for the main colours of each selected picture. Returns how many pictures.

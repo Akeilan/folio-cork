@@ -6,6 +6,7 @@
 //! `Z`, `E cx cy rx ry` (ellipse), `A cx cy rx ry start sweep` (arc, degrees, y down),
 //! `D cx cy r` (filled dot).
 
+use folio_kit::math::Det;
 use crate::geom::{ellipse_segs, Geo, Seg, Sub};
 
 pub struct Stencil {
@@ -286,16 +287,16 @@ pub fn parse(path: &str, w: f32, h: f32) -> Vec<Sub> {
                 let (a0, sweep) = (v[4].to_radians(), v[5].to_radians());
                 let n = ((sweep.abs() / std::f32::consts::FRAC_PI_2).ceil() as usize).max(1);
                 let da = sweep / n as f32;
-                let start = (cx + rx * a0.cos(), cy + ry * a0.sin());
+                let start = (cx + rx * a0.dcos(), cy + ry * a0.dsin());
                 match cur.segs.last() {
                     None | Some(Seg::Z) => cur.segs.push(Seg::M(start.0, start.1)),
                     _ => cur.segs.push(Seg::L(start.0, start.1)),
                 }
-                let k = 4.0 / 3.0 * (da / 4.0).tan();
+                let k = 4.0 / 3.0 * (da / 4.0).dtan();
                 for j in 0..n {
                     let a = a0 + da * j as f32;
                     let b = a + da;
-                    let (ca, sa, cb, sb) = (a.cos(), a.sin(), b.cos(), b.sin());
+                    let (ca, sa, cb, sb) = (a.dcos(), a.dsin(), b.dcos(), b.dsin());
                     cur.segs.push(Seg::C(
                         cx + rx * (ca - k * sa),
                         cy + ry * (sa + k * ca),

@@ -1,6 +1,7 @@
 //! Connector routes (K3-02): straight, right-angle (routed around shapes) and curved lines,
 //! glued to shapes, with arrowheads, labels and line jumps.
 
+use folio_kit::math::Det;
 use crate::geom::{self, Seg};
 use crate::model::{Arrow, End, Page, Route, Shape};
 use std::cmp::Ordering;
@@ -61,7 +62,7 @@ impl Routed {
 }
 
 fn dist(a: (f32, f32), b: (f32, f32)) -> f32 {
-    ((a.0 - b.0).powi(2) + (a.1 - b.1).powi(2)).sqrt()
+    ((a.0 - b.0).sq() + (a.1 - b.1).sq()).sqrt()
 }
 
 /// Outward direction of a connection point: toward the nearest side of the shape's box.
@@ -129,17 +130,67 @@ fn end_center(page: &Page, e: &End) -> (f32, f32) {
     (e.x, e.y)
 }
 
+/// A box a connector's route certainly stays inside, found without routing it: around both
+/// ends, with room for the detours a right-angle route may take.
+pub fn rough_box(page: &Page, s: &Shape) -> Option<(f32, f32, f32, f32)> {
+    let c = s.conn.as_ref()?;
+    let a = end_center(page, &c.a);
+    let b = end_center(page, &c.b);
+    let half = |e: &End| e.shape.and_then(|id| page.get(id)).map(|s| s.w.max(s.h)).unwrap_or(0.0);
+    let m = 320.0 + half(&c.a).max(half(&c.b)) + s.style.width * 4.0 + if s.text.is_empty() { 0.0 } else { s.tstyle.size * 2.0 + s.text.chars().count() as f32 * s.tstyle.size * 0.4 };
+    Some((a.0.min(b.0) - m, a.1.min(b.1) - m, a.0.max(b.0) + m, a.1.max(b.1) + m))
+}
+
 pub fn route(page: &Page, s: &Shape) -> Routed {
     let Some(c) = &s.conn else { return Routed::default() };
-    let ca = end_center(page, &c.a);
-    let cb = end_center(page, &c.b);
-    let (pa, da, _) = resolve(page, &c.a, cb, c.route);
-    let (pb, db, _) = resolve(page, &c.b, if c.route == Route::Elbow { pa } else { ca }, c.route);
-    let (pa, da) = if c.a.shape.is_some() && c.a.point.is_none() && c.route != Route::Elbow {
-        let r = resolve(page, &c.a, pb, c.route);
-        (r.0, r.1)
-    } else {
-        (pa, da)
+    // Where the ends meet their shapes depends only on the connector and those two shapes:
+    // keep it while they stay put (outlines are costly to work out on every frame).
+    let mut key = Fp::default();
+    for e in [&c.a, &c.b] {
+        key.f(e.x);
+        key.f(e.y);
+        key.u(e.point.map(|p| p as u64 + 1).unwrap_or(0));
+        match e.shape.and_then(|id| page.get(id)) {
+            Some(t) => {
+                key.u(t.id);
+                for v in [t.x, t.y, t.w, t.h, t.rot] {
+                    key.f(v);
+                }
+                key.u(t.flip_h as u64 | (t.flip_v as u64) << 1);
+                key.str(&t.kind);
+                key.str(&t.path);
+                for p in &t.cpts {
+                    key.f(p.0);
+                    key.f(p.1);
+                }
+            }
+            None => key.u(u64::MAX),
+        }
+    }
+    key.u(c.route as u64);
+    let key = key.0;
+    let (pa, da, pb, db) = match ENDS.with(|m| m.borrow().get(&key).copied()) {
+        Some(v) => v,
+        None => {
+            let ca = end_center(page, &c.a);
+            let cb = end_center(page, &c.b);
+            let (pa, da, _) = resolve(page, &c.a, cb, c.route);
+            let (pb, db, _) = resolve(page, &c.b, if c.route == Route::Elbow { pa } else { ca }, c.route);
+            let (pa, da) = if c.a.shape.is_some() && c.a.point.is_none() && c.route != Route::Elbow {
+                let r = resolve(page, &c.a, pb, c.route);
+                (r.0, r.1)
+            } else {
+                (pa, da)
+            };
+            ENDS.with(|m| {
+                let mut m = m.borrow_mut();
+                if m.len() > 20_000 {
+                    m.clear();
+                }
+                m.insert(key, (pa, da, pb, db));
+            });
+            (pa, da, pb, db)
+        }
     };
     match c.route {
         Route::Straight => {
@@ -205,6 +256,12 @@ fn elbow(page: &Page, a: (f32, f32), da: (f32, f32), b: (f32, f32), db: (f32, f3
     let (bx1, by1) = (sa.0.max(sb.0) + 300.0, sa.1.max(sb.1) + 300.0);
     let mut obs: Vec<(f32, f32, f32, f32)> = vec![];
     for s in &page.shapes {
+        // Quick reject first (rotation can reach out to half the diagonal): big boards have
+        // hundreds of shapes and this runs for every right-angle line.
+        let reach = MARGIN + if s.rot == 0.0 { 0.0 } else { (s.w + s.h) * 0.5 };
+        if s.x + s.w + reach < bx0 || s.x - reach > bx1 || s.y + s.h + reach < by0 || s.y - reach > by1 {
+            continue;
+        }
         if s.id == self_id || s.is_connector() || s.is_group() || !page.visible(s) || matches!(s.kind.as_str(), "frame" | "ink" | "text") {
             continue;
         }
@@ -225,10 +282,61 @@ fn elbow(page: &Page, a: (f32, f32), da: (f32, f32), b: (f32, f32), db: (f32, f3
             break;
         }
     }
+    // The route depends only on the ends and the obstacles: reuse it while they stay put, so
+    // redrawing a big diagram doesn't re-route every line each frame (X3-12, 60 fps on a Pi).
+    let mut key = Fp::default();
+    for v in [a.0, a.1, da.0, da.1, b.0, b.1, db.0, db.1] {
+        key.f(v);
+    }
+    for o in &obs {
+        for v in [o.0, o.1, o.2, o.3] {
+            key.f(v);
+        }
+    }
+    let key = key.0;
+    if let Some(p) = ROUTES.with(|c| c.borrow().get(&key).cloned()) {
+        return p;
+    }
+    let pts = elbow_search(a, da, b, db, sa, sb, &obs);
+    ROUTES.with(|c| {
+        let mut c = c.borrow_mut();
+        if c.len() > 20_000 {
+            c.clear();
+        }
+        c.insert(key, pts.clone());
+    });
+    pts
+}
+
+type Pt = (f32, f32);
+thread_local! {
+    static ENDS: std::cell::RefCell<HashMap<u64, (Pt, Pt, Pt, Pt)>> = std::cell::RefCell::new(HashMap::new());
+    static ROUTES: std::cell::RefCell<HashMap<u64, Vec<(f32, f32)>>> = std::cell::RefCell::new(HashMap::new());
+}
+
+/// A small fingerprint of floats, exact to the bit.
+#[derive(Default)]
+struct Fp(u64);
+impl Fp {
+    fn u(&mut self, v: u64) {
+        self.0 = (self.0 ^ v).wrapping_mul(0x100000001b3).rotate_left(23) ^ 0x9E3779B97F4A7C15;
+    }
+    fn str(&mut self, s: &str) {
+        self.u(s.len() as u64);
+        for b in s.bytes() {
+            self.u(b as u64);
+        }
+    }
+    fn f(&mut self, v: f32) {
+        self.0 = (self.0 ^ v.to_bits() as u64).wrapping_mul(0x100000001b3).rotate_left(23) ^ 0x9E3779B97F4A7C15;
+    }
+}
+
+fn elbow_search(a: (f32, f32), da: (f32, f32), b: (f32, f32), db: (f32, f32), sa: (f32, f32), sb: (f32, f32), obs: &[(f32, f32, f32, f32)]) -> Vec<(f32, f32)> {
     let inside = |p: (f32, f32)| obs.iter().any(|o| p.0 > o.0 && p.0 < o.2 && p.1 > o.1 && p.1 < o.3);
     let mut xs = vec![sa.0, sb.0, (sa.0 + sb.0) / 2.0];
     let mut ys = vec![sa.1, sb.1, (sa.1 + sb.1) / 2.0];
-    for o in &obs {
+    for o in obs {
         xs.extend([o.0, o.2]);
         ys.extend([o.1, o.3]);
     }

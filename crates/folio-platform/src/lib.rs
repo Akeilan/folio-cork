@@ -8,9 +8,13 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 mod backend;
+#[cfg(feature = "audio")]
+pub mod audio;
+pub mod services;
 pub mod sys;
 
 pub use backend::run;
+pub use services::*;
 
 /// Physical-pixel window events, already turned into Folio's own vocabulary.
 #[derive(Clone, Debug, PartialEq)]
@@ -293,6 +297,30 @@ pub fn documents_dir() -> PathBuf {
     h
 }
 
+/// The folders the Open and Save panes list on the left: home, documents, the usual user
+/// folders that exist, and the top of the file system.
+pub fn places() -> Vec<(String, PathBuf)> {
+    let home = home_dir();
+    let mut v = vec![("Home".to_string(), home.clone()), ("Documents".to_string(), documents_dir())];
+    for d in ["Desktop", "Pictures", "Downloads"] {
+        let p = home.join(d);
+        if p.is_dir() {
+            v.push((d.into(), p));
+        }
+    }
+    if cfg!(unix) {
+        v.push(("Computer".into(), PathBuf::from("/")));
+    } else if cfg!(windows) {
+        for l in b'C'..=b'Z' {
+            let p = PathBuf::from(format!("{}:\\", l as char));
+            if p.is_dir() {
+                v.push((format!("Drive {}:", l as char), p));
+            }
+        }
+    }
+    v
+}
+
 /// Print a PDF on the default printer. `copies` ≥ 1.
 pub fn print_pdf(path: &Path, copies: u32, printer: Option<&str>) -> Result<(), String> {
     sys::print_pdf(path, copies, printer)
@@ -306,4 +334,25 @@ pub fn printers() -> Vec<String> {
 /// Open a file or folder in the system's default app.
 pub fn open_externally(path: &Path) -> Result<(), String> {
     sys::open_externally(path)
+}
+
+/// Run an app with no window (X3-14): the same events a window gives, painted into memory, on
+/// a virtual clock. Returns the exit code, or `None` when the app went idle before exiting.
+/// The last frame is left in `frame` (premultiplied RGBA).
+pub fn run_headless(app: &mut dyn App, w: u32, h: u32, scale: f32, max_ticks: u32, frame: &mut Vec<u8>) -> Option<i32> {
+    let mut host = Headless::default();
+    frame.resize((w * h * 4) as usize, 0);
+    app.event(&Event::Resized { w, h, scale }, &mut host);
+    app.event(&Event::Focus(true), &mut host);
+    for _ in 0..max_ticks {
+        app.paint(frame, w, h, &mut host);
+        if app.wants_exit() || host.closed {
+            return Some(app.exit_code());
+        }
+        let d = app.next_tick()?;
+        host.clock += d;
+        app.event(&Event::Tick, &mut host);
+    }
+    app.paint(frame, w, h, &mut host);
+    if app.wants_exit() { Some(app.exit_code()) } else { None }
 }

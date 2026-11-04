@@ -10,7 +10,7 @@ use folio_kit::Color;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream};
+use folio_kit::platform::net::{self, TcpStream};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -56,12 +56,7 @@ fn derive_key(code: &str) -> [u8; 32] {
 }
 
 fn seed() -> u64 {
-    let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0) as u64;
-    let mut x = t ^ (std::process::id() as u64).rotate_left(32) ^ (&t as *const u64 as u64);
-    x ^= x >> 33;
-    x = x.wrapping_mul(0xff51afd7ed558ccd);
-    x ^= x >> 33;
-    x
+    folio_kit::platform::random_u64()
 }
 
 fn make_code() -> String {
@@ -84,13 +79,7 @@ fn make_code() -> String {
 }
 
 fn local_ip() -> String {
-    std::net::UdpSocket::bind("0.0.0.0:0")
-        .and_then(|s| {
-            s.connect("10.254.254.254:9")?;
-            s.local_addr()
-        })
-        .map(|a| a.ip().to_string())
-        .unwrap_or_else(|_| "127.0.0.1".into())
+    net::local_ip()
 }
 
 fn send_frame(stream: &mut TcpStream, key: &[u8; 32], me: u32, counter: &Mutex<u64>, msg: &Msg) -> std::io::Result<()> {
@@ -129,7 +118,7 @@ fn read_frame(stream: &mut TcpStream, key: &[u8; 32]) -> Option<Msg> {
 }
 
 fn reader(mut stream: TcpStream, key: [u8; 32], idx: usize, tx: Sender<(usize, Msg)>) {
-    std::thread::spawn(move || {
+    folio_kit::platform::spawn("folio-cork-board", move || {
         while let Some(m) = read_frame(&mut stream, &key) {
             if tx.send((idx, m)).is_err() {
                 break;
@@ -142,7 +131,7 @@ fn reader(mut stream: TcpStream, key: [u8; 32], idx: usize, tx: Sender<(usize, M
 impl Collab {
     /// Share the open board. Others join with the address and code this shows.
     pub fn host(ed: &Editor, name: &str) -> Result<Collab, String> {
-        let listener = TcpListener::bind("0.0.0.0:0").map_err(|e| format!("Can't open a network port: {e}"))?;
+        let listener = net::listen_any().map_err(|e| format!("Can't open a network port: {e}"))?;
         let port = listener.local_addr().map_err(|e| e.to_string())?.port();
         let code = make_code();
         let key = derive_key(&code);
@@ -155,7 +144,7 @@ impl Collab {
             let counter = counter.clone();
             let doc = ed.doc.clone();
             let tx = tx.clone();
-            std::thread::spawn(move || {
+            folio_kit::platform::spawn("folio-cork-board", move || {
                 let first_doc = Arc::new(Mutex::new(doc));
                 let _ = &first_doc;
                 for s in listener.incoming().flatten() {
@@ -201,8 +190,8 @@ impl Collab {
             return Err("Type the address shown on the computer sharing the board.".into());
         }
         let key = derive_key(code);
-        let sock: std::net::SocketAddr = addr.parse().map_err(|_| "The address should look like 192.168.1.20:40123.".to_string())?;
-        let mut s = TcpStream::connect_timeout(&sock, Duration::from_secs(4)).map_err(|e| format!("Can't reach {addr}: {e}"))?;
+        let sock: net::SocketAddr = addr.parse().map_err(|_| "The address should look like 192.168.1.20:40123.".to_string())?;
+        let mut s = net::connect(&sock, Duration::from_secs(4)).map_err(|e| format!("Can't reach {addr}: {e}"))?;
         let _ = s.set_nodelay(true);
         let counter = Arc::new(Mutex::new(0u64));
         let me = seed() as u32;
@@ -380,7 +369,7 @@ impl Drop for Collab {
         self.broadcast(&Msg::Bye { name: self.name.clone() }, None);
         if let Ok(p) = self.peers.lock() {
             for peer in p.iter() {
-                let _ = peer.stream.shutdown(std::net::Shutdown::Both);
+                let _ = peer.stream.shutdown(net::Shutdown::Both);
             }
         }
     }

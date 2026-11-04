@@ -136,6 +136,8 @@ type CacheKey = (String, u32, bool, bool, u32, String, u8);
 struct Cached {
     buffer: Buffer,
     used: u64,
+    /// Glyph outlines, built once per layout (documents redraw them every frame).
+    outlines: Option<Vec<sk::Path>>,
 }
 
 /// The text engine. One per app.
@@ -147,28 +149,48 @@ pub struct Text {
     ui_family: String,
 }
 
+/// The fonts that ship with Folio (X3-16): Latin, Greek and Cyrillic.
+pub const BUNDLED_SANS: &str = "Carlito";
+pub const BUNDLED_SERIF: &str = "Liberation Serif";
+pub const BUNDLED_MONO: &str = "Liberation Mono";
+
 fn key_size(v: f32) -> u32 {
     (v * 64.0).round() as u32
 }
 
 impl Text {
     pub fn new() -> Text {
+        if folio_platform::setting("FOLIO_FONTS_ONLY").is_some() {
+            return Text::bundled();
+        }
         let mut fonts = FontSystem::new();
         // Fonts shipped next to the app (X3-16) come first.
-        if let Ok(exe) = std::env::current_exe() {
-            for dir in [exe.with_file_name("fonts"), exe.parent().and_then(|p| p.parent()).map(|p| p.join("share/folio/fonts")).unwrap_or_default()] {
-                if dir.is_dir() {
-                    fonts.db_mut().load_fonts_dir(&dir);
-                }
-            }
+        for dir in folio_platform::font_dirs() {
+            fonts.db_mut().load_fonts_dir(&dir);
         }
         let have = |f: &FontSystem, name: &str| f.db().faces().any(|x| x.families.iter().any(|(n, _)| n == name));
-        let ui_family = ["Ubuntu", "Segoe UI", "SF Pro Text", "Cantarell", "Noto Sans", "DejaVu Sans", "Liberation Sans"]
+        let ui_family = ["Ubuntu", "Segoe UI", "SF Pro Text", "Cantarell", "Noto Sans", "DejaVu Sans", "Liberation Sans", BUNDLED_SANS]
             .iter()
             .find(|n| have(&fonts, n))
             .map(|s| s.to_string())
             .unwrap_or_default();
         Text { fonts, swash: SwashCache::new(), cache: HashMap::new(), tick: 0, ui_family }
+    }
+
+    /// Only the fonts that ship with Folio, never the system's (X3-16): what the pixel tests
+    /// use, so a page draws the same on every machine.
+    pub fn bundled() -> Text {
+        let mut db = cosmic_text::fontdb::Database::new();
+        let mut dirs = folio_platform::font_dirs();
+        dirs.push(std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../fonts")));
+        for d in dirs.iter().filter(|d| d.is_dir()) {
+            db.load_fonts_dir(d);
+        }
+        db.set_sans_serif_family(BUNDLED_SANS);
+        db.set_serif_family(BUNDLED_SERIF);
+        db.set_monospace_family(BUNDLED_MONO);
+        let fonts = FontSystem::new_with_locale_and_db("en-US".into(), db);
+        Text { fonts, swash: SwashCache::new(), cache: HashMap::new(), tick: 0, ui_family: BUNDLED_SANS.into() }
     }
 
     pub fn ui_family(&self) -> &str {
@@ -223,7 +245,7 @@ impl Text {
         });
         b.set_text(text, &attrs, Shaping::Advanced, align);
         b.shape_until_scroll(&mut self.fonts, false);
-        self.cache.insert(key.clone(), Cached { buffer: b, used: tick });
+        self.cache.insert(key.clone(), Cached { buffer: b, used: tick, outlines: None });
         key
     }
 
@@ -356,6 +378,9 @@ impl Text {
     pub fn outlines(&mut self, text: &str, st: &TextStyle, width: Option<f32>) -> Vec<sk::Path> {
         let key = self.ensure(text, st, width);
         let Some(c) = self.cache.get(&key) else { return vec![] };
+        if let Some(o) = &c.outlines {
+            return o.clone();
+        }
         let mut out = Vec::new();
         let runs: Vec<(f32, Vec<(f32, f32, cosmic_text::CacheKey)>, f32, f32)> = c
             .buffer
@@ -415,6 +440,9 @@ impl Text {
             if let Some(p) = pb.finish() {
                 out.push(p);
             }
+        }
+        if let Some(c) = self.cache.get_mut(&key) {
+            c.outlines = Some(out.clone());
         }
         out
     }

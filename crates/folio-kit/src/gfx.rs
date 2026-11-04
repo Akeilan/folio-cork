@@ -131,6 +131,25 @@ pub fn fill_rect(pm: &mut Pixmap, r: Rect, c: Color) {
     if c.a == 0 {
         return;
     }
+    if c.a == 255 {
+        // Opaque: write the pixels directly (same edges as the renderer: rounded to nearest).
+        let rd = |v: f32| (v + 0.5).floor() as i64;
+        let (w, h) = (pm.width() as i64, pm.height() as i64);
+        let (x0, y0) = (rd(r.x).clamp(0, w), rd(r.y).clamp(0, h));
+        let (x1, y1) = (rd(r.x + r.w).clamp(0, w), rd(r.y + r.h).clamp(0, h));
+        if x0 >= x1 || y0 >= y1 {
+            return;
+        }
+        let px = [c.r, c.g, c.b, 255];
+        let d = pm.data_mut();
+        for y in y0..y1 {
+            let row = &mut d[((y * w + x0) * 4) as usize..((y * w + x1) * 4) as usize];
+            for p in row.chunks_exact_mut(4) {
+                p.copy_from_slice(&px);
+            }
+        }
+        return;
+    }
     if let Some(sr) = r.to_sk() {
         let mut p = paint(c);
         p.anti_alias = false;
@@ -284,4 +303,79 @@ pub fn encode_png(pm: &Pixmap) -> Vec<u8> {
 pub fn decode_image(bytes: &[u8]) -> Option<Pixmap> {
     let img = image::load_from_memory(bytes).ok()?.to_rgba8();
     pixmap_from_rgba(img.width(), img.height(), img.as_raw())
+}
+
+/// Copy `src` onto `dst` at (x, y), clipped: for opaque layers, much faster than a general
+/// draw (X3-12: a full-screen blit per frame has to be cheap on a Pi).
+pub fn blit_copy(dst: &mut Pixmap, src: &Pixmap, x: i32, y: i32) {
+    blit(dst, src, x, y, false)
+}
+
+/// Draw premultiplied `src` over `dst` at (x, y), clipped; clear pixels cost almost nothing.
+pub fn blit_over(dst: &mut Pixmap, src: &Pixmap, x: i32, y: i32) {
+    blit(dst, src, x, y, true)
+}
+
+fn blit(dst: &mut Pixmap, src: &Pixmap, x: i32, y: i32, over: bool) {
+    let (dw, dh) = (dst.width() as i32, dst.height() as i32);
+    let (sw, sh) = (src.width() as i32, src.height() as i32);
+    let (x0, y0) = (x.max(0), y.max(0));
+    let (x1, y1) = ((x + sw).min(dw), (y + sh).min(dh));
+    if x0 >= x1 || y0 >= y1 {
+        return;
+    }
+    let n = ((x1 - x0) * 4) as usize;
+    let sd = src.data();
+    let dd = dst.data_mut();
+    for row in y0..y1 {
+        let si = (((row - y) * sw + (x0 - x)) * 4) as usize;
+        let di = ((row * dw + x0) * 4) as usize;
+        let (s, d) = (&sd[si..si + n], &mut dd[di..di + n]);
+        if !over {
+            d.copy_from_slice(s);
+            continue;
+        }
+        for (sp, dp) in s.chunks_exact(4).zip(d.chunks_exact_mut(4)) {
+            let a = sp[3] as u32;
+            if a == 0 {
+                continue;
+            }
+            if a == 255 {
+                dp.copy_from_slice(sp);
+                continue;
+            }
+            let inv = 255 - a;
+            for k in 0..4 {
+                dp[k] = (sp[k] as u32 + (dp[k] as u32 * inv + 127) / 255).min(255) as u8;
+            }
+        }
+    }
+}
+
+/// Merge pixel boxes (x0, y0, x1, y1) that overlap or touch, clipped to w×h; one box for the
+/// whole area when they cover most of it anyway.
+pub fn merge_boxes(mut v: Vec<(i32, i32, i32, i32)>, w: i32, h: i32) -> Vec<(i32, i32, i32, i32)> {
+    v = v.into_iter().map(|b| (b.0.clamp(0, w), b.1.clamp(0, h), b.2.clamp(0, w), b.3.clamp(0, h))).filter(|b| b.2 > b.0 && b.3 > b.1).collect();
+    loop {
+        let mut merged = false;
+        'outer: for i in 0..v.len() {
+            for j in i + 1..v.len() {
+                let (a, b) = (v[i], v[j]);
+                if a.0 <= b.2 && b.0 <= a.2 && a.1 <= b.3 && b.1 <= a.3 {
+                    v[i] = (a.0.min(b.0), a.1.min(b.1), a.2.max(b.2), a.3.max(b.3));
+                    v.remove(j);
+                    merged = true;
+                    break 'outer;
+                }
+            }
+        }
+        if !merged {
+            break;
+        }
+    }
+    let area: i64 = v.iter().map(|b| (b.2 - b.0) as i64 * (b.3 - b.1) as i64).sum();
+    if area * 10 > w as i64 * h as i64 * 6 {
+        return vec![(0, 0, w, h)];
+    }
+    v
 }
