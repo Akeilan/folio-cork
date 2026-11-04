@@ -15,6 +15,8 @@ if [ -z "${INSTALLED_ONLY:-}" ]; then
   (cd $R && cargo test -q --workspace --features folio-platform/audio 2>&1 | grep -E "test result: FAILED|FAILED|panicked"; echo "  $(cd $R && cargo test -q --workspace --features folio-platform/audio 2>&1 | grep -c 'test result: ok') test groups ok")
   echo "== same results built for this CPU's own instructions (AVX2/FMA)"
   (cd $R && RUSTFLAGS="-C target-cpu=native" CARGO_TARGET_DIR=/tmp/cork-native cargo test -q -p folio-cork templates 2>&1 | grep "test result"; RUSTFLAGS="-C target-cpu=native" CARGO_TARGET_DIR=/tmp/cork-native cargo test -q -p folio-kit --test pixels 2>&1 | grep "test result"; rm -rf /tmp/cork-native)
+  echo "== the same tests on ARM64 (the Pi's CPU), under qemu: identical pixels and files"
+  (cd $R && RUSTC_BOOTSTRAP=1 CARGO_TARGET_DIR=/tmp/cork-arm64 cargo test -q --config tools/arm64.toml -Z build-std=std,panic_abort,panic_unwind --target aarch64-unknown-linux-gnu --workspace 2>&1 | grep -E "test result: FAILED|panicked|differ"; echo "  $(cd $R && RUSTC_BOOTSTRAP=1 CARGO_TARGET_DIR=/tmp/cork-arm64 cargo test -q --config tools/arm64.toml -Z build-std=std,panic_abort,panic_unwind --target aarch64-unknown-linux-gnu --workspace 2>&1 | grep -c 'test result: ok') test groups ok on arm64"; rm -rf /tmp/cork-arm64)
   echo "== window conformance (X11)"
   (cd $R && cargo build -q -p folio-platform --example conform && DISPLAY=:$XD WAYLAND_DISPLAY= tools/conformance.sh | tail -1)
   echo "== Pi 4B budgets, measured here (X3-12)"
