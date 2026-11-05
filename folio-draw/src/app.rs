@@ -50,6 +50,7 @@ pub enum Tool {
     Ellipse,
     Select,
     FreeSelect,
+    PolySelect,
     Wand,
     Text,
     Magnifier,
@@ -71,6 +72,7 @@ impl Tool {
             Tool::Ellipse => "ellipse",
             Tool::Select => "select",
             Tool::FreeSelect => "freeselect",
+            Tool::PolySelect => "polyselect",
             Tool::Wand => "wand",
             Tool::Text => "text",
             Tool::Magnifier => "zoom",
@@ -91,6 +93,7 @@ impl Tool {
             "ellipse" => Tool::Ellipse,
             "select" => Tool::Select,
             "freeselect" => Tool::FreeSelect,
+            "polyselect" => Tool::PolySelect,
             "wand" => Tool::Wand,
             "text" => Tool::Text,
             "zoom" => Tool::Magnifier,
@@ -154,6 +157,7 @@ impl Back {
 
 pub enum After {
     New,
+    NewTransparent,
     NewEmb(usize),
     Open(PathBuf),
     Close,
@@ -232,6 +236,7 @@ pub struct DrawApp {
     pub bar: Rect,
     pub side: Rect,
     pub show_layers: bool,
+    pub show_history: bool,
     pub gridlines: bool,
     pub transparent_sel: bool,
     pub wand_tol: f32,
@@ -315,6 +320,7 @@ impl DrawApp {
             canvas: Rect::default(),
             bar: Rect::default(),
             side: Rect::default(),
+            show_history: false,
             show_layers: false,
             gridlines: false,
             transparent_sel: false,
@@ -425,7 +431,7 @@ impl DrawApp {
         let s = self.s;
         let top = TITLE_H * s + if self.back.is_some() { 0.0 } else { self.ribbon.height(s) };
         self.bar = Rect::new(0.0, self.h - BAR_H * s, self.w, BAR_H * s);
-        let sw = if self.show_layers && self.back.is_none() { 230.0 * s } else { 0.0 };
+        let sw = if (self.show_layers || self.show_history) && self.back.is_none() { 230.0 * s } else { 0.0 };
         self.side = Rect::new(self.w - sw, top, sw, self.bar.y - top);
         let ru = if self.rulers { 18.0 * s } else { 0.0 };
         self.canvas = Rect::new(ru, top + ru, (self.w - sw - ru).max(10.0), (self.bar.y - top - ru).max(10.0));
@@ -710,7 +716,7 @@ impl DrawApp {
             return Cursor::Default;
         }
         match self.tool {
-            Tool::Select | Tool::FreeSelect | Tool::Wand if self.in_selection(self.to_doc(x, y)) => Cursor::Move,
+            Tool::Select | Tool::FreeSelect | Tool::PolySelect | Tool::Wand if self.in_selection(self.to_doc(x, y)) => Cursor::Move,
             Tool::Text => Cursor::Text,
             Tool::Magnifier => Cursor::Pointer,
             _ => Cursor::Crosshair,
@@ -879,7 +885,7 @@ impl DrawApp {
         if button != Button::Middle {
             self.commit_pending();
         }
-        if self.multi.is_some() || matches!(self.tool, Tool::Polygon | Tool::Curve) {
+        if self.multi.is_some() || matches!(self.tool, Tool::Polygon | Tool::Curve | Tool::PolySelect) {
             if button != Button::Middle {
                 self.multi_press(p, x, y, button, clicks);
                 return;
@@ -928,7 +934,7 @@ impl DrawApp {
             Tool::Magnifier => {
                 self.zoom_step(if right { -1 } else { 1 }, Some((x, y)));
             }
-            Tool::Polygon | Tool::Curve => {}
+            Tool::Polygon | Tool::Curve | Tool::PolySelect => {}
             Tool::EmbSelect => {
                 if let Some(st) = crate::emb::settings(&self.doc) {
                     let mm = crate::emb::px_to_mm(&st, p.0, p.1);
@@ -1178,9 +1184,29 @@ impl DrawApp {
         match self.multi.take() {
             None => {
                 self.doc.commit_float();
-                self.doc.op_begin();
+                if self.tool != Tool::PolySelect {
+                    self.doc.op_begin();
+                }
                 let pts = if self.tool == Tool::Curve { vec![p, p, p, p] } else { vec![p, p] };
                 self.multi = Some((self.tool, pts, fg, 0));
+            }
+            Some((Tool::PolySelect, mut pts, color, st)) => {
+                let first = self.to_screen(pts[0]);
+                let near = (first.0 - x).abs() < 6.0 && (first.1 - y).abs() < 6.0;
+                if clicks >= 2 || (near && pts.len() > 3) {
+                    pts.pop();
+                    if near && pts.len() > 3 {
+                        pts.pop();
+                    }
+                    if pts.len() >= 3 {
+                        self.doc.sel_mode = self.sel_mode();
+                        self.doc.sel_poly(&pts);
+                    }
+                } else {
+                    *pts.last_mut().unwrap() = p;
+                    pts.push(p);
+                    self.multi = Some((Tool::PolySelect, pts, color, st));
+                }
             }
             Some((Tool::Polygon, mut pts, color, st)) => {
                 let first = self.to_screen(pts[0]);
@@ -1726,6 +1752,29 @@ impl DrawApp {
                 self.menu = Some(Menu::new("quick", Rect::new(r.x + 40.0 * self.s, r.bottom(), 0.0, 0.0), items));
             }
             "search" => self.title.focus_search(),
+            "properties" => {
+                let (w, h) = (self.doc.w, self.doc.h);
+                let mm = (w as f32 * crate::page::MM_PER_PX, h as f32 * crate::page::MM_PER_PX);
+                let name = self.path.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| "not saved yet".into());
+                let bytes = self.path.as_ref().and_then(|p| std::fs::metadata(p).ok()).map(|m| m.len());
+                let size = match bytes {
+                    Some(b) if b >= 1024 * 1024 => format!("{:.1} MB", b as f64 / (1024.0 * 1024.0)),
+                    Some(b) if b >= 1024 => format!("{:.0} kB", b as f64 / 1024.0),
+                    Some(b) => format!("{b} bytes"),
+                    None => "—".into(),
+                };
+                let note = format!(
+                    "{w} x {h} pixels ({:.0} x {:.0} mm at 96 dpi)\n{} layer{}, {} undo step{}\nFile: {name}\nOn disk: {size}",
+                    mm.0,
+                    mm.1,
+                    self.doc.layers.len(),
+                    if self.doc.layers.len() == 1 { "" } else { "s" },
+                    self.doc.history().1.len(),
+                    if self.doc.history().1.len() == 1 { "" } else { "s" }
+                );
+                self.dialog = Some(Dialog::new("properties", "Picture properties").note(&note).button("ok", "Close"));
+            }
+            "pane.history" => self.show_history = !self.show_history,
             "page-setup" => {
                 let papers: Vec<&str> = crate::page::PAPERS.iter().map(|p| p.0).collect();
                 let pg = self.page.clone();
@@ -1955,6 +2004,7 @@ impl DrawApp {
             "zoom.100" => self.set_zoom(1.0, None),
             "zoom.fit" => self.fit(),
             "new" => self.request(After::New),
+            "new-transparent" => self.request(After::NewTransparent),
             "open" => self.open_back(BackPage::Open),
             "save" => {
                 self.save();
@@ -2065,6 +2115,7 @@ impl DrawApp {
                 vec![
                     MenuItem::new("tool.select", "Rectangular selection").check(self.tool == Tool::Select),
                     MenuItem::new("tool.freeselect", "Free-form selection").check(self.tool == Tool::FreeSelect),
+                    MenuItem::new("tool.polyselect", "Polygon selection").check(self.tool == Tool::PolySelect),
                     MenuItem::new("tool.wand", "Magic wand").check(self.tool == Tool::Wand),
                     MenuItem::sep(),
                     MenuItem::new("select-all", "Select all").key("Ctrl+A"),
@@ -2576,6 +2627,7 @@ impl DrawApp {
                 self.exit = true;
             }
             After::New => self.replace(Doc::new(1152, 648, [255, 255, 255, 255]), None),
+            After::NewTransparent => self.replace(Doc::new(1152, 648, [0, 0, 0, 0]), None),
             After::NewEmb(hoop) => {
                 self.replace(crate::emb::new_doc(hoop), None);
                 self.ribbon.select_tab("embroidery");
@@ -2762,8 +2814,33 @@ impl DrawApp {
         let mut cx = Ctx { pm, text: &mut r.text, icons: &mut r.icons, theme: &theme, s };
         gfx::fill_rect(cx.pm, side, theme.panel);
         gfx::vline(cx.pm, side.x, side.y, side.bottom(), theme.border);
-        cx.label("Layers", Rect::new(side.x + 12.0 * s, side.y + 4.0 * s, side.w, 28.0 * s), 14.0, theme.text, true, Align::Left);
         self.side_hits.clear();
+        // the History pane takes the lower part when it is showing
+        let hist_h = if self.show_history { (side.h * 0.4).min(220.0 * s) } else { 0.0 };
+        let side = Rect::new(side.x, side.y, side.w, side.h - hist_h);
+        if hist_h > 0.0 {
+            let hr = Rect::new(side.x, side.bottom(), side.w, hist_h);
+            gfx::hline(cx.pm, hr.x, hr.right(), hr.y, theme.border);
+            cx.label("History", Rect::new(hr.x + 12.0 * s, hr.y + 4.0 * s, hr.w, 24.0 * s), 14.0, theme.text, true, Align::Left);
+            let (done, undone) = self.doc.history();
+            let mut hy = hr.y + 30.0 * s;
+            for (label, on) in undone.iter().rev().map(|l| (*l, true)).chain(done.iter().rev().map(|l| (*l, false))) {
+                if hy + 20.0 * s > hr.bottom() {
+                    break;
+                }
+                let name = if label.is_empty() { "(a change)" } else { label };
+                let c = if on { theme.text } else { theme.muted };
+                cx.label(name, Rect::new(hr.x + 16.0 * s, hy, hr.w - 24.0 * s, 20.0 * s), 12.5, c, false, Align::Left);
+                hy += 20.0 * s;
+            }
+            if done.is_empty() && undone.is_empty() {
+                cx.label("Nothing yet", Rect::new(hr.x + 16.0 * s, hy, hr.w - 24.0 * s, 20.0 * s), 12.5, theme.muted, false, Align::Left);
+            }
+        }
+        if !self.show_layers {
+            return;
+        }
+        cx.label("Layers", Rect::new(side.x + 12.0 * s, side.y + 4.0 * s, side.w, 28.0 * s), 14.0, theme.text, true, Align::Left);
         let row_h = 48.0 * s;
         let n = self.doc.layers.len();
         let mut y = side.y + 34.0 * s;
@@ -2825,6 +2902,7 @@ impl DrawApp {
             shape_fill: self.shape_fill,
             shape_outline: self.shape_outline,
             layers: self.show_layers,
+            history: self.show_history,
             grid: self.gridlines,
             rulers: self.rulers,
             frames: self.doc.solo,
@@ -2979,6 +3057,20 @@ impl DrawApp {
                 let r = Rect::new(h.0 - 4.0, h.1 - 4.0, 8.0, 8.0);
                 gfx::fill_rect(&mut cv, r, Color::WHITE);
                 gfx::stroke_round(&mut cv, r, 0.0, ACCENT, 1.0);
+            }
+        }
+        if let Some((Tool::PolySelect, pts, _, _)) = &self.multi {
+            let mut pb = sk::PathBuilder::new();
+            for (i, q) in pts.iter().map(|p| to(*p)).enumerate() {
+                if i == 0 {
+                    pb.move_to(q.0, q.1);
+                } else {
+                    pb.line_to(q.0, q.1);
+                }
+            }
+            if let Some(path) = pb.finish() {
+                let stroke = sk::Stroke { width: 1.0, dash: sk::StrokeDash::new(vec![4.0, 4.0], 0.0), ..Default::default() };
+                cv.stroke_path(&path, &gfx::paint(ACCENT), &stroke, sk::Transform::identity(), None);
             }
         }
         if let Some(Drag::Lasso(pts)) = &self.drag {
@@ -3254,6 +3346,7 @@ pub struct St {
     pub shape_fill: bool,
     pub shape_outline: bool,
     pub layers: bool,
+    pub history: bool,
     pub grid: bool,
     pub rulers: bool,
     pub frames: bool,
