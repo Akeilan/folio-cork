@@ -2018,11 +2018,11 @@ impl DrawApp {
         }
         let by = side.bottom() - 34.0 * s;
         let mut bx = side.x + 6.0 * s;
-        for (id, label) in [("layer.add", "+"), ("layer.dup", "⧉"), ("layer.delete", "✕"), ("layer.up", "▲"), ("layer.down", "▼"), ("layer.merge", "⤓")] {
+        for (id, icon) in [("layer.add", "layer-add"), ("layer.dup", "copy"), ("layer.delete", "trash"), ("layer.up", "frame-up"), ("layer.down", "frame-down"), ("layer.merge", "merge")] {
             let br = Rect::new(bx, by, 34.0 * s, 28.0 * s);
             gfx::fill_round(cx.pm, br, 3.0 * s, theme.window);
             gfx::stroke_round(cx.pm, br, 3.0 * s, theme.border, 1.0);
-            cx.label(label, br, 14.0, theme.text, false, Align::Center);
+            cx.icon(icon, Rect::new(br.cx() - 9.0 * s, br.cy() - 9.0 * s, 18.0 * s, 18.0 * s));
             self.side_hits.push((id.to_string(), br));
             bx += 36.0 * s;
         }
