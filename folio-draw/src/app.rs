@@ -859,6 +859,18 @@ impl DrawApp {
             }
             "adj.blur" => self.dialog = Some(Dialog::new("adj.blur", "Blur").text("a", "Radius (pixels, 1 to 50)", "2").button("ok", "OK").button("cancel", "Cancel")),
             "adj.sharpen" => self.dialog = Some(Dialog::new("adj.sharpen", "Sharpen").text("a", "Amount (1 to 500)", "100").button("ok", "OK").button("cancel", "Cancel")),
+            "rotate.angle" => self.dialog = Some(Dialog::new("rotate.angle", "Rotate").text("deg", "Angle (degrees, clockwise)", "15").check("fill", "Fill the corners with colour 2", true).button("ok", "OK").button("cancel", "Cancel")),
+            "skew" => self.dialog = Some(Dialog::new("skew", "Skew").text("x", "Horizontal (degrees, -89 to 89)", "0").text("y", "Vertical (degrees, -89 to 89)", "0").button("ok", "OK").button("cancel", "Cancel")),
+            "canvas-size" => {
+                self.dialog = Some(
+                    Dialog::new("canvas-size", "Canvas size")
+                        .text("w", "Width (pixels)", &self.doc.w.to_string())
+                        .text("h", "Height (pixels)", &self.doc.h.to_string())
+                        .choice("anchor", "Picture sits", &["Top left", "Top", "Top right", "Left", "Centre", "Right", "Bottom left", "Bottom", "Bottom right"], 4)
+                        .button("ok", "OK")
+                        .button("cancel", "Cancel"),
+                )
+            }
             "select-invert" => {
                 self.doc.commit_float();
                 self.doc.sel_invert();
@@ -967,6 +979,10 @@ impl DrawApp {
                     MenuItem::sep(),
                     MenuItem::new("flip.v", "Flip vertical"),
                     MenuItem::new("flip.h", "Flip horizontal"),
+                    MenuItem::sep(),
+                    MenuItem::new("rotate.angle", "Rotate by angle..."),
+                    MenuItem::new("skew", "Skew..."),
+                    MenuItem::new("canvas-size", "Canvas size..."),
                 ],
             ),
             "tool.select" => Menu::new(
@@ -1005,10 +1021,14 @@ impl DrawApp {
                 ],
             ),
             "size" => Menu::new("size", rect, SIZES.iter().map(|s| MenuItem::new(&format!("size:{s}"), &format!("{s} px")).check((self.size - s).abs() < 0.01)).collect()),
-            "color1" | "color2" => Menu::new(id, rect, vec![]).with_palette(PALETTE.iter().map(|&c| Color::hex(c)).collect(), 10),
+            "color1" | "color2" => Menu::new(id, rect, vec![MenuItem::new(&format!("edit-color:{id}"), "More colours...")]).with_palette(PALETTE.iter().map(|&c| Color::hex(c)).collect(), 10),
             _ => return,
         };
         self.menu = Some(menu);
+    }
+
+    pub fn menu_pick_for_test(&mut self, menu: &str, id: &str) {
+        self.menu_pick(menu, id);
     }
 
     fn menu_pick(&mut self, menu: &str, id: &str) {
@@ -1019,6 +1039,18 @@ impl DrawApp {
             } else {
                 self.c1 = v;
             }
+            return;
+        }
+        if let Some(which) = id.strip_prefix("edit-color:") {
+            let c = if which == "color2" { self.c2 } else { self.c1 };
+            let hex = format!("#{:02X}{:02X}{:02X}", c[0], c[1], c[2]);
+            self.dialog = Some(
+                Dialog::new(&format!("color:{which}"), "Edit colour")
+                    .text("hex", "Colour (#RRGGBB)", &hex)
+                    .text("alpha", "Opacity (0 to 255)", &c[3].to_string())
+                    .button("ok", "OK")
+                    .button("cancel", "Cancel"),
+            );
             return;
         }
         if let Some(k) = id.strip_prefix("brush:").and_then(|s| s.parse::<u8>().ok()) {
@@ -1047,6 +1079,56 @@ impl DrawApp {
                 };
                 self.doc.adjust(kind, a, b, c);
                 self.doc.label_last(label);
+            }
+            ("rotate.angle", "ok") => {
+                let deg = d.value("deg").trim().replace(',', ".").parse::<f32>().unwrap_or(0.0);
+                if deg.abs() > 0.001 {
+                    let bg = if d.checked("fill") { Some(self.c2) } else { None };
+                    if self.doc.float.is_some() {
+                        self.doc.float_rotate(deg, true);
+                    } else {
+                        self.doc.image_rotate(deg, true, bg);
+                        self.doc.label_last("Rotate");
+                        self.fit();
+                    }
+                }
+            }
+            ("skew", "ok") => {
+                let n = |id: &str| d.value(id).trim().replace(',', ".").parse::<f32>().unwrap_or(0.0).clamp(-89.0, 89.0);
+                let (ax, ay) = (n("x"), n("y"));
+                if ax != 0.0 || ay != 0.0 {
+                    self.doc.commit_float();
+                    self.doc.image_skew(ax, ay);
+                    self.doc.label_last("Skew");
+                    self.fit();
+                }
+            }
+            ("canvas-size", "ok") => {
+                let w: usize = d.value("w").trim().parse().unwrap_or(0);
+                let h: usize = d.value("h").trim().parse().unwrap_or(0);
+                let a = d.choice_index("anchor");
+                let (ax, ay) = ((a % 3) as f32 / 2.0, (a / 3) as f32 / 2.0);
+                if (1..=32768).contains(&w) && (1..=32768).contains(&h) {
+                    self.doc.commit_float();
+                    self.doc.canvas_size(w, h, ax, ay);
+                    self.doc.label_last("Canvas size");
+                    self.fit();
+                } else {
+                    self.flash("Width and height go from 1 to 32768 pixels.");
+                }
+            }
+            (id, "ok") if id.starts_with("color:") => {
+                if let Some(c) = Color::parse(d.value("hex").trim()) {
+                    let a = d.value("alpha").trim().parse::<u8>().unwrap_or(255);
+                    let v = [c.r, c.g, c.b, a];
+                    if id == "color:color2" {
+                        self.c2 = v;
+                    } else {
+                        self.c1 = v;
+                    }
+                } else {
+                    self.flash("Type a colour as #RRGGBB.");
+                }
             }
             ("text", "ok") => {
                 let t = d.value("text");
