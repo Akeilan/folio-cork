@@ -12,7 +12,7 @@ pub fn tabs() -> Vec<Tab> {
                 Group::new(
                     "Clipboard",
                     vec![
-                        I::large("paste", "Paste", "paste").key("Ctrl+V").desc("Paste a picture from the clipboard; drag it into place."),
+                        I::large("paste", "Paste", "paste").split().key("Ctrl+V").desc("Paste a picture from the clipboard; drag it into place."),
                         I::small("cut", "Cut", "cut").key("Ctrl+X"),
                         I::small("copy", "Copy", "copy").key("Ctrl+C").desc("Copy the selection, or the whole picture."),
                     ],
@@ -29,7 +29,7 @@ pub fn tabs() -> Vec<Tab> {
                 Group::rows(
                     "Tools",
                     vec![
-                        vec![I::icon("tool.pencil", "Pencil", "pencil").key("P"), I::icon("tool.fill", "Fill with colour", "fill").key("F")],
+                        vec![I::icon("tool.pencil", "Pencil", "pencil").key("P"), I::icon("tool.fill", "Fill with colour", "fill").key("F"), I::icon("tool.zoom", "Magnifier", "zoom-in").key("M").desc("Click to zoom in, right-click to zoom out.")],
                         vec![I::icon("tool.eraser", "Eraser", "eraser").key("E"), I::icon("tool.picker", "Colour picker", "picker").key("I"), I::icon("tool.text", "Text", "text").key("T")],
                     ],
                 ),
@@ -77,6 +77,7 @@ pub fn tabs() -> Vec<Tab> {
                     vec![
                         I::large("pane.layers", "Layers", "layers").key("F7").desc("Show or hide the Layers pane."),
                         I::large("layer.add", "New layer", "layer-add").key("Ctrl+Shift+N"),
+                        I::small("layer.props", "Layer properties", "layers"),
                         I::small("layer.merge", "Merge down", "merge"),
                         I::small("layer.flatten", "Flatten", "flatten"),
                     ],

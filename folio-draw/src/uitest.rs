@@ -428,6 +428,45 @@ impl UiTest {
             }
             check(app.back.is_none() || app.path.as_ref().map(|p| p.ends_with("ui-test.ora")).unwrap_or(false), "Recent didn't open")
         });
+        step!("layer properties, paste as new layer, Ctrl-drag copies, the magnifier", |app: &mut DrawApp, h: &mut dyn Host, r: &mut Res| {
+            // a picture on the clipboard, then Paste as new layer
+            let img = folio_kit::platform::Image { w: 10, h: 10, rgba: [255u8, 0, 0, 255].repeat(100) };
+            h.set_clipboard_image(&img);
+            let n = app.doc.layers.len();
+            app.command("paste-layer", h);
+            check(app.doc.layers.len() == n + 1, "no new layer for the paste")?;
+            app.command("layer.props", h);
+            shot(app, r);
+            ev(app, h, r, Event::Text("Red square".into()));
+            // to the opacity field
+            key(app, h, r, Key::Tab, Mods::NONE);
+            ev(app, h, r, Event::Text("50".into()));
+            key(app, h, r, Key::Enter, Mods::NONE);
+            let l = &app.doc.layers[app.doc.active];
+            check(l.name == "Red square" && (l.opacity - 0.5).abs() < 0.01, &format!("layer {} at {}", l.name, l.opacity))?;
+            key(app, h, r, Key::Char('z'), ctrl());
+            key(app, h, r, Key::Char('z'), ctrl());
+            check(app.doc.layers.len() == n, "undo didn't take the pasted layer away")?;
+            // Ctrl-drag a copy of the green square
+            app.set_tool(Tool::Select);
+            app.doc.float_from_rgba(20, 20, [20u8, 60, 220, 255].repeat(400), 20, 150);
+            app.doc.commit_float();
+            app.doc.sel_rect(20, 150, 20, 20);
+            let src = px(app, 30, 160);
+            app.mods = ctrl();
+            drag_on(app, h, r, (30.0, 160.0), (230.0, 160.0), Button::Left);
+            app.mods = Mods::NONE;
+            key(app, h, r, Key::Escape, Mods::NONE);
+            check(px(app, 30, 160) == src && px(app, 230, 160) == src, &format!("Ctrl-drag: {:?} and {:?}", px(app, 30, 160), px(app, 230, 160)))?;
+            let z = app.zoom;
+            key(app, h, r, Key::Char('m'), Mods::NONE);
+            click_on(app, h, r, 200.0, 120.0, Button::Left);
+            check(app.zoom > z, "magnifier didn't zoom in")?;
+            click_on(app, h, r, 200.0, 120.0, Button::Right);
+            check((app.zoom - z).abs() < 0.01 || app.zoom < z * 1.01, "right-click didn't zoom back out")?;
+            app.command("zoom.fit", h);
+            Ok(())
+        });
         step!("dark theme", |app: &mut DrawApp, _h: &mut dyn Host, r: &mut Res| {
             app.theme = folio_kit::theme::Theme::new(true, crate::app::MAROON, crate::app::ACCENT);
             let pm = shot(app, r);
