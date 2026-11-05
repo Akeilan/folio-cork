@@ -2,6 +2,7 @@
 //! keeps shipping; this one is built and tested alongside it.
 
 mod app;
+mod emb;
 mod icons;
 mod ribbon_defs;
 mod settings;

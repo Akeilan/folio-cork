@@ -574,6 +574,45 @@ impl UiTest {
             click_on(app, h, r, 10.0, 10.0, Button::Left);
             check(app.playing.is_none(), "a click didn't stop playback")
         });
+        let d5 = dir.clone();
+        step!("embroidery: a new hoop, a shape, its stitches, export and import", move |app: &mut DrawApp, h: &mut dyn Host, r: &mut Res| {
+            app.saved_for_test();
+            app.command("emb.new:0", h);
+            ev(app, h, r, Event::MouseMove { x: 1.0, y: 1.0 });
+            check(!app.doc.emb.is_empty() && app.doc.w == 1016 && app.doc.h == 1016, &format!("hoop canvas {}x{}", app.doc.w, app.doc.h))?;
+            check(app.ribbon.active_id() == "embroidery", "the Embroidery tab isn't showing")?;
+            // a 30 mm red square in the middle of the hoop (mm, centre at 0,0)
+            let spec = serde_json::json!({"objects": [{"id": 1, "kind": "shape", "rings": [[[-15, -15], [15, -15], [15, 15], [-15, 15]]],
+                "thread": {"rgb": [200, 20, 30]}}], "next_id": 2});
+            crate::emb::add_shape_layer(&mut app.doc, "Square", &spec);
+            let c = px(app, 508, 508);
+            check(c[0] > 180 && c[1] < 60, &format!("shape not drawn in its thread colour: {c:?}"))?;
+            let plan = crate::emb::make_plan(&app.doc).ok_or("no plan")?;
+            check(plan.stitch_count() > 200, &format!("{} stitches", plan.stitch_count()))?;
+            ribbon_click(app, h, r, "embroidery", "emb.view")?;
+            check(app.stitch_view, "stitch view off")?;
+            shot(app, r);
+            app.command("emb.info", h);
+            let note = app.dialog.as_ref().map(|d| d.fields.iter().map(|f| f.label.clone()).collect::<Vec<_>>().join(" ")).unwrap_or_default();
+            let _ = note;
+            check(app.dialog.is_some(), "no stitch information")?;
+            app.dialog = None;
+            for ext in ["pes", "dst", "jef", "exp", "vp3", "xxx"] {
+                let p = d5.join(format!("design.{ext}"));
+                app.export_stitches(&p)?;
+                let back = folio_draw_engine::emb::formats::read_named(&std::fs::read(&p).map_err(|e| e.to_string())?, ext)?;
+                check(back.stitch_count() + 2 >= plan.stitch_count(), &format!("{ext}: {} of {} stitches", back.stitch_count(), plan.stitch_count()))?;
+            }
+            let n = app.doc.layers.len();
+            app.import_stitches(&d5.join("design.pes"))?;
+            check(app.doc.layers.len() == n + 1, "import made no layer")?;
+            let p2 = crate::emb::make_plan(&app.doc).ok_or("no plan after import")?;
+            check(p2.stitch_count() + 4 >= 2 * plan.stitch_count(), &format!("{} stitches after importing a copy", p2.stitch_count()))?;
+            let ora = d5.join("design.ora");
+            check(app.save_to(&ora), "not saved")?;
+            let back = DrawApp::load(&ora)?;
+            check(back.emb == app.doc.emb && crate::emb::layer_spec(&back, back.layers.len() - 1).is_some(), "the .ora lost the embroidery")
+        });
         step!("dark theme", |app: &mut DrawApp, _h: &mut dyn Host, r: &mut Res| {
             app.theme = folio_kit::theme::Theme::new(true, crate::app::MAROON, crate::app::ACCENT);
             let pm = shot(app, r);
