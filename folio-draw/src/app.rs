@@ -200,6 +200,7 @@ pub struct DrawApp {
     pub c1: [u8; 4],
     pub c2: [u8; 4],
     pub shape_fill: bool,
+    pub shape_outline: bool,
     pub brush: u8,
     text_at: Option<Pt>,
     /// The text layer being typed again, when the Text tool clicked one.
@@ -289,6 +290,7 @@ impl DrawApp {
             c1: [0, 0, 0, 255],
             c2: [255, 255, 255, 255],
             shape_fill: false,
+            shape_outline: true,
             brush: doc::TOOL_BRUSH,
             text_at: None,
             text_edit: None,
@@ -1251,7 +1253,7 @@ impl DrawApp {
 
     fn draw_closed(&mut self, pts: &[Pt], color: [u8; 4]) {
         let other = if color == self.c1 { self.c2 } else { self.c1 };
-        self.doc.shape(pts, true, self.size, color, other, if self.shape_fill { 3 } else { 1 }, true);
+        self.doc.shape(pts, true, self.size, color, other, self.shape_mode(true), true);
     }
 
     fn frame_delay(&self) -> Duration {
@@ -1260,6 +1262,13 @@ impl DrawApp {
     }
 
     /// Change the selected embroidery object and store its layer again (one undo step).
+    /// How a shape is drawn: 1 outline, 2 fill, 3 both. A shape is never neither.
+    pub fn shape_mode(&self, closed: bool) -> u32 {
+        let fill = self.shape_fill && closed;
+        let line = self.shape_outline || !fill;
+        (line as u32) | ((fill as u32) << 1)
+    }
+
     /// The fonts the Text tool offers: the app's own first, then what is installed.
     pub fn text_fonts(&self) -> Vec<String> {
         let mut out = vec![String::new()];
@@ -1456,9 +1465,8 @@ impl DrawApp {
                 (pts, true)
             }
         };
-        let fill = self.shape_fill && closed;
         let other = if color == self.c1 { self.c2 } else { self.c1 };
-        self.doc.shape(&pts, closed, w, color, other, if fill { 3 } else { 1 }, true);
+        self.doc.shape(&pts, closed, w, color, other, self.shape_mode(closed), true);
     }
 
     // ---------------- commands ----------------
@@ -1468,6 +1476,17 @@ impl DrawApp {
             // these change the pending shape rather than keep it
             "shape.fill" => {
                 self.shape_fill = !self.shape_fill;
+                if !self.shape_fill {
+                    self.shape_outline = true;
+                }
+                self.redraw_pending();
+                return;
+            }
+            "shape.outline" => {
+                self.shape_outline = !self.shape_outline;
+                if !self.shape_outline {
+                    self.shape_fill = true;
+                }
                 self.redraw_pending();
                 return;
             }
@@ -1560,7 +1579,6 @@ impl DrawApp {
                 self.doc.invert_colors();
                 self.doc.label_last("Invert colours");
             }
-            "shape.fill" => self.shape_fill = !self.shape_fill,
             "adj.grey" | "adj.sepia" => {
                 use folio_draw_engine::adjust;
                 self.doc.adjust(if id == "adj.grey" { adjust::GREY } else { adjust::SEPIA }, 0.0, 0.0, 0.0);
@@ -2805,6 +2823,7 @@ impl DrawApp {
             c1: self.c1,
             c2: self.c2,
             shape_fill: self.shape_fill,
+            shape_outline: self.shape_outline,
             layers: self.show_layers,
             grid: self.gridlines,
             rulers: self.rulers,
@@ -3233,6 +3252,7 @@ pub struct St {
     pub c1: [u8; 4],
     pub c2: [u8; 4],
     pub shape_fill: bool,
+    pub shape_outline: bool,
     pub layers: bool,
     pub grid: bool,
     pub rulers: bool,
@@ -3266,6 +3286,7 @@ impl CommandState for St {
             "view.rulers" => self.rulers,
             "frames" => self.frames,
             "emb.view" => self.stitch_view,
+            "shape.outline" => self.shape_outline,
             "emb.density" => self.density_view,
             "emb.stitchout" => self.stitch_out,
             "full-screen" => self.full_screen,
