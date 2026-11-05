@@ -1,0 +1,9 @@
+[package]
+name = "folio-draw"
+version = "0.1.0"
+edition = "2021"
+description = "Folio Draw on the portable base (D3-06): the Rust port of the drawing app"
+
+[dependencies]
+folio-kit = { version = "0.3.0", path = "../crates/folio-kit" }
+folio-draw-engine = { version = "0.3.0", path = "../crates/folio-draw-engine" }

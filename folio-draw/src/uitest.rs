@@ -1,0 +1,284 @@
+//! The window test (D3-06): drives Draw as a user would, one step per tick, in a real window
+//! or in memory (`--headless`). The GTK version's tests are the spec this grows towards.
+
+use crate::app::{BackPage, DrawApp, Res, Tool};
+use folio_kit::gfx::{self, sk};
+use folio_kit::platform::{Button, Event, Host, Key, Mods};
+use std::path::PathBuf;
+
+type Step = Box<dyn FnMut(&mut DrawApp, &mut dyn Host, &mut Res) -> Result<(), String>>;
+
+pub struct UiTest {
+    steps: Vec<(String, Step)>,
+    i: usize,
+    pub done: bool,
+    fails: Vec<String>,
+    passed: usize,
+    dir: PathBuf,
+}
+
+fn check(c: bool, msg: &str) -> Result<(), String> {
+    if c {
+        Ok(())
+    } else {
+        Err(msg.to_string())
+    }
+}
+
+fn ev(app: &mut DrawApp, host: &mut dyn Host, r: &mut Res, e: Event) {
+    app.handle_test(&e, host, r);
+}
+
+fn shot(app: &mut DrawApp, r: &mut Res) -> sk::Pixmap {
+    let mut pm = sk::Pixmap::new(app.w as u32, app.h as u32).unwrap();
+    app.paint(&mut pm, r);
+    pm
+}
+
+/// Screen point of a picture point.
+fn sp(app: &DrawApp, x: f32, y: f32) -> (f32, f32) {
+    app.to_screen((x, y))
+}
+
+fn drag_on(app: &mut DrawApp, host: &mut dyn Host, r: &mut Res, a: (f32, f32), b: (f32, f32), button: Button) {
+    let (a, b) = (sp(app, a.0, a.1), sp(app, b.0, b.1));
+    ev(app, host, r, Event::MouseMove { x: a.0, y: a.1 });
+    ev(app, host, r, Event::MouseDown { x: a.0, y: a.1, button, clicks: 1 });
+    for i in 1..=10 {
+        let t = i as f32 / 10.0;
+        ev(app, host, r, Event::MouseMove { x: a.0 + (b.0 - a.0) * t, y: a.1 + (b.1 - a.1) * t });
+    }
+    ev(app, host, r, Event::MouseUp { x: b.0, y: b.1, button });
+}
+
+fn click_on(app: &mut DrawApp, host: &mut dyn Host, r: &mut Res, x: f32, y: f32, button: Button) {
+    let p = sp(app, x, y);
+    ev(app, host, r, Event::MouseMove { x: p.0, y: p.1 });
+    ev(app, host, r, Event::MouseDown { x: p.0, y: p.1, button, clicks: 1 });
+    ev(app, host, r, Event::MouseUp { x: p.0, y: p.1, button });
+}
+
+fn ribbon_click(app: &mut DrawApp, host: &mut dyn Host, r: &mut Res, tab: &str, id: &str) -> Result<(), String> {
+    app.ribbon.select_tab(tab);
+    shot(app, r);
+    let rr = app.ribbon.rect_of(id).ok_or(format!("ribbon button {id} not shown"))?;
+    ev(app, host, r, Event::MouseMove { x: rr.cx(), y: rr.cy() });
+    ev(app, host, r, Event::MouseDown { x: rr.cx(), y: rr.cy(), button: Button::Left, clicks: 1 });
+    ev(app, host, r, Event::MouseUp { x: rr.cx(), y: rr.cy(), button: Button::Left });
+    Ok(())
+}
+
+fn key(app: &mut DrawApp, host: &mut dyn Host, r: &mut Res, k: Key, mods: Mods) {
+    ev(app, host, r, Event::Key { key: k.clone(), mods, down: true, repeat: false });
+    ev(app, host, r, Event::Key { key: k, mods, down: false, repeat: false });
+}
+
+fn ctrl() -> Mods {
+    Mods { ctrl: true, ..Mods::NONE }
+}
+
+fn px(app: &DrawApp, x: usize, y: usize) -> [u8; 4] {
+    let f = app.doc.flatten_rgba();
+    let o = (y * app.doc.w + x) * 4;
+    [f[o], f[o + 1], f[o + 2], f[o + 3]]
+}
+
+impl UiTest {
+    pub fn new(dir: PathBuf) -> UiTest {
+        let _ = std::fs::create_dir_all(&dir);
+        let mut steps: Vec<(String, Step)> = vec![];
+        macro_rules! step {
+            ($name:expr, $f:expr) => {
+                steps.push(($name.to_string(), Box::new($f)));
+            };
+        }
+        let d2 = dir.clone();
+        step!("window shows the ribbon and the picture", |app: &mut DrawApp, _h: &mut dyn Host, r: &mut Res| {
+            let pm = shot(app, r);
+            check(app.canvas.w > 400.0 && app.canvas.h > 300.0, "picture area too small")?;
+            let t = pm.pixel(app.w as u32 / 2, 4).ok_or("no pixel")?;
+            check(t.red() > 100 && t.green() < 40 && t.blue() < 40, &format!("title bar isn't maroon {:?}", (t.red(), t.green(), t.blue())))?;
+            let (x, y) = app.to_screen((100.0, 100.0));
+            let p = pm.pixel(x as u32, y as u32).ok_or("no pixel")?;
+            check(p.red() > 240 && p.green() > 240 && p.blue() > 240, "the picture isn't showing white")
+        });
+        step!("pencil draws in colour 1", |app: &mut DrawApp, h: &mut dyn Host, r: &mut Res| {
+            ribbon_click(app, h, r, "home", "tool.pencil")?;
+            check(app.tool == Tool::Pencil, "pencil not chosen")?;
+            drag_on(app, h, r, (50.0, 50.0), (150.0, 50.0), Button::Left);
+            check(px(app, 100, 50) == [0, 0, 0, 255], &format!("pixel {:?}", px(app, 100, 50)))?;
+            check(app.dirty(), "picture not marked changed")
+        });
+        step!("colour 2 from the Colours menu, the brush paints it with the right button", |app: &mut DrawApp, h: &mut dyn Host, r: &mut Res| {
+            ribbon_click(app, h, r, "home", "color2")?;
+            check(app.menu.is_some(), "colour menu didn't open")?;
+            app.menu = None;
+            app.c2 = [237, 28, 36, 255];
+            ribbon_click(app, h, r, "home", "tool.brush")?;
+            drag_on(app, h, r, (50.0, 120.0), (250.0, 120.0), Button::Right);
+            let p = px(app, 150, 120);
+            check(p[0] > 200 && p[1] < 80 && p[2] < 80, &format!("pixel {p:?}"))
+        });
+        step!("rectangle tool draws an outline", |app: &mut DrawApp, h: &mut dyn Host, r: &mut Res| {
+            ribbon_click(app, h, r, "home", "tool.rect")?;
+            app.size = 3.0;
+            drag_on(app, h, r, (300.0, 200.0), (500.0, 350.0), Button::Left);
+            check(px(app, 400, 200)[0] < 60, &format!("top edge {:?}", px(app, 400, 200)))?;
+            check(px(app, 400, 275) == [255, 255, 255, 255], "inside should stay white")
+        });
+        step!("undo takes the rectangle away, redo brings it back", |app: &mut DrawApp, h: &mut dyn Host, r: &mut Res| {
+            key(app, h, r, Key::Char('z'), ctrl());
+            check(px(app, 400, 200) == [255, 255, 255, 255], "still there after undo")?;
+            key(app, h, r, Key::Char('y'), ctrl());
+            check(px(app, 400, 200)[0] < 60, "not back after redo")
+        });
+        step!("fill with colour inside the rectangle", |app: &mut DrawApp, h: &mut dyn Host, r: &mut Res| {
+            app.c1 = [34, 177, 76, 255];
+            ribbon_click(app, h, r, "home", "tool.fill")?;
+            click_on(app, h, r, 400.0, 275.0, Button::Left);
+            check(px(app, 400, 275) == [34, 177, 76, 255], &format!("inside {:?}", px(app, 400, 275)))?;
+            check(px(app, 600, 275) == [255, 255, 255, 255], "fill leaked outside")
+        });
+        step!("filled oval with Shift draws a circle", |app: &mut DrawApp, h: &mut dyn Host, r: &mut Res| {
+            ribbon_click(app, h, r, "home", "shape.fill")?;
+            check(app.shape_fill, "shape fill not on")?;
+            ribbon_click(app, h, r, "home", "tool.ellipse")?;
+            app.c1 = [0, 0, 0, 255];
+            app.mods = Mods { shift: true, ..Mods::NONE };
+            drag_on(app, h, r, (700.0, 100.0), (800.0, 160.0), Button::Left);
+            app.mods = Mods::NONE;
+            let c = px(app, 750, 150);
+            check(c[0] > 200 && c[1] < 80, &format!("centre not filled with colour 2: {c:?}"))?;
+            // a 100 px circle: its outline crosses 50 px below the centre, the 60 px drag ignored
+            let edge = (196..204).any(|y| px(app, 750, y)[0] < 60);
+            let col: Vec<u8> = (190..206).map(|y| px(app, 750, y)[0]).collect();
+            check(edge, &format!("not a circle (no edge 50 px below the centre): {col:?}"))
+        });
+        step!("colour picker takes a colour", |app: &mut DrawApp, h: &mut dyn Host, r: &mut Res| {
+            key(app, h, r, Key::Char('i'), Mods::NONE);
+            check(app.tool == Tool::Picker, "I didn't choose the picker")?;
+            click_on(app, h, r, 400.0, 275.0, Button::Left);
+            check(app.c1 == [34, 177, 76, 255], &format!("picked {:?}", app.c1))
+        });
+        step!("select and move part of the picture", |app: &mut DrawApp, h: &mut dyn Host, r: &mut Res| {
+            ribbon_click(app, h, r, "home", "tool.select")?;
+            drag_on(app, h, r, (290.0, 190.0), (510.0, 360.0), Button::Left);
+            check(app.doc.sel_bounds().is_some(), "nothing selected")?;
+            drag_on(app, h, r, (400.0, 275.0), (400.0, 425.0), Button::Left);
+            key(app, h, r, Key::Escape, Mods::NONE);
+            check(px(app, 400, 425) == [34, 177, 76, 255], &format!("moved {:?}", px(app, 400, 425)))?;
+            check(px(app, 400, 230) != [34, 177, 76, 255], "the old place still holds it")
+        });
+        step!("copy and paste", |app: &mut DrawApp, h: &mut dyn Host, r: &mut Res| {
+            app.doc.sel_rect(300, 350, 200, 150);
+            key(app, h, r, Key::Char('c'), ctrl());
+            let img = h.clipboard_image().ok_or("nothing on the clipboard")?;
+            check(img.w == 200 && img.h == 150, &format!("clipboard {}x{}", img.w, img.h))?;
+            key(app, h, r, Key::Char('v'), ctrl());
+            check(app.doc.float.is_some(), "paste didn't float the picture")?;
+            key(app, h, r, Key::Escape, Mods::NONE);
+            check(app.doc.float.is_none(), "Esc didn't place it")
+        });
+        step!("rotate, crop and resize", |app: &mut DrawApp, h: &mut dyn Host, r: &mut Res| {
+            let (w, hh) = (app.doc.w, app.doc.h);
+            app.command("rotate.right", h);
+            check(app.doc.w == hh && app.doc.h == w, "rotate right didn't swap the sides")?;
+            app.command("rotate.left", h);
+            check(app.doc.w == w, "rotate left didn't turn it back")?;
+            app.doc.sel_rect(0, 0, 800, 500);
+            ribbon_click(app, h, r, "home", "crop")?;
+            check(app.doc.w == 800 && app.doc.h == 500, &format!("cropped to {}x{}", app.doc.w, app.doc.h))?;
+            key(app, h, r, Key::Char('w'), ctrl());
+            check(app.dialog.is_some(), "Resize didn't open")?;
+            shot(app, r);
+            // the width is selected: type over it, then Enter for OK
+            ev(app, h, r, Event::Text("400".into()));
+            key(app, h, r, Key::Enter, Mods::NONE);
+            check(app.dialog.is_none(), "dialog still open")?;
+            check(app.doc.w == 400 && app.doc.h == 250, &format!("resized to {}x{}", app.doc.w, app.doc.h))
+        });
+        step!("zoom from the View tab", |app: &mut DrawApp, h: &mut dyn Host, r: &mut Res| {
+            ribbon_click(app, h, r, "view", "zoom.100")?;
+            check((app.zoom - 1.0).abs() < 0.001, "100% isn't 1")?;
+            ribbon_click(app, h, r, "view", "zoom.in")?;
+            check(app.zoom > 1.0, "zoom in")?;
+            ev(app, h, r, Event::Modifiers(ctrl()));
+            ev(app, h, r, Event::Wheel { dx: 0.0, dy: -1.0 });
+            ev(app, h, r, Event::Modifiers(Mods::NONE));
+            check((app.zoom - 1.0).abs() < 0.001, &format!("Ctrl+wheel out: {}", app.zoom))?;
+            ribbon_click(app, h, r, "view", "zoom.fit")?;
+            app.ribbon.select_tab("home");
+            Ok(())
+        });
+        step!("save as PNG and open it again", move |app: &mut DrawApp, h: &mut dyn Host, r: &mut Res| {
+            let p = d2.join("ui-test.png");
+            let _ = std::fs::remove_file(&p);
+            key(app, h, r, Key::Char('s'), ctrl());
+            check(app.back.as_ref().map(|b| b.page) == Some(BackPage::SaveAs), "Save As didn't open for a new picture")?;
+            if let Some(b) = app.back.as_mut() {
+                b.files.name.set(p.to_str().unwrap());
+                b.files.name.focused = true;
+            }
+            shot(app, r);
+            key(app, h, r, Key::Enter, Mods::NONE);
+            check(p.exists(), "file not written")?;
+            check(!app.dirty(), "still marked unsaved")?;
+            let before = app.doc.flatten_rgba();
+            let back = DrawApp::load(&p)?;
+            check(back.w == app.doc.w && back.flatten_rgba() == before, "the reopened picture differs")
+        });
+        let d3 = dir.clone();
+        step!("layers survive OpenRaster", move |app: &mut DrawApp, h: &mut dyn Host, r: &mut Res| {
+            ribbon_click(app, h, r, "view", "layer.add")?;
+            app.ribbon.select_tab("home");
+            check(app.doc.layers.len() == 2, "no new layer")?;
+            let p = d3.join("ui-test.ora");
+            check(app.save_to(&p), "not saved")?;
+            let back = DrawApp::load(&p)?;
+            check(back.layers.len() == 2, &format!("{} layers after reopening", back.layers.len()))
+        });
+        step!("dark theme", |app: &mut DrawApp, _h: &mut dyn Host, r: &mut Res| {
+            app.theme = folio_kit::theme::Theme::new(true, crate::app::MAROON, crate::app::ACCENT);
+            let pm = shot(app, r);
+            let dir = PathBuf::from(folio_kit::platform::setting("FOLIO_UI_DIR").unwrap_or_else(|| "/tmp".into()));
+            let _ = std::fs::write(dir.join("ui-dark.png"), gfx::encode_png(&pm));
+            let p = pm.pixel(app.w as u32 - 40, (app.ribbon.rect.y + 60.0) as u32).ok_or("no pixel")?;
+            check(p.red() < 80, "ribbon not dark")
+        });
+        UiTest { steps, i: 0, done: false, fails: vec![], passed: 0, dir }
+    }
+
+    pub fn step(&mut self, app: &mut DrawApp, host: &mut dyn Host, r: &mut Res) {
+        if self.i >= self.steps.len() {
+            let pm = shot(app, r);
+            let _ = std::fs::write(self.dir.join("ui-final.png"), gfx::encode_png(&pm));
+            println!("{} passed, {} failed", self.passed, self.fails.len());
+            for f in &self.fails {
+                println!("FAIL {f}");
+            }
+            self.done = true;
+            return;
+        }
+        let (name, f) = &mut self.steps[self.i];
+        let name = name.clone();
+        match f(app, host, r) {
+            Ok(()) => {
+                self.passed += 1;
+                println!("ok   {name}");
+            }
+            Err(e) => {
+                println!("FAIL {name}: {e}");
+                self.fails.push(format!("{name}: {e}"));
+            }
+        }
+        self.i += 1;
+    }
+
+    pub fn code(&self) -> i32 {
+        if self.fails.is_empty() {
+            0
+        } else {
+            1
+        }
+    }
+}
