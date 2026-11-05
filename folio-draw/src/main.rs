@@ -5,6 +5,7 @@ mod app;
 mod emb;
 mod icons;
 mod letters;
+mod page;
 mod ribbon_defs;
 mod settings;
 mod stabilizer;

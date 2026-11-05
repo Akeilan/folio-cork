@@ -941,6 +941,34 @@ impl UiTest {
             app.ribbon.collapsed = false;
             Ok(())
         });
+        step!("page setup lays the picture out, and Print makes the pages", |app: &mut DrawApp, h: &mut dyn Host, r: &mut Res| {
+            app.saved_for_test();
+            app.command("new", h);
+            ev(app, h, r, Event::MouseMove { x: 1.0, y: 1.0 });
+            app.command("page-setup", h);
+            shot(app, r);
+            let d = app.dialog.as_mut().ok_or("the Page setup box didn't open")?;
+            d.set_choice("paper", 1);
+            d.set_choice("orientation", 1);
+            d.set_choice("mode", 1);
+            key(app, h, r, Key::Enter, Mods::NONE);
+            check(app.dialog.is_none(), "the box stayed open")?;
+            check(app.page.paper == 1 && app.page.landscape && !app.page.fit, &format!("page {:?}", app.page))?;
+            let st = crate::settings::Settings::load();
+            check(st.page == app.page, "the page setup wasn't kept")?;
+            // laid out: landscape Letter is wider than it is tall
+            let (pw, ph) = crate::page::paper_size(&app.page);
+            check(pw > ph, &format!("paper {pw} x {ph}"))?;
+            let sheets = crate::page::layout(&app.page, app.doc.w, app.doc.h);
+            check(!sheets.is_empty(), "no sheets")?;
+            let bytes = crate::page::pdf_bytes(&app.doc.flatten_rgba(), app.doc.w, app.doc.h, &app.page).map_err(|e| e.to_string())?;
+            check(&bytes[..5] == b"%PDF-" && bytes.len() > 500, &format!("{} bytes of PDF", bytes.len()))?;
+            check(crate::page::describe(&app.page, app.doc.w, app.doc.h).contains("page"), "no description")?;
+            // back to the usual page, so a later run starts as it did
+            app.page = crate::page::Setup::default();
+            app.remember();
+            Ok(())
+        });
         step!("dark theme", |app: &mut DrawApp, _h: &mut dyn Host, r: &mut Res| {
             app.theme = folio_kit::theme::Theme::new(true, crate::app::MAROON, crate::app::ACCENT);
             let pm = shot(app, r);

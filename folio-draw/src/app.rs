@@ -235,6 +235,8 @@ pub struct DrawApp {
     /// Font names for lettering, filled on the first paint (it needs the text engine).
     pub fonts: Vec<String>,
     pub letter_font: String,
+    pub page: crate::page::Setup,
+    printers: Vec<String>,
     stab_run: Option<crate::stabilizer::Stabilizer>,
     pub wand_contiguous: bool,
     pub rulers: bool,
@@ -312,6 +314,8 @@ impl DrawApp {
             stab: [[0; 3]; 3],
             fonts: vec![],
             letter_font: "Carlito Bold".into(),
+            page: crate::page::Setup::default(),
+            printers: vec![],
             stab_run: None,
             wand_contiguous: true,
             rulers: false,
@@ -356,6 +360,7 @@ impl DrawApp {
         self.wand_contiguous = st.wand_contiguous;
         self.doc.sample_all = st.sample_all;
         self.stab = st.stab;
+        self.page = st.page.clone();
         if !st.quick.is_empty() {
             let have = self.title.quick.clone();
             let known = self.quick_choices();
@@ -391,6 +396,7 @@ impl DrawApp {
         self.settings.wand_contiguous = self.wand_contiguous;
         self.settings.sample_all = self.doc.sample_all;
         self.settings.stab = self.stab;
+        self.settings.page = self.page.clone();
         self.settings.quick = self.title.quick.iter().map(|q| q.0.clone()).collect();
         self.settings.save();
     }
@@ -715,6 +721,10 @@ impl DrawApp {
         }
         if matches!(key, Key::Escape) && self.full_screen {
             self.command("full-screen", host);
+            return;
+        }
+        if m.ctrl && c('p') {
+            self.command("print", host);
             return;
         }
         if m.ctrl {
@@ -1669,6 +1679,43 @@ impl DrawApp {
                 self.menu = Some(Menu::new("quick", Rect::new(r.x + 40.0 * self.s, r.bottom(), 0.0, 0.0), items));
             }
             "search" => self.title.focus_search(),
+            "page-setup" => {
+                let papers: Vec<&str> = crate::page::PAPERS.iter().map(|p| p.0).collect();
+                let pg = self.page.clone();
+                let m = pg.margins;
+                self.dialog = Some(
+                    Dialog::new("page-setup", "Page setup")
+                        .note(&crate::page::describe(&pg, self.doc.w, self.doc.h))
+                        .choice("paper", "Paper", &papers, pg.paper)
+                        .choice("orientation", "Orientation", &["Portrait", "Landscape"], pg.landscape as usize)
+                        .text("margins", "Margins (mm: top, right, bottom, left)", &format!("{}, {}, {}, {}", m[0], m[1], m[2], m[3]))
+                        .check("ch", "Centre across the page", pg.centre_h)
+                        .check("cv", "Centre down the page", pg.centre_v)
+                        .choice("mode", "Size", &["Fit to the page", "A percentage of normal size"], (!pg.fit) as usize)
+                        .text("percent", "Percentage", &format!("{}", pg.percent.round() as i32))
+                        .text("sheets", "Fit to this many sheets (across by down)", &format!("{} x {}", pg.fit_w, pg.fit_h))
+                        .button("ok", "OK")
+                        .button("cancel", "Cancel"),
+                );
+            }
+            "print" => {
+                let printers = folio_kit::platform::printers();
+                if printers.is_empty() {
+                    self.flash("No printer is set up on this computer.");
+                    return;
+                }
+                let names: Vec<&str> = printers.iter().map(|p| p.as_str()).collect();
+                self.printers = printers.clone();
+                self.dialog = Some(
+                    Dialog::new("print", "Print")
+                        .note(&crate::page::describe(&self.page, self.doc.w, self.doc.h))
+                        .choice("printer", "Printer", &names, 0)
+                        .text("copies", "Copies", "1")
+                        .button("ok", "Print")
+                        .button("setup", "Page setup...")
+                        .button("cancel", "Cancel"),
+                );
+            }
             "full-screen" => {
                 self.full_screen = !self.full_screen;
                 host.set_fullscreen(self.full_screen);
@@ -2210,6 +2257,50 @@ impl DrawApp {
                     st["underlay"] = serde_json::json!(ul);
                     o["stitch"] = st;
                 });
+            }
+            ("page-setup", "ok") => {
+                let num = |id: &str, dflt: f32| d.value(id).trim().replace(',', ".").parse::<f32>().unwrap_or(dflt);
+                let mut m = self.page.margins;
+                let parts: Vec<f32> = d.value("margins").split(&[',', ';'][..]).filter_map(|v| v.trim().replace(',', ".").parse::<f32>().ok()).collect();
+                for (i, v) in parts.iter().take(4).enumerate() {
+                    m[i] = v.clamp(0.0, 100.0);
+                }
+                let sheets: Vec<u32> = d.value("sheets").split(|c: char| !c.is_ascii_digit()).filter_map(|v| v.parse::<u32>().ok()).collect();
+                self.page = crate::page::Setup {
+                    paper: d.choice_index("paper").min(crate::page::PAPERS.len() - 1),
+                    landscape: d.choice_index("orientation") == 1,
+                    margins: m,
+                    centre_h: d.checked("ch"),
+                    centre_v: d.checked("cv"),
+                    fit: d.choice_index("mode") == 0,
+                    percent: num("percent", 100.0).clamp(1.0, 2000.0),
+                    fit_w: sheets.first().copied().unwrap_or(1).clamp(1, 20),
+                    fit_h: sheets.get(1).copied().unwrap_or(1).clamp(1, 20),
+                };
+                self.settings.page = self.page.clone();
+                self.settings.save();
+                self.flash(&crate::page::describe(&self.page, self.doc.w, self.doc.h));
+            }
+            ("print", "setup") => self.command("page-setup", host),
+            ("print", "ok") => {
+                let copies = d.value("copies").trim().parse::<u32>().unwrap_or(1).clamp(1, 99);
+                let printer = self.printers.get(d.choice_index("printer")).cloned();
+                self.doc.commit_float();
+                let px = self.doc.flatten_rgba();
+                let (w, h) = (self.doc.w, self.doc.h);
+                match crate::page::pdf_bytes(&px, w, h, &self.page) {
+                    Ok(bytes) => {
+                        let tmp = folio_kit::platform::temp_file("folio-draw-print", "pdf");
+                        let res = std::fs::write(&tmp, &bytes)
+                            .map_err(|e| e.to_string())
+                            .and_then(|_| folio_kit::platform::print_pdf(&tmp, copies, printer.as_deref()));
+                        match res {
+                            Ok(()) => self.flash("Sent to the printer."),
+                            Err(e) => self.flash(&format!("Printing failed: {e}")),
+                        }
+                    }
+                    Err(e) => self.flash(&e),
+                }
             }
             ("emb.letter", "ok") => {
                 let words = d.value("text");
