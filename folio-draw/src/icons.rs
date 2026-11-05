@@ -29,6 +29,9 @@ const ICONS: &[(&str, &str)] = &[
     ("redo", "<path d='M15 14l5-5-5-5'/><path d='M20 9H10a6 6 0 0 0 0 12h3'/>"),
     ("save", "<path d='M5 4h11l3 3v13H5z'/><path d='M8 4v5h7V4M8 20v-6h8v6'/>"),
     ("layer-add", "<path d='M12 4l8 4-8 4-8-4z'/><path d='M4 12l8 4 8-4M18 16v6M15 19h6'/>"),
+    ("layers", "<path d='M12 4l8 4-8 4-8-4z'/><path d='M4 12l8 4 8-4M4 16l8 4 8-4'/>"),
+    ("merge", "<path d='M12 4l8 4-8 4-8-4z'/><path d='M12 14v7M9 18l3 3 3-3'/>"),
+    ("flatten", "<path d='M4 10h16M4 14h16'/><path d='M12 3v5M9 5l3 3 3-3M12 21v-5M9 19l3-3 3 3'/>"),
     ("invert", "<circle cx='12' cy='12' r='8'/><path d='M12 4a8 8 0 0 1 0 16z' fill='currentColor'/>"),
 ];
 
