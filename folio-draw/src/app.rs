@@ -151,6 +151,8 @@ pub struct DrawApp {
     pub shape_fill: bool,
     pub brush: u8,
     text_at: Option<Pt>,
+    /// The text layer being typed again, when the Text tool clicked one.
+    text_edit: Option<usize>,
     /// A polygon or curve being made over several clicks: its points and colour.
     pub multi: Option<(Tool, Vec<Pt>, [u8; 4], u8)>,
     pub text_size: usize,
@@ -209,6 +211,7 @@ impl DrawApp {
             shape_fill: false,
             brush: doc::TOOL_BRUSH,
             text_at: None,
+            text_edit: None,
             multi: None,
             text_size: 2,
             zoom: 1.0,
@@ -694,13 +697,26 @@ impl DrawApp {
             Tool::Polygon | Tool::Curve => {}
             Tool::Text => {
                 self.doc.commit_float();
-                self.text_at = Some(p);
+                let (mut txt, mut bold, mut italic, mut at) = (String::new(), false, false, p);
+                self.text_edit = None;
+                if let Some((i, spec)) = self.text_layer_at(p) {
+                    // a text layer: type it again
+                    txt = spec["text"].as_str().unwrap_or("").to_string();
+                    bold = spec["bold"].as_bool().unwrap_or(false);
+                    italic = spec["italic"].as_bool().unwrap_or(false);
+                    at = (spec["x"].as_f64().unwrap_or(0.0) as f32, spec["y"].as_f64().unwrap_or(0.0) as f32);
+                    let size = spec["font_size"].as_f64().unwrap_or(24.0) as u32;
+                    self.text_size = TEXT_SIZES.iter().position(|&s| s >= size).unwrap_or(TEXT_SIZES.len() - 1);
+                    self.text_edit = Some(i);
+                    self.doc.set_active(i);
+                }
+                self.text_at = Some(at);
                 self.dialog = Some(
                     Dialog::new("text", "Text")
-                        .text("text", "Text", "")
+                        .text("text", "Text", &txt)
                         .choice("size", "Size", &TEXT_SIZES.iter().map(|s| s.to_string()).collect::<Vec<_>>().iter().map(|s| s.as_str()).collect::<Vec<_>>(), self.text_size)
-                        .check("bold", "Bold", false)
-                        .check("italic", "Italic", false)
+                        .check("bold", "Bold", bold)
+                        .check("italic", "Italic", italic)
                         .button("ok", "OK")
                         .button("cancel", "Cancel"),
                 );
@@ -1198,8 +1214,39 @@ impl DrawApp {
         for p in data.chunks_exact_mut(4) {
             p.swap(0, 2);
         }
-        self.doc.blit_premul(at.0 as i64, at.1 as i64, w as usize, h as usize, &data, w as usize * 4);
+        let (x, y) = (at.0 as i64, at.1 as i64);
+        // what the GTK version keeps too, so either can type it again
+        let spec = serde_json::json!({
+            "text": t, "x": x, "y": y, "w": w, "h": h,
+            "color1": self.c1, "color2": self.c2,
+            "font_family": "", "font_size": size, "bold": bold, "italic": italic,
+            "underline": false, "strike": false, "text_opaque": false,
+        })
+        .to_string();
+        match self.text_edit.take() {
+            Some(i) if i < self.doc.layers.len() && !self.doc.layers[i].text.is_empty() => {
+                self.doc.text_layer_set(i, &spec, Some((x, y, w as usize, h as usize, &data, w as usize * 4)));
+            }
+            _ => {
+                self.doc.text_layer_add("Text", &spec, x, y, w as usize, h as usize, &data, w as usize * 4);
+            }
+        }
         self.doc.label_last("Text");
+    }
+
+    /// The topmost visible text layer whose box holds the point, with its description.
+    pub fn text_layer_at(&self, p: Pt) -> Option<(usize, serde_json::Value)> {
+        for (i, l) in self.doc.layers.iter().enumerate().rev() {
+            if !l.visible || l.text.is_empty() {
+                continue;
+            }
+            let Ok(v) = serde_json::from_str::<serde_json::Value>(&l.text) else { continue };
+            let n = |k: &str| v[k].as_f64().unwrap_or(0.0) as f32;
+            if p.0 >= n("x") && p.1 >= n("y") && p.0 < n("x") + n("w") && p.1 < n("y") + n("h") {
+                return Some((i, v));
+            }
+        }
+        None
     }
 
     pub fn paste_rgba(&mut self, w: usize, h: usize, px: Vec<u8>) {

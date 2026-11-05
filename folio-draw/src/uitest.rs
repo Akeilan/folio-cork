@@ -250,7 +250,22 @@ impl UiTest {
                 after[o] < 100 && before[o] > 200
             }).count();
             check(dark > 40, &format!("{dark} dark pixels where the text should be"))?;
-            check(app.doc.history().0.last().map(|l| *l == "Text").unwrap_or(false), "undo step not named Text")
+            check(app.doc.history().0.last().map(|l| *l == "Text").unwrap_or(false), "undo step not named Text")?;
+            let n = app.doc.layers.len();
+            let tl = app.doc.active;
+            check(!app.doc.layers[tl].text.is_empty(), "the text isn't on its own text layer")?;
+            // click it again with the Text tool: the box opens with the words in it
+            click_on(app, h, r, 905.0, 510.0, Button::Left);
+            let d = app.dialog.as_ref().ok_or("clicking the text didn't open it")?;
+            check(d.value("text") == "Hello", &format!("box holds {:?}", d.value("text")))?;
+            shot(app, r);
+            ev(app, h, r, Event::Text("Bye".into()));
+            key(app, h, r, Key::Enter, Mods::NONE);
+            check(app.doc.layers.len() == n && app.doc.layers[tl].text.contains("Bye"), "typed again on a new layer, or not changed")?;
+            key(app, h, r, Key::Char('z'), ctrl());
+            check(app.doc.layers[tl].text.contains("Hello"), "undo didn't bring the first text back")?;
+            app.command("layer.merge", h);
+            check(app.doc.layers.len() == n - 1, "text layer not merged down")
         });
         step!("transparent selection leaves colour 2 behind", |app: &mut DrawApp, h: &mut dyn Host, r: &mut Res| {
             app.c2 = [255, 255, 255, 255];

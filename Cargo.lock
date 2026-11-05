@@ -834,6 +834,7 @@ version = "0.1.0"
 dependencies = [
  "folio-draw-engine",
  "folio-kit",
+ "serde_json",
 ]
 
 [[package]]
