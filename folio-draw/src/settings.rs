@@ -10,12 +10,16 @@ pub struct Settings {
     pub rulers: bool,
     pub grid: bool,
     pub layers: bool,
+    pub wand_tol: f32,
+    pub wand_contiguous: bool,
+    pub sample_all: bool,
+    pub stab: [[u8; 3]; 3],
     pub recent: Vec<String>,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { size: 3.0, c1: [0, 0, 0, 255], c2: [255, 255, 255, 255], rulers: false, grid: false, layers: false, recent: vec![] }
+        Settings { size: 3.0, c1: [0, 0, 0, 255], c2: [255, 255, 255, 255], rulers: false, grid: false, layers: false, wand_tol: 32.0, wand_contiguous: true, sample_all: false, stab: [[0; 3]; 3], recent: vec![] }
     }
 }
 
@@ -45,6 +49,16 @@ impl Settings {
                 "rulers" => s.rulers = v.trim() == "1",
                 "grid" => s.grid = v.trim() == "1",
                 "layers" => s.layers = v.trim() == "1",
+                "wandtol" => s.wand_tol = v.trim().parse().unwrap_or(s.wand_tol),
+                "wandcontiguous" => s.wand_contiguous = v.trim() == "1",
+                "sampleall" => s.sample_all = v.trim() == "1",
+                "stabilizer" => {
+                    // slot,a,b,c
+                    let n: Vec<u8> = v.trim().split(',').map(|x| x.trim().parse().unwrap_or(0)).collect();
+                    if n.len() == 4 && (n[0] as usize) < 3 {
+                        s.stab[n[0] as usize] = [n[1], n[2], n[3]];
+                    }
+                }
                 "recent" => s.recent.push(v.to_string()),
                 _ => {}
             }
@@ -55,14 +69,22 @@ impl Settings {
     pub fn save(&self) {
         let c = |c: [u8; 4]| format!("#{:02X}{:02X}{:02X}{:02X}", c[0], c[1], c[2], c[3]);
         let mut out = format!(
-            "size={}\ncolor1={}\ncolor2={}\nrulers={}\ngrid={}\nlayers={}\n",
+            "size={}\ncolor1={}\ncolor2={}\nrulers={}\ngrid={}\nlayers={}\nwandtol={}\nwandcontiguous={}\nsampleall={}\n",
             self.size,
             c(self.c1),
             c(self.c2),
             self.rulers as u8,
             self.grid as u8,
-            self.layers as u8
+            self.layers as u8,
+            self.wand_tol,
+            self.wand_contiguous as u8,
+            self.sample_all as u8
         );
+        for (i, v) in self.stab.iter().enumerate() {
+            if *v != [0, 0, 0] {
+                out += &format!("stabilizer={},{},{},{}\n", i, v[0], v[1], v[2]);
+            }
+        }
         for r in &self.recent {
             out += &format!("recent={r}\n");
         }

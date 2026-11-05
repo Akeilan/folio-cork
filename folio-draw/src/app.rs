@@ -164,6 +164,10 @@ pub struct Res {
     pub icons: Icons,
 }
 
+/// How many times a saved animation plays: 0 is forever, -1 once, n for n+1 times.
+pub const GIF_LOOPS: &[(i32, &str)] =
+    &[(0, "Forever"), (-1, "Once"), (1, "2 times"), (2, "3 times"), (4, "5 times"), (9, "10 times")];
+
 pub struct DrawApp {
     pub doc: Doc,
     pub path: Option<PathBuf>,
@@ -206,6 +210,10 @@ pub struct DrawApp {
     pub show_layers: bool,
     pub gridlines: bool,
     pub transparent_sel: bool,
+    pub wand_tol: f32,
+    pub stab: [[u8; 3]; 3],
+    stab_run: Option<crate::stabilizer::Stabilizer>,
+    pub wand_contiguous: bool,
     pub rulers: bool,
     side_hits: Vec<(String, Rect)>,
     view: Option<sk::Pixmap>,
@@ -270,6 +278,10 @@ impl DrawApp {
             show_layers: false,
             gridlines: false,
             transparent_sel: false,
+            wand_tol: 32.0,
+            stab: [[0; 3]; 3],
+            stab_run: None,
+            wand_contiguous: true,
             rulers: false,
             side_hits: vec![],
             view: None,
@@ -291,6 +303,15 @@ impl DrawApp {
         .with_settings()
     }
 
+    /// Which of the three stroke tools the stabilizer settings are for.
+    pub fn stab_slot(&self) -> usize {
+        match self.tool {
+            Tool::Brush => 1,
+            Tool::Eraser => 2,
+            _ => 0,
+        }
+    }
+
     fn with_settings(mut self) -> DrawApp {
         let st = self.settings.clone();
         self.size = st.size;
@@ -299,6 +320,10 @@ impl DrawApp {
         self.rulers = st.rulers;
         self.gridlines = st.grid;
         self.show_layers = st.layers;
+        self.wand_tol = st.wand_tol;
+        self.wand_contiguous = st.wand_contiguous;
+        self.doc.sample_all = st.sample_all;
+        self.stab = st.stab;
         if let Some(p) = self.path.clone() {
             self.settings.add_recent(&p);
         }
@@ -313,6 +338,10 @@ impl DrawApp {
         self.settings.rulers = self.rulers;
         self.settings.grid = self.gridlines;
         self.settings.layers = self.show_layers;
+        self.settings.wand_tol = self.wand_tol;
+        self.settings.wand_contiguous = self.wand_contiguous;
+        self.settings.sample_all = self.doc.sample_all;
+        self.settings.stab = self.stab;
         self.settings.save();
     }
 
@@ -745,6 +774,9 @@ impl DrawApp {
                 self.doc.stroke_begin(tool, size, hard, col);
                 let (px, py) = if self.tool == Tool::Pencil { (p.0.floor() + 0.5, p.1.floor() + 0.5) } else { p };
                 self.doc.stroke_to(px, py);
+                let mut st = crate::stabilizer::Stabilizer::new(self.stab[self.stab_slot()], self.zoom);
+                st.start(p.0, p.1);
+                self.stab_run = if st.active() { Some(st) } else { None };
                 self.drag = Some(Drag::Stroke);
             }
             Tool::Fill => {
@@ -807,7 +839,8 @@ impl DrawApp {
             Tool::Wand => {
                 self.doc.commit_float();
                 self.doc.sel_mode = self.sel_mode();
-                self.doc.sel_magic(p.0 as i64, p.1 as i64, 32, !self.mods.ctrl);
+                let cont = self.wand_contiguous != self.mods.ctrl;
+                self.doc.sel_magic(p.0 as i64, p.1 as i64, self.wand_tol.round().clamp(0.0, 255.0) as u8, cont);
             }
             Tool::FreeSelect => {
                 self.doc.commit_float();
@@ -845,8 +878,14 @@ impl DrawApp {
         let shift = self.mods.shift;
         match self.drag.clone() {
             Some(Drag::Stroke) => {
-                let (px, py) = if self.tool == Tool::Pencil { (p.0.floor() + 0.5, p.1.floor() + 0.5) } else { p };
-                self.doc.stroke_to(px, py);
+                let mut pts = vec![p];
+                if let Some(st) = self.stab_run.as_mut() {
+                    pts = st.feed(p.0, p.1).into_iter().collect();
+                }
+                for q in pts {
+                    let (px, py) = if self.tool == Tool::Pencil { (q.0.floor() + 0.5, q.1.floor() + 0.5) } else { q };
+                    self.doc.stroke_to(px, py);
+                }
             }
             Some(Drag::Shape { tool, a, color, .. }) => {
                 let b = if shift { square(a, p, tool == Tool::Line) } else { p };
@@ -931,6 +970,12 @@ impl DrawApp {
         let Some(d) = self.drag.take() else { return };
         match d {
             Drag::Stroke => {
+                if let Some(mut st) = self.stab_run.take() {
+                    for q in st.finish() {
+                        let (px, py) = if self.tool == Tool::Pencil { (q.0.floor() + 0.5, q.1.floor() + 0.5) } else { q };
+                        self.doc.stroke_to(px, py);
+                    }
+                }
                 self.doc.stroke_end();
                 self.doc.label_last(match self.tool {
                     Tool::Pencil => "Pencil",
@@ -1314,6 +1359,35 @@ impl DrawApp {
                 )
             }
             "select-transparent" => self.transparent_sel = !self.transparent_sel,
+            "select-sample-all" => self.doc.sample_all = !self.doc.sample_all,
+            "stabilizer" => {
+                use crate::stabilizer::NAMES;
+                let v = self.stab[self.stab_slot()];
+                let who = match self.stab_slot() {
+                    1 => "the brushes",
+                    2 => "the eraser",
+                    _ => "the pencil",
+                };
+                self.dialog = Some(
+                    Dialog::new("stabilizer", &format!("Stabilizer for {who}"))
+                        .note("Each is 0 to 100. They steady a hand-drawn line before it reaches the picture.")
+                        .text("a", &format!("{} (trails behind the pointer)", NAMES[0]), &v[0].to_string())
+                        .text("b", &format!("{} (averages the last few points)", NAMES[1]), &v[1].to_string())
+                        .text("c", &format!("{} (ignores small shakes)", NAMES[2]), &v[2].to_string())
+                        .button("ok", "OK")
+                        .button("cancel", "Cancel"),
+                )
+            }
+            "wand-settings" => {
+                self.dialog = Some(
+                    Dialog::new("wand-settings", "Magic wand")
+                        .text("tol", "Tolerance (0 to 255)", &format!("{}", self.wand_tol.round() as i32))
+                        .check("cont", "One patch only (Ctrl while clicking does the opposite)", self.wand_contiguous)
+                        .check("all", "Sample all layers", self.doc.sample_all)
+                        .button("ok", "OK")
+                        .button("cancel", "Cancel"),
+                )
+            }
             "remove-bg" => {
                 self.doc.commit_float();
                 if self.doc.remove_background() {
@@ -1618,6 +1692,8 @@ impl DrawApp {
                     MenuItem::new("select-invert", "Invert selection"),
                     MenuItem::new("select-none", "Select none"),
                     MenuItem::new("select-transparent", "Transparent selection").check(self.transparent_sel),
+                    MenuItem::new("select-sample-all", "Sample all layers").check(self.doc.sample_all),
+                    MenuItem::new("wand-settings", "Magic wand..."),
                     MenuItem::new("delete", "Delete").key("Delete"),
                 ],
             ),
@@ -1627,6 +1703,7 @@ impl DrawApp {
                 [(doc::TOOL_BRUSH, "Brush"), (doc::TOOL_CALLIGRAPHY, "Calligraphy brush"), (doc::TOOL_CALLIGRAPHY2, "Calligraphy pen"), (doc::TOOL_AIRBRUSH, "Airbrush"), (doc::TOOL_MARKER, "Marker")]
                     .iter()
                     .map(|(k, n)| MenuItem::new(&format!("brush:{k}"), n).check(self.brush == *k))
+                    .chain([MenuItem::sep(), MenuItem::new("stabilizer", "Stabilizer...")])
                     .collect(),
             ),
             "adjust" => Menu::new(
@@ -1648,6 +1725,11 @@ impl DrawApp {
             "emb.new" => Menu::new("emb.new", rect, crate::emb::HOOPS.iter().enumerate().map(|(i, h)| MenuItem::new(&format!("emb.new:{i}"), h.0)).collect()),
             "emb.recolour" => Menu::new("emb.recolour", rect, vec![]).with_palette(PALETTE.iter().map(|&c| Color::hex(c)).collect(), 10),
             "emb.export" => Menu::new("emb.export", rect, crate::emb::FORMATS.iter().map(|(e, l)| MenuItem::new(&format!("emb.export:{e}"), l)).collect()),
+            "frame.loop" => Menu::new(
+                "frame.loop",
+                rect,
+                GIF_LOOPS.iter().map(|(v, n)| MenuItem::new(&format!("frame.loop:{v}"), n).check(self.doc.gif_loop == *v)).collect(),
+            ),
             "size" => Menu::new("size", rect, SIZES.iter().map(|s| MenuItem::new(&format!("size:{s}"), &format!("{s} px")).check((self.size - s).abs() < 0.01)).collect()),
             "color1" | "color2" => Menu::new(id, rect, vec![MenuItem::new(&format!("edit-color:{id}"), "More colours...")]).with_palette(PALETTE.iter().map(|&c| Color::hex(c)).collect(), 10),
             _ => return,
@@ -1705,6 +1787,13 @@ impl DrawApp {
             );
             return;
         }
+        if let Some(v) = id.strip_prefix("frame.loop:").and_then(|s| s.parse::<i32>().ok()) {
+            if self.doc.gif_loop != v {
+                self.doc.gif_loop = v;
+                self.saved_changes = u64::MAX;      // a setting of the file: it can be saved again
+            }
+            return;
+        }
         if let Some(k) = id.strip_prefix("brush:").and_then(|s| s.parse::<u8>().ok()) {
             self.brush = k;
             self.set_tool(Tool::Brush);
@@ -1732,6 +1821,16 @@ impl DrawApp {
                 };
                 self.doc.adjust(kind, a, b, c);
                 self.doc.label_last(label);
+            }
+            ("stabilizer", "ok") => {
+                let n = |id: &str| d.value(id).trim().parse::<f32>().unwrap_or(0.0).clamp(0.0, 100.0).round() as u8;
+                let slot = self.stab_slot();
+                self.stab[slot] = [n("a"), n("b"), n("c")];
+            }
+            ("wand-settings", "ok") => {
+                self.wand_tol = d.value("tol").trim().replace(',', ".").parse::<f32>().unwrap_or(self.wand_tol).clamp(0.0, 255.0);
+                self.wand_contiguous = d.checked("cont");
+                self.doc.sample_all = d.checked("all");
             }
             ("rotate.angle", "ok") => {
                 let deg = d.value("deg").trim().replace(',', ".").parse::<f32>().unwrap_or(0.0);

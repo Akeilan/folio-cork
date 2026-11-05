@@ -6,6 +6,7 @@ mod emb;
 mod icons;
 mod ribbon_defs;
 mod settings;
+mod stabilizer;
 mod uitest;
 
 use folio_kit::platform::{run, Image, WindowSpec};

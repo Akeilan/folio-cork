@@ -24,6 +24,7 @@ pub fn tabs() -> Vec<Tab> {
                         I::small("crop", "Crop", "crop").key("Ctrl+Shift+X").desc("Trim the picture to the selection."),
                         I::small("resize", "Resize", "resize").key("Ctrl+W"),
                         I::small("rotate", "Rotate", "rotate").menu(),
+                        I::small("remove-bg", "Remove background", "nobg").desc("Cut the subject out of its background, leaving it transparent. With a selection, only the selected part is cut out."),
                     ],
                 ),
                 Group::rows(
@@ -89,6 +90,7 @@ pub fn tabs() -> Vec<Tab> {
                         I::small("frame.prev", "Previous frame", "frame-prev").key(","),
                         I::small("frame.next", "Next frame", "frame-next").key("."),
                         I::small("frame.play", "Play", "frame-play"),
+                        I::small("frame.loop", "Plays", "frames").menu().desc("How many times a saved animated GIF or WebP plays."),
                     ],
                 ),
                 Group::new(
