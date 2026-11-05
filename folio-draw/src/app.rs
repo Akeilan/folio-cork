@@ -47,6 +47,7 @@ pub enum Tool {
     Magnifier,
     Polygon,
     Curve,
+    EmbSelect,
 }
 
 impl Tool {
@@ -67,6 +68,7 @@ impl Tool {
             Tool::Magnifier => "zoom",
             Tool::Polygon => "polygon",
             Tool::Curve => "curve",
+            Tool::EmbSelect => "emb",
         }
     }
     pub fn from_id(s: &str) -> Option<Tool> {
@@ -86,6 +88,7 @@ impl Tool {
             "zoom" => Tool::Magnifier,
             "polygon" => Tool::Polygon,
             "curve" => Tool::Curve,
+            "emb" => Tool::EmbSelect,
             _ => return None,
         })
     }
@@ -101,6 +104,7 @@ enum Drag {
     Pan { start: (f32, f32), scroll: (f32, f32) },
     PendMove { start: Pt, orig: Pending },
     PendResize { handle: usize, orig: Pending },
+    EmbMove { start: (f32, f32), last: (f32, f32) },
 }
 
 /// A shape just drawn that can still be moved and resized before it is kept.
@@ -183,6 +187,8 @@ pub struct DrawApp {
     pub stitch_view: bool,
     stitch_cache: Option<(u64, Vec<([u8; 3], Vec<(f32, f32)>)>)>,
     pub export_ext: String,
+    /// The selected embroidery object: (layer, object id).
+    pub emb_sel: Option<(usize, i64)>,
     pub text_size: usize,
     pub zoom: f32,
     pub scroll: (f32, f32),
@@ -246,6 +252,7 @@ impl DrawApp {
             stitch_view: false,
             stitch_cache: None,
             export_ext: "pes".into(),
+            emb_sel: None,
             text_size: 2,
             zoom: 1.0,
             scroll: (0.0, 0.0),
@@ -754,6 +761,15 @@ impl DrawApp {
                 self.zoom_step(if right { -1 } else { 1 }, Some((x, y)));
             }
             Tool::Polygon | Tool::Curve => {}
+            Tool::EmbSelect => {
+                if let Some(st) = crate::emb::settings(&self.doc) {
+                    let mm = crate::emb::px_to_mm(&st, p.0, p.1);
+                    self.emb_sel = crate::emb::object_at(&self.doc, mm.0, mm.1);
+                    if self.emb_sel.is_some() {
+                        self.drag = Some(Drag::EmbMove { start: mm, last: mm });
+                    }
+                }
+            }
             Tool::Text => {
                 self.doc.commit_float();
                 let (mut txt, mut bold, mut italic, mut at) = (String::new(), false, false, p);
@@ -875,6 +891,12 @@ impl DrawApp {
                 self.pending = Some(np);
                 self.redraw_pending();
             }
+            Some(Drag::EmbMove { start, .. }) => {
+                if let Some(st) = crate::emb::settings(&self.doc) {
+                    let mm = crate::emb::px_to_mm(&st, p.0, p.1);
+                    self.drag = Some(Drag::EmbMove { start, last: mm });
+                }
+            }
             Some(Drag::Pan { start, scroll }) => {
                 self.scroll = (scroll.0 - (x - start.0) / self.zoom, scroll.1 - (y - start.1) / self.zoom);
             }
@@ -917,6 +939,12 @@ impl DrawApp {
                 self.pending = Some(Pending { tool, a, b, color });
             }
             Drag::PendMove { .. } | Drag::PendResize { .. } => {}
+            Drag::EmbMove { start, last } => {
+                let (dx, dy) = (last.0 - start.0, last.1 - start.1);
+                if dx.abs() + dy.abs() > 0.05 {
+                    self.edit_emb_object("Move shapes", |o| crate::emb::move_object(o, dx, dy));
+                }
+            }
             Drag::Select { a, .. } => {
                 let b = self.to_doc(x, y);
                 let (x0, y0) = (a.0.min(b.0).max(0.0).floor(), a.1.min(b.1).max(0.0).floor());
@@ -1038,6 +1066,31 @@ impl DrawApp {
     fn frame_delay(&self) -> Duration {
         let d = self.doc.layers.get(self.doc.active).map(|l| l.delay_ms).unwrap_or(0);
         Duration::from_millis(if d == 0 { 100 } else { d.max(20) } as u64)
+    }
+
+    /// Change the selected embroidery object and store its layer again (one undo step).
+    fn edit_emb_object(&mut self, label: &str, f: impl FnOnce(&mut serde_json::Value)) {
+        let Some((li, id)) = self.emb_sel else { return };
+        let Some(mut spec) = crate::emb::layer_spec(&self.doc, li) else { return };
+        if let Some(objs) = spec["objects"].as_array_mut() {
+            if let Some(o) = objs.iter_mut().find(|o| o["id"].as_i64() == Some(id)) {
+                f(o);
+            }
+        }
+        spec["edited"] = serde_json::json!(true);
+        crate::emb::store_layer(&mut self.doc, li, &spec);
+        self.doc.label_last(label);
+    }
+
+    fn delete_emb_object(&mut self) {
+        let Some((li, id)) = self.emb_sel.take() else { return };
+        let Some(mut spec) = crate::emb::layer_spec(&self.doc, li) else { return };
+        if let Some(objs) = spec["objects"].as_array_mut() {
+            objs.retain(|o| o["id"].as_i64() != Some(id));
+        }
+        spec["edited"] = serde_json::json!(true);
+        crate::emb::store_layer(&mut self.doc, li, &spec);
+        self.doc.label_last("Delete shapes");
     }
 
     /// Keep the pending shape for good (one undo step).
@@ -1169,6 +1222,7 @@ impl DrawApp {
                     }
                 }
             }
+            "delete" if self.tool == Tool::EmbSelect && self.emb_sel.is_some() => self.delete_emb_object(),
             "delete" => {
                 if self.doc.float.is_some() {
                     self.doc.float_discard();
@@ -1546,6 +1600,7 @@ impl DrawApp {
             ),
             "paste" => Menu::new("paste", rect, vec![MenuItem::new("paste", "Paste").key("Ctrl+V"), MenuItem::new("paste-layer", "Paste as new layer"), MenuItem::new("paste-file", "Paste from file...")]),
             "emb.new" => Menu::new("emb.new", rect, crate::emb::HOOPS.iter().enumerate().map(|(i, h)| MenuItem::new(&format!("emb.new:{i}"), h.0)).collect()),
+            "emb.recolour" => Menu::new("emb.recolour", rect, vec![]).with_palette(PALETTE.iter().map(|&c| Color::hex(c)).collect(), 10),
             "emb.export" => Menu::new("emb.export", rect, crate::emb::FORMATS.iter().map(|(e, l)| MenuItem::new(&format!("emb.export:{e}"), l)).collect()),
             "size" => Menu::new("size", rect, SIZES.iter().map(|s| MenuItem::new(&format!("size:{s}"), &format!("{s} px")).check((self.size - s).abs() < 0.01)).collect()),
             "color1" | "color2" => Menu::new(id, rect, vec![MenuItem::new(&format!("edit-color:{id}"), "More colours...")]).with_palette(PALETTE.iter().map(|&c| Color::hex(c)).collect(), 10),
@@ -1566,6 +1621,21 @@ impl DrawApp {
     fn menu_pick(&mut self, menu: &str, id: &str) {
         if let Some(c) = id.strip_prefix("color:").and_then(Color::parse) {
             let v = [c.r, c.g, c.b, 255];
+            if menu == "emb.recolour" {
+                let rgb = [c.r, c.g, c.b];
+                self.edit_emb_object("Thread colour", |o| {
+                    if o["kind"] == "stitches" {
+                        if let Some(bs) = o["blocks"].as_array_mut() {
+                            for b in bs {
+                                b["thread"] = serde_json::json!({"rgb": rgb});
+                            }
+                        }
+                    } else {
+                        o["thread"] = serde_json::json!({"rgb": rgb});
+                    }
+                });
+                return;
+            }
             if menu == "color2" {
                 self.c2 = v;
             } else {
@@ -2069,6 +2139,7 @@ impl DrawApp {
             playing: self.playing.is_some(),
             emb: !self.doc.emb.is_empty(),
             stitch_view: self.stitch_view,
+            emb_sel: self.emb_sel.is_some(),
         }
     }
 
@@ -2235,6 +2306,22 @@ impl DrawApp {
         } else if let Some((x, y, w, h)) = self.doc.sel_bounds() {
             let p = to((x as f32, y as f32));
             ants(&mut cv, Rect::new(p.0, p.1, w as f32 * self.zoom, h as f32 * self.zoom));
+        }
+        if let (Some((li, id)), Some(st)) = (self.emb_sel, crate::emb::settings(&self.doc)) {
+            if let Some(o) = crate::emb::layer_spec(&self.doc, li).and_then(|sp| sp["objects"].as_array().and_then(|a| a.iter().find(|o| o["id"].as_i64() == Some(id)).cloned())) {
+                let (mut x0, mut y0, mut x1, mut y1) = crate::emb::object_bounds(&o);
+                if let Some(Drag::EmbMove { start, last }) = &self.drag {
+                    let (dx, dy) = (last.0 - start.0, last.1 - start.1);
+                    x0 += dx;
+                    x1 += dx;
+                    y0 += dy;
+                    y1 += dy;
+                }
+                let a = crate::emb::mm_to_px(&st, x0, y0);
+                let b = crate::emb::mm_to_px(&st, x1, y1);
+                let (p, q) = (to(a), to(b));
+                ants(&mut cv, Rect::new(p.0, p.1, q.0 - p.0, q.1 - p.1));
+            }
         }
         if self.stitch_view {
             let ch = self.doc.changes;
@@ -2439,6 +2526,7 @@ pub struct St {
     pub playing: bool,
     pub emb: bool,
     pub stitch_view: bool,
+    pub emb_sel: bool,
 }
 
 impl CommandState for St {
@@ -2447,7 +2535,8 @@ impl CommandState for St {
             "undo" => self.can_undo,
             "redo" => self.can_redo,
             "crop" => self.has_sel,
-            "emb.view" | "emb.info" | "emb.export" | "emb.place" | "emb.trace" => self.emb,
+            "emb.view" | "emb.info" | "emb.export" | "emb.place" | "emb.trace" | "tool.emb" => self.emb,
+            "emb.recolour" => self.emb_sel,
             _ => true,
         }
     }

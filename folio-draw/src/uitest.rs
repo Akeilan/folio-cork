@@ -627,6 +627,27 @@ impl UiTest {
             check(app.doc.history().0.last().map(|l| *l == "Convert to shapes").unwrap_or(false), "not one undo step")?;
             let p3 = crate::emb::make_plan(&app.doc).ok_or("no plan")?;
             check(p3.blocks.len() >= 4, &format!("{} colour blocks", p3.blocks.len()))?;
+            // select the blue shape, move it 10 mm down, recolour it, delete it
+            ribbon_click(app, h, r, "embroidery", "tool.emb")?;
+            check(app.tool == Tool::EmbSelect, "Select shapes not chosen")?;
+            let st = crate::emb::settings(&app.doc).ok_or("no settings")?;
+            let (bx, by) = crate::emb::mm_to_px(&st, -20.0, 0.0);
+            click_on(app, h, r, bx, by, Button::Left);
+            let (li, _) = app.emb_sel.ok_or("clicking the blue shape selected nothing")?;
+            check(app.doc.layers[li].name == "Ultramarine" || app.doc.layers[li].text.contains("rings"), "selected the wrong layer")?;
+            let (_, ty) = crate::emb::mm_to_px(&st, 0.0, 10.0);
+            drag_on(app, h, r, (bx, by), (bx, by + (ty - crate::emb::mm_to_px(&st, 0.0, 0.0).1)), Button::Left);
+            check(app.doc.history().0.last().map(|l| *l == "Move shapes").unwrap_or(false), "not moved")?;
+            let below = crate::emb::mm_to_px(&st, -20.0, 27.0);
+            let c = px(app, below.0 as usize, below.1 as usize);
+            check(c[2] > 120, &format!("the blue shape isn't 10 mm lower: {c:?}"))?;
+            app.menu_pick_for_test("emb.recolour", "color:#22B14C");
+            let c2 = px(app, below.0 as usize, below.1 as usize);
+            check(c2[1] > 150 && c2[2] < 120, &format!("not recoloured: {c2:?}"))?;
+            key(app, h, r, Key::Delete, Mods::NONE);
+            check(app.emb_sel.is_none() && px(app, below.0 as usize, below.1 as usize)[1] < 150, "Delete left the shape")?;
+            key(app, h, r, Key::Char('z'), ctrl());
+            check(px(app, below.0 as usize, below.1 as usize)[1] > 150, "undo didn't bring it back")?;
             let ora = d5.join("design.ora");
             check(app.save_to(&ora), "not saved")?;
             let back = DrawApp::load(&ora)?;

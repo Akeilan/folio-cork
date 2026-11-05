@@ -120,6 +120,13 @@ pub fn tabs() -> Vec<Tab> {
                     ],
                 ),
                 Group::new(
+                    "Shapes",
+                    vec![
+                        I::large("tool.emb", "Select shapes", "select").desc("Click a shape to select it; drag to move it; Delete takes it away."),
+                        I::large("emb.recolour", "Thread colour", "color").menu(),
+                    ],
+                ),
+                Group::new(
                     "Stitches",
                     vec![
                         I::large("emb.view", "Stitch view", "stitches").desc("Show every planned stitch over the picture."),
