@@ -7,8 +7,6 @@ pub mod app_colors {
     use crate::gfx::Color;
     pub const CHORD: Color = Color::hex(0xC2187A); // fuchsia
     pub const REEL: Color = Color::hex(0x1F3A6B); // navy blue
-    pub const GRAZE: Color = Color::hex(0x8BC34A); // lime green
-    pub const CALL: Color = Color::hex(0x8EC9F0); // baby blue
     pub const CORK: Color = Color::hex(0xF4E3A1); // pale yellow
 }
 
