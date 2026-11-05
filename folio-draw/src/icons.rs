@@ -37,6 +37,8 @@ const ICONS: &[(&str, &str)] = &[
     ("lettering", "<path d='M4 19l5.5-14h2L17 19M6.6 14h7.8'/><path d='M3 22h18' stroke-dasharray='2.5 2'/>"),
     ("envelope", "<path d='M3 9C7 4 17 4 21 9'/><rect x='5' y='12' width='14' height='7' rx='1'/>"),
     ("density", "<rect x='3' y='5' width='18' height='14' rx='1.5'/><path d='M6 16c2-5 4-8 6-8s4 3 6 8' /><path d='M9 19v-3M12 19v-6M15 19v-3'/>"),
+    ("print", "<path d='M7 9V4h10v5'/><rect x='4' y='9' width='16' height='7' rx='1'/><path d='M7 16v4h10v-4'/>"),
+    ("page", "<rect x='5' y='3' width='14' height='18' rx='1'/><path d='M8 7h8M8 11h8M8 15h5'/>"),
     ("search", "<circle cx='11' cy='11' r='6.5'/><path d='M20 20l-4.5-4.5'/>"),
     ("chevron-down", "<path d='M6 9l6 6 6-6' stroke-width='2'/>"),
     ("adjust", "<circle cx='12' cy='12' r='3'/><path d='M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1'/>"),

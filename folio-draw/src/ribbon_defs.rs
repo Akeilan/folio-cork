@@ -72,6 +72,8 @@ pub fn tabs() -> Vec<Tab> {
                         I::small("view.rulers", "Rulers", "rulers").key("Ctrl+R"),
                         I::small("view.grid", "Gridlines", "grid").key("Ctrl+G").desc("A line round every pixel, from 200% up."),
                         I::small("full-screen", "Full screen", "zoom-fit").key("F11").desc("The picture on the whole screen; Esc or F11 comes back."),
+                        I::small("print", "Print", "print").key("Ctrl+P").desc("Print the picture, laid out by Page setup."),
+                        I::small("page-setup", "Page setup", "page").desc("Paper, orientation, margins and how big the picture goes on the page."),
                     ],
                 ),
                 Group::new(

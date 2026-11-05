@@ -15,12 +15,13 @@ pub struct Settings {
     pub sample_all: bool,
     pub stab: [[u8; 3]; 3],
     pub quick: Vec<String>,
+    pub page: crate::page::Setup,
     pub recent: Vec<String>,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { size: 3.0, c1: [0, 0, 0, 255], c2: [255, 255, 255, 255], rulers: false, grid: false, layers: false, wand_tol: 32.0, wand_contiguous: true, sample_all: false, stab: [[0; 3]; 3], quick: vec!["save".into(), "undo".into(), "redo".into()], recent: vec![] }
+        Settings { size: 3.0, c1: [0, 0, 0, 255], c2: [255, 255, 255, 255], rulers: false, grid: false, layers: false, wand_tol: 32.0, wand_contiguous: true, sample_all: false, stab: [[0; 3]; 3], quick: vec!["save".into(), "undo".into(), "redo".into()], page: crate::page::Setup::default(), recent: vec![] }
     }
 }
 
@@ -62,6 +63,23 @@ impl Settings {
                 }
                 "recent" => s.recent.push(v.to_string()),
                 "quick" => s.quick = v.trim().split(',').filter(|x| !x.trim().is_empty()).map(|x| x.trim().to_string()).collect(),
+                // paper, landscape, top, right, bottom, left, centre across, centre down, fit, percent, sheets across, sheets down
+                "page" => {
+                    let f: Vec<f32> = v.trim().split(',').filter_map(|x| x.trim().parse().ok()).collect();
+                    if f.len() == 12 {
+                        s.page = crate::page::Setup {
+                            paper: (f[0] as usize).min(crate::page::PAPERS.len() - 1),
+                            landscape: f[1] != 0.0,
+                            margins: [f[2], f[3], f[4], f[5]],
+                            centre_h: f[6] != 0.0,
+                            centre_v: f[7] != 0.0,
+                            fit: f[8] != 0.0,
+                            percent: f[9],
+                            fit_w: f[10] as u32,
+                            fit_h: f[11] as u32,
+                        };
+                    }
+                }
                 _ => {}
             }
         }
@@ -88,6 +106,22 @@ impl Settings {
             }
         }
         out += &format!("quick={}\n", self.quick.join(","));
+        let p = &self.page;
+        out += &format!(
+            "page={},{},{},{},{},{},{},{},{},{},{},{}\n",
+            p.paper,
+            p.landscape as u8,
+            p.margins[0],
+            p.margins[1],
+            p.margins[2],
+            p.margins[3],
+            p.centre_h as u8,
+            p.centre_v as u8,
+            p.fit as u8,
+            p.percent,
+            p.fit_w,
+            p.fit_h
+        );
         for r in &self.recent {
             out += &format!("recent={r}\n");
         }
