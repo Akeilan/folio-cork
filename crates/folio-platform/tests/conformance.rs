@@ -72,8 +72,10 @@ fn identity_randomness_and_memory() {
     assert_ne!(a, b);
     assert_ne!(random_u64(), random_u64());
     if cfg!(target_os = "linux") {
-        assert!(memory_used().unwrap() > 1024 * 1024);
-        assert!(memory_peak().unwrap() >= memory_used().unwrap());
+        let used = memory_used().unwrap();
+        assert!(used > 1024 * 1024);
+        // the peak, read after, can't be below an earlier reading
+        assert!(memory_peak().unwrap() >= used);
     }
 }
 
