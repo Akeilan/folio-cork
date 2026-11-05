@@ -45,6 +45,8 @@ pub enum Tool {
     Wand,
     Text,
     Magnifier,
+    Polygon,
+    Curve,
 }
 
 impl Tool {
@@ -63,6 +65,8 @@ impl Tool {
             Tool::Wand => "wand",
             Tool::Text => "text",
             Tool::Magnifier => "zoom",
+            Tool::Polygon => "polygon",
+            Tool::Curve => "curve",
         }
     }
     pub fn from_id(s: &str) -> Option<Tool> {
@@ -80,6 +84,8 @@ impl Tool {
             "wand" => Tool::Wand,
             "text" => Tool::Text,
             "zoom" => Tool::Magnifier,
+            "polygon" => Tool::Polygon,
+            "curve" => Tool::Curve,
             _ => return None,
         })
     }
@@ -145,6 +151,8 @@ pub struct DrawApp {
     pub shape_fill: bool,
     pub brush: u8,
     text_at: Option<Pt>,
+    /// A polygon or curve being made over several clicks: its points and colour.
+    pub multi: Option<(Tool, Vec<Pt>, [u8; 4], u8)>,
     pub text_size: usize,
     pub zoom: f32,
     pub scroll: (f32, f32),
@@ -201,6 +209,7 @@ impl DrawApp {
             shape_fill: false,
             brush: doc::TOOL_BRUSH,
             text_at: None,
+            multi: None,
             text_size: 2,
             zoom: 1.0,
             scroll: (0.0, 0.0),
@@ -475,7 +484,7 @@ impl DrawApp {
                     self.command("layer.props", host);
                 }
             }
-            Event::MouseDown { x, y, button, .. } if self.canvas.contains(*x, *y) => self.press(*x, *y, *button),
+            Event::MouseDown { x, y, button, clicks } if self.canvas.contains(*x, *y) => self.press(*x, *y, *button, *clicks),
             Event::MouseMove { x, y } => {
                 self.motion(*x, *y);
                 host.set_cursor(self.cursor_at(*x, *y));
@@ -578,6 +587,10 @@ impl DrawApp {
                     self.scroll.1 += dy as f32 * 20.0 / self.zoom;
                 }
             }
+            Key::Escape if self.multi.is_some() => {
+                self.multi = None;
+                self.doc.op_cancel();
+            }
             Key::Escape => {
                 if self.drag.is_some() {
                     self.cancel_drag();
@@ -610,6 +623,9 @@ impl DrawApp {
     }
 
     pub fn set_tool(&mut self, t: Tool) {
+        if self.multi.take().is_some() {
+            self.doc.op_cancel();
+        }
         if t != Tool::Select {
             self.doc.commit_float();
         }
@@ -627,8 +643,14 @@ impl DrawApp {
         }
     }
 
-    fn press(&mut self, x: f32, y: f32, button: Button) {
+    fn press(&mut self, x: f32, y: f32, button: Button, clicks: u32) {
         let p = self.to_doc(x, y);
+        if self.multi.is_some() || matches!(self.tool, Tool::Polygon | Tool::Curve) {
+            if button != Button::Middle {
+                self.multi_press(p, x, y, button, clicks);
+                return;
+            }
+        }
         if button == Button::Middle {
             self.drag = Some(Drag::Pan { start: (x, y), scroll: self.scroll });
             return;
@@ -669,6 +691,7 @@ impl DrawApp {
             Tool::Magnifier => {
                 self.zoom_step(if right { -1 } else { 1 }, Some((x, y)));
             }
+            Tool::Polygon | Tool::Curve => {}
             Tool::Text => {
                 self.doc.commit_float();
                 self.text_at = Some(p);
@@ -716,6 +739,10 @@ impl DrawApp {
 
     fn motion(&mut self, x: f32, y: f32) {
         let p = self.to_doc(x, y);
+        if self.multi.is_some() && !matches!(self.drag, Some(Drag::Pan { .. })) {
+            self.multi_move(p);
+            return;
+        }
         let shift = self.mods.shift;
         match self.drag.clone() {
             Some(Drag::Stroke) => {
@@ -750,6 +777,21 @@ impl DrawApp {
     }
 
     fn release(&mut self, x: f32, y: f32) {
+        if let Some((Tool::Curve, pts, color, stage)) = self.multi.clone() {
+            // a curve: the line, then each bend, is set when the button comes up
+            let stage = stage + 1;
+            if stage >= 3 {
+                self.doc.op_restore();
+                self.draw_multi(Tool::Curve, &pts, color);
+                self.doc.op_end();
+                self.doc.label_last("Curve");
+                self.multi = None;
+            } else {
+                self.multi = Some((Tool::Curve, pts, color, stage));
+            }
+            let _ = (x, y);
+            return;
+        }
         let Some(d) = self.drag.take() else { return };
         match d {
             Drag::Stroke => {
@@ -801,6 +843,89 @@ impl DrawApp {
             }
             _ => {}
         }
+    }
+
+    fn multi_press(&mut self, p: Pt, x: f32, y: f32, button: Button, clicks: u32) {
+        let fg = if button == Button::Right { self.c2 } else { self.c1 };
+        match self.multi.take() {
+            None => {
+                self.doc.commit_float();
+                self.doc.op_begin();
+                let pts = if self.tool == Tool::Curve { vec![p, p, p, p] } else { vec![p, p] };
+                self.multi = Some((self.tool, pts, fg, 0));
+            }
+            Some((Tool::Polygon, mut pts, color, st)) => {
+                let first = self.to_screen(pts[0]);
+                let near = (first.0 - x).abs() < 6.0 && (first.1 - y).abs() < 6.0;
+                if clicks >= 2 || (near && pts.len() > 3) {
+                    // finished: closed and drawn for good
+                    pts.pop();
+                    if near && pts.len() > 3 {
+                        pts.pop();
+                    }
+                    self.doc.op_restore();
+                    if pts.len() >= 3 {
+                        self.draw_closed(&pts, color);
+                        self.doc.op_end();
+                        self.doc.label_last("Polygon");
+                    } else {
+                        self.doc.op_cancel();
+                    }
+                } else {
+                    *pts.last_mut().unwrap() = p;
+                    pts.push(p);
+                    self.multi = Some((Tool::Polygon, pts, color, st));
+                }
+            }
+            Some(m) => self.multi = Some(m),
+        }
+    }
+
+    fn multi_move(&mut self, p: Pt) {
+        let Some((tool, mut pts, color, stage)) = self.multi.take() else { return };
+        match tool {
+            Tool::Curve => {
+                match stage {
+                    0 => {
+                        // the line: end and both bends follow
+                        pts[3] = p;
+                        pts[1] = pts[0];
+                        pts[2] = p;
+                    }
+                    1 => {
+                        pts[1] = p;
+                        pts[2] = p;
+                    }
+                    _ => pts[2] = p,
+                }
+            }
+            _ => *pts.last_mut().unwrap() = p,
+        }
+        self.doc.op_restore();
+        self.draw_multi(tool, &pts, color);
+        self.multi = Some((tool, pts, color, stage));
+    }
+
+    fn draw_multi(&mut self, tool: Tool, pts: &[Pt], color: [u8; 4]) {
+        if tool == Tool::Curve {
+            let (a, b, c, d) = (pts[0], pts[1], pts[2], pts[3]);
+            let path: Vec<Pt> = (0..=64)
+                .map(|i| {
+                    let t = i as f32 / 64.0;
+                    let u = 1.0 - t;
+                    let (k0, k1, k2, k3) = (u * u * u, 3.0 * u * u * t, 3.0 * u * t * t, t * t * t);
+                    (k0 * a.0 + k1 * b.0 + k2 * c.0 + k3 * d.0, k0 * a.1 + k1 * b.1 + k2 * c.1 + k3 * d.1)
+                })
+                .collect();
+            self.doc.shape(&path, false, self.size, color, color, 1, true);
+        } else {
+            self.doc.shape(pts, false, self.size, color, color, 1, true);
+        }
+    }
+
+    fn draw_closed(&mut self, pts: &[Pt], color: [u8; 4]) {
+        let other = if color == self.c1 { self.c2 } else { self.c1 };
+        self.doc.shape(pts, true, self.size, color, other, if self.shape_fill { 3 } else { 1 }, true);
     }
 
     /// How a new selection combines with the one there: Shift adds, Alt takes away, both intersect.
