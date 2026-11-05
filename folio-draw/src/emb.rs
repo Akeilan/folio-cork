@@ -379,6 +379,48 @@ pub fn stitch_lines(doc: &Doc, p: &plan::Plan) -> Vec<([u8; 3], Vec<(f32, f32)>)
     out
 }
 
+/// How many commands the whole design takes (the stitch-out simulator counts in these).
+pub fn command_count(p: &plan::Plan) -> usize {
+    p.blocks.iter().map(|b| b.cmds.len()).sum()
+}
+
+/// The stitches up to the `upto`th command, and where the needle is, in picture pixels.
+pub fn stitch_lines_upto(doc: &Doc, p: &plan::Plan, upto: usize) -> (Vec<([u8; 3], Vec<(f32, f32)>)>, Option<(f32, f32)>) {
+    let Some(s) = settings(doc) else { return (vec![], None) };
+    let (ox, oy) = origin(&s);
+    let mut out = vec![];
+    let mut needle = None;
+    let mut n = 0usize;
+    for b in &p.blocks {
+        let rgb = b.thread.rgb;
+        let mut run: Vec<(f32, f32)> = vec![];
+        for &(x, y, c) in &b.cmds {
+            if n >= upto {
+                if run.len() > 1 {
+                    out.push((rgb, run));
+                }
+                return (out, needle);
+            }
+            n += 1;
+            let q = ((x - ox) * PX_PER_MM, (y - oy) * PX_PER_MM);
+            needle = Some(q);
+            if c == plan::ST {
+                run.push(q);
+            } else {
+                if run.len() > 1 {
+                    out.push((rgb, std::mem::take(&mut run)));
+                }
+                run.clear();
+                run.push(q);
+            }
+        }
+        if run.len() > 1 {
+            out.push((rgb, run));
+        }
+    }
+    (out, needle)
+}
+
 /// A thread's name for a layer: its name, or its colour.
 pub fn thread_label(t: &Value) -> String {
     if let Some(n) = t["name"].as_str().filter(|n| !n.is_empty()) {

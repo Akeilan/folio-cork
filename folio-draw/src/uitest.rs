@@ -683,6 +683,45 @@ impl UiTest {
             check(back.emb == app.doc.emb, &format!("the .ora lost the settings: {:?} vs {:?}", back.emb, app.doc.emb))?;
             check(crate::emb::layer_spec(&back, back.layers.len() - 1).is_some(), "the .ora lost the shapes")
         });
+        step!("the stitch-out simulator sews the design on screen", |app: &mut DrawApp, h: &mut dyn Host, r: &mut Res| {
+            app.saved_for_test();
+            app.command("emb.new:0", h);
+            ev(app, h, r, Event::MouseMove { x: 1.0, y: 1.0 });
+            let spec = serde_json::json!({"objects": [{"id": 1, "kind": "shape", "rings": [[[-15, -8], [15, -8], [15, 8], [-15, 8]]],
+                "thread": {"rgb": [30, 60, 200]}, "stitch": {"type": "fill"}}], "next_id": 2});
+            crate::emb::add_shape_layer(&mut app.doc, "Band", &spec);
+            let plan = crate::emb::make_plan(&app.doc).ok_or("no plan")?;
+            let total = crate::emb::command_count(&plan);
+            check(total > 200, &format!("only {total} commands"))?;
+            let (early, needle) = crate::emb::stitch_lines_upto(&app.doc, &plan, 40);
+            let (all, _) = crate::emb::stitch_lines_upto(&app.doc, &plan, total);
+            check(needle.is_some(), "no needle")?;
+            let pts = |v: &Vec<([u8; 3], Vec<(f32, f32)>)>| v.iter().map(|r| r.1.len()).sum::<usize>();
+            check(pts(&early) < pts(&all), &format!("40 commands drew {} of {} points", pts(&early), pts(&all)))?;
+            app.command("emb.stitchout", h);
+            check(app.stitch_out == Some(0) && app.stitch_view, "the simulator didn't start")?;
+            shot(app, r);
+            for _ in 0..3 {
+                app.now += std::time::Duration::from_millis(50);
+                ev(app, h, r, Event::Tick);
+            }
+            check(app.stitch_out.map(|n| n > 0).unwrap_or(false), &format!("it didn't move on: {:?}", app.stitch_out))?;
+            shot(app, r);
+            app.command("emb.stitchout", h);
+            check(app.stitch_out.is_none(), "it didn't stop")?;
+            // it runs to the end and stops by itself
+            app.command("emb.stitchout", h);
+            for _ in 0..400 {
+                if app.stitch_out.is_none() {
+                    break;
+                }
+                app.now += std::time::Duration::from_millis(50);
+                ev(app, h, r, Event::Tick);
+            }
+            check(app.stitch_out.is_none(), "it never reached the end")?;
+            app.stitch_view = false;
+            Ok(())
+        });
         step!("the density view colours the design by its thread layers", |app: &mut DrawApp, h: &mut dyn Host, r: &mut Res| {
             app.saved_for_test();
             app.command("emb.new:0", h);
