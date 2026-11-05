@@ -4,6 +4,7 @@
 mod app;
 mod emb;
 mod icons;
+mod letters;
 mod ribbon_defs;
 mod settings;
 mod stabilizer;
