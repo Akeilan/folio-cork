@@ -22,7 +22,9 @@ if [ -z "${INSTALLED_ONLY:-}" ]; then
   echo "== Pi 4B budgets, measured here (X3-12)"
   (cd $R && cargo build -q --release -p folio-cork && ./target/release/folio-cork --bench)
   echo "== window test (source, X)"
-  (cd $R && DISPLAY=:$XD WAYLAND_DISPLAY= cargo run -q -- --ui-test /tmp/cork-ui-src 2>&1 | grep -E "^FAIL|passed")
+  (cd $R && DISPLAY=:$XD WAYLAND_DISPLAY= cargo run -q --release -p folio-cork -- --ui-test /tmp/cork-ui-src 2>&1 | grep -E "^FAIL|passed")
+  echo "== Folio Draw on the portable base (D3-06, not shipped yet): window test on X and without a display"
+  (cd $R && cargo build -q --release -p folio-draw && rm -rf /tmp/draw-ui && DISPLAY=:$XD WAYLAND_DISPLAY= timeout 300 ./target/release/folio-draw --ui-test /tmp/draw-ui 2>&1 | grep -E "^FAIL|passed"; rm -rf /tmp/draw-hl; DISPLAY= WAYLAND_DISPLAY= timeout 300 ./target/release/folio-draw --ui-test /tmp/draw-hl --headless | grep -E "^FAIL|passed" | sed 's/^/no display: /')
 fi
 echo "== deb"
 sh $R/build-deb.sh /home/claude/out && ls -la /home/claude/out/folio-cork_${V}_amd64.deb
