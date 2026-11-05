@@ -215,6 +215,7 @@ pub struct DrawApp {
     density_cache: Option<(u64, usize, usize, Vec<u8>)>,
     /// The stitch-out simulator: how many commands have run, and when the next step is due.
     pub stitch_out: Option<usize>,
+    pub full_screen: bool,
     stitch_due: Option<Duration>,
     stitch_cache: Option<(u64, Vec<([u8; 3], Vec<(f32, f32)>)>)>,
     pub export_ext: String,
@@ -293,6 +294,7 @@ impl DrawApp {
             density_view: false,
             density_cache: None,
             stitch_out: None,
+            full_screen: false,
             stitch_due: None,
             stitch_cache: None,
             export_ext: "pes".into(),
@@ -705,6 +707,14 @@ impl DrawApp {
         let c = |ch: char| matches!(key, Key::Char(k) if k.eq_ignore_ascii_case(&ch));
         if m.alt && c('q') {
             self.title.focus_search();
+            return;
+        }
+        if matches!(key, Key::F(11)) {
+            self.command("full-screen", host);
+            return;
+        }
+        if matches!(key, Key::Escape) && self.full_screen {
+            self.command("full-screen", host);
             return;
         }
         if m.ctrl {
@@ -1659,6 +1669,11 @@ impl DrawApp {
                 self.menu = Some(Menu::new("quick", Rect::new(r.x + 40.0 * self.s, r.bottom(), 0.0, 0.0), items));
             }
             "search" => self.title.focus_search(),
+            "full-screen" => {
+                self.full_screen = !self.full_screen;
+                host.set_fullscreen(self.full_screen);
+                self.ribbon.collapsed = self.full_screen;
+            }
             "emb.stitchout" => {
                 if self.stitch_out.take().is_some() {
                     self.stitch_due = None;
@@ -2672,6 +2687,7 @@ impl DrawApp {
             stitch_view: self.stitch_view,
             density_view: self.density_view,
             stitch_out: self.stitch_out.is_some(),
+            full_screen: self.full_screen,
             emb_sel: self.emb_sel.is_some(),
         }
     }
@@ -3099,6 +3115,7 @@ pub struct St {
     pub stitch_view: bool,
     pub density_view: bool,
     pub stitch_out: bool,
+    pub full_screen: bool,
     pub emb_sel: bool,
 }
 
@@ -3124,6 +3141,7 @@ impl CommandState for St {
             "emb.view" => self.stitch_view,
             "emb.density" => self.density_view,
             "emb.stitchout" => self.stitch_out,
+            "full-screen" => self.full_screen,
             "frame.play" => self.playing,
             t => t.strip_prefix("tool.").map(|t| t == self.tool.id()).unwrap_or(false),
         }

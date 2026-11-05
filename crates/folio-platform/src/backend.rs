@@ -79,6 +79,12 @@ impl Host for WinHost {
     fn is_maximized(&self) -> bool {
         self.window.is_maximized()
     }
+    fn set_fullscreen(&mut self, on: bool) {
+        self.window.set_fullscreen(if on { Some(winit::window::Fullscreen::Borderless(None)) } else { None });
+    }
+    fn is_fullscreen(&self) -> bool {
+        self.window.fullscreen().is_some()
+    }
     fn close(&mut self) {
         self.want_close = true;
     }

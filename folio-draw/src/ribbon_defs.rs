@@ -71,6 +71,7 @@ pub fn tabs() -> Vec<Tab> {
                     vec![
                         I::small("view.rulers", "Rulers", "rulers").key("Ctrl+R"),
                         I::small("view.grid", "Gridlines", "grid").key("Ctrl+G").desc("A line round every pixel, from 200% up."),
+                        I::small("full-screen", "Full screen", "zoom-fit").key("F11").desc("The picture on the whole screen; Esc or F11 comes back."),
                     ],
                 ),
                 Group::new(
