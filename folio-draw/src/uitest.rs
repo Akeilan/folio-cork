@@ -941,6 +941,48 @@ impl UiTest {
             app.ribbon.collapsed = false;
             Ok(())
         });
+        step!("a transparent new picture, polygon selection, properties and the History pane", |app: &mut DrawApp, h: &mut dyn Host, r: &mut Res| {
+            app.saved_for_test();
+            app.command("new-transparent", h);
+            ev(app, h, r, Event::MouseMove { x: 1.0, y: 1.0 });
+            check(px(app, 20, 20)[3] == 0, &format!("a transparent picture isn't: {:?}", px(app, 20, 20)))?;
+            // polygon selection: click the corners, double-click to close
+            app.c1 = [0, 0, 0, 255];
+            app.set_tool(Tool::PolySelect);
+            for (x, y) in [(100.0, 100.0), (300.0, 100.0), (300.0, 260.0)] {
+                click_on(app, h, r, x, y, Button::Left);
+            }
+            check(app.multi.is_some(), "the polygon didn't start")?;
+            shot(app, r);
+            let q = sp(app, 100.0, 260.0);
+            ev(app, h, r, Event::MouseMove { x: q.0, y: q.1 });
+            ev(app, h, r, Event::MouseDown { x: q.0, y: q.1, button: Button::Left, clicks: 1 });
+            ev(app, h, r, Event::MouseUp { x: q.0, y: q.1, button: Button::Left });
+            ev(app, h, r, Event::MouseDown { x: q.0, y: q.1, button: Button::Left, clicks: 2 });
+            ev(app, h, r, Event::MouseUp { x: q.0, y: q.1, button: Button::Left });
+            let (x0, y0, w, hh) = app.doc.sel_bounds().ok_or("the polygon selected nothing")?;
+            check(x0 < 102 && y0 < 102 && w > 190 && hh > 150, &format!("bounds {x0},{y0} {w}x{hh}"))?;
+            check(app.multi.is_none(), "the polygon is still open")?;
+            app.command("select-none", h);
+            // properties
+            app.command("properties", h);
+            let d = app.dialog.as_ref().ok_or("Properties didn't open")?;
+            let note = d.value("");
+            check(note.contains("1152 x 648"), &format!("note: {note}"))?;
+            key(app, h, r, Key::Enter, Mods::NONE);
+            // the History pane
+            app.set_tool(Tool::Pencil);
+            drag_on(app, h, r, (40.0, 40.0), (200.0, 40.0), Button::Left);
+            check(!app.show_history, "the History pane started open")?;
+            app.command("pane.history", h);
+            check(app.show_history, "it didn't open")?;
+            let pm = shot(app, r);
+            check(app.side.w > 0.0, "the side panel has no width")?;
+            let p = pm.pixel((app.side.x + 30.0) as u32, (app.side.bottom() - 60.0) as u32).ok_or("no pixel")?;
+            check(p.alpha() == 255, "the pane isn't painted")?;
+            app.command("pane.history", h);
+            check(!app.show_history, "it didn't close")
+        });
         step!("a shape can be filled with no outline", |app: &mut DrawApp, h: &mut dyn Host, r: &mut Res| {
             app.saved_for_test();
             app.command("new", h);
