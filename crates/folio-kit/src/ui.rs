@@ -699,6 +699,17 @@ impl Dialog {
     pub fn checked(&self, id: &str) -> bool {
         self.value(id) == "true"
     }
+    /// Pick a choice field's option without clicking it (used by the window tests).
+    pub fn set_choice(&mut self, id: &str, sel: usize) {
+        for f in self.fields.iter_mut() {
+            if f.id == id {
+                if let FieldKind::Choice(o, i) = &mut f.kind {
+                    *i = sel.min(o.len().saturating_sub(1));
+                }
+            }
+        }
+    }
+
     pub fn choice_index(&self, id: &str) -> usize {
         for f in &self.fields {
             if f.id == id {

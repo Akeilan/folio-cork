@@ -683,6 +683,31 @@ impl UiTest {
             check(back.emb == app.doc.emb, &format!("the .ora lost the settings: {:?} vs {:?}", back.emb, app.doc.emb))?;
             check(crate::emb::layer_spec(&back, back.layers.len() - 1).is_some(), "the .ora lost the shapes")
         });
+        step!("changing the hoop is one undo step, the old hoop and all", |app: &mut DrawApp, h: &mut dyn Host, r: &mut Res| {
+            app.saved_for_test();
+            app.command("emb.new:0", h);
+            ev(app, h, r, Event::MouseMove { x: 1.0, y: 1.0 });
+            let spec = serde_json::json!({"objects": [{"id": 1, "kind": "shape", "rings": [[[-10, -10], [10, -10], [10, 10], [-10, 10]]],
+                "thread": {"rgb": [20, 90, 200]}}], "next_id": 2});
+            crate::emb::add_shape_layer(&mut app.doc, "Square", &spec);
+            let (w0, h0) = (app.doc.w, app.doc.h);
+            let hoop0 = crate::emb::settings(&app.doc).ok_or("no settings")?["hoop"].as_str().unwrap_or("").to_string();
+            app.command("emb.hoop", h);
+            shot(app, r);
+            check(app.dialog.is_some(), "the Hoop box didn't open")?;
+            let d = app.dialog.as_mut().unwrap();
+            d.set_choice("hoop", 2);
+            key(app, h, r, Key::Enter, Mods::NONE);
+            let st = crate::emb::settings(&app.doc).ok_or("settings gone")?;
+            check(st["hoop"].as_str() != Some(hoop0.as_str()), "the hoop didn't change")?;
+            check(app.doc.w != w0 || app.doc.h != h0, &format!("the canvas stayed {}x{}", app.doc.w, app.doc.h))?;
+            check(crate::emb::layer_spec(&app.doc, app.doc.layers.len() - 1).is_some(), "the shape layer lost its shapes")?;
+            key(app, h, r, Key::Char('z'), ctrl());
+            let st = crate::emb::settings(&app.doc).ok_or("settings gone after undo")?;
+            check(st["hoop"].as_str() == Some(hoop0.as_str()), &format!("undo left the hoop at {:?}", st["hoop"]))?;
+            check(app.doc.w == w0 && app.doc.h == h0, &format!("undo left the canvas at {}x{}", app.doc.w, app.doc.h))?;
+            check(crate::emb::layer_spec(&app.doc, app.doc.layers.len() - 1).is_some(), "undo lost the shapes")
+        });
         step!("how many times a saved animation plays", |app: &mut DrawApp, h: &mut dyn Host, r: &mut Res| {
             ribbon_click(app, h, r, "view", "frame.loop")?;
             let m = app.menu.as_ref().ok_or("the Plays menu didn't open")?;

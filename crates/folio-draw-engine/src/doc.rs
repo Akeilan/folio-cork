@@ -72,6 +72,8 @@ pub enum UndoKind {
     Props { layer_id: u32, name: String, opacity: f32, visible: bool, blend: u8, delay_ms: u32 },
     /// A text layer typed again (or turned into pixels): its pixels and description before.
     Text { layer_id: u32, text: String, px: Vec<u8> },
+    /// An embroidery document's settings (hoop, machine, trims) as they were before.
+    Emb { text: String },
     /// Several steps undone and redone as one (in the order they were made).
     Group(Vec<UndoKind>),
 }
@@ -872,6 +874,17 @@ impl Doc {
 
     /// Names the newest step if it has no name yet.
     /// How many undo steps there are now (a mark for `group_since`).
+    /// Change an embroidery document's settings as one undo step, so undoing a hoop change puts
+    /// the old hoop back as well as the old canvas.
+    pub fn set_emb(&mut self, text: &str) {
+        if self.emb == text {
+            return;
+        }
+        let old = self.emb.clone();
+        self.push_undo(UndoKind::Emb { text: old });
+        self.emb = text.to_string();
+    }
+
     pub fn undo_mark(&self) -> usize {
         self.undo.len()
     }
@@ -1014,6 +1027,7 @@ impl Doc {
                     UndoKind::Text { layer_id, text, px }
                 }
             }
+            UndoKind::Emb { text } => UndoKind::Emb { text: std::mem::replace(&mut self.emb, text) },
             UndoKind::Group(steps) => {
                 // undo the last made first; the reverse steps, replayed in turn, redo them
                 // (applying that reverse group again walks it backwards too, so the redo order is right)
@@ -2808,6 +2822,7 @@ fn step_bytes(k: &UndoKind) -> usize {
         UndoKind::Structure { pool, mods, .. } => pool.iter().map(|l| l.px.len()).sum::<usize>() + mods.iter().map(|m| m.1.len()).sum::<usize>(),
         UndoKind::Text { px, text, .. } => px.len() + text.len(),
         UndoKind::Props { name, .. } => name.len(),
+        UndoKind::Emb { text } => text.len(),
         UndoKind::Group(v) => v.iter().map(step_bytes).sum(),
     }
 }
