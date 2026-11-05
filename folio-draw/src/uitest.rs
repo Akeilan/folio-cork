@@ -154,6 +154,34 @@ impl UiTest {
             let col: Vec<u8> = (190..206).map(|y| px(app, 750, y)[0]).collect();
             check(edge, &format!("not a circle (no edge 50 px below the centre): {col:?}"))
         });
+        step!("polygon closes on a double-click, the curve bends twice", |app: &mut DrawApp, h: &mut dyn Host, r: &mut Res| {
+            ribbon_click(app, h, r, "home", "tool.polygon")?;
+            check(app.tool == Tool::Polygon, "polygon tool not chosen")?;
+            app.shape_fill = false;
+            app.c1 = [0, 0, 0, 255];
+            for (x, y) in [(900.0, 50.0), (1100.0, 50.0), (1000.0, 200.0)] {
+                let q = sp(app, x, y);
+                ev(app, h, r, Event::MouseMove { x: q.0, y: q.1 });
+                ev(app, h, r, Event::MouseDown { x: q.0, y: q.1, button: Button::Left, clicks: 1 });
+                ev(app, h, r, Event::MouseUp { x: q.0, y: q.1, button: Button::Left });
+            }
+            // the last corner was the first half of a double-click: the second press finishes it
+            let q = sp(app, 1000.0, 200.0);
+            ev(app, h, r, Event::MouseDown { x: q.0, y: q.1, button: Button::Left, clicks: 2 });
+            ev(app, h, r, Event::MouseUp { x: q.0, y: q.1, button: Button::Left });
+            check(app.multi.is_none(), "polygon still open")?;
+            check(px(app, 1000, 50)[0] < 60, "top edge missing")?;
+            check(px(app, 950, 125)[0] < 60 || px(app, 951, 125)[0] < 60 || px(app, 949, 126)[0] < 60, "closing edge missing")?;
+            check(app.doc.history().0.last().map(|l| *l == "Polygon").unwrap_or(false), "not one Polygon step")?;
+            ribbon_click(app, h, r, "home", "tool.curve")?;
+            drag_on(app, h, r, (900.0, 600.0), (1100.0, 600.0), Button::Left);
+            check(app.multi.is_some(), "curve finished after the line")?;
+            drag_on(app, h, r, (950.0, 500.0), (950.0, 520.0), Button::Left);
+            drag_on(app, h, r, (1050.0, 640.0), (1050.0, 640.0), Button::Left);
+            check(app.multi.is_none(), "curve not finished after two bends")?;
+            check(px(app, 1000, 600)[0] > 200, "the curve didn't bend away from the straight line")?;
+            check(app.doc.history().0.last().map(|l| *l == "Curve").unwrap_or(false), "not one Curve step")
+        });
         step!("colour picker takes a colour", |app: &mut DrawApp, h: &mut dyn Host, r: &mut Res| {
             key(app, h, r, Key::Char('i'), Mods::NONE);
             check(app.tool == Tool::Picker, "I didn't choose the picker")?;
