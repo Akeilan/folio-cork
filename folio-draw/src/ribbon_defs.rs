@@ -74,7 +74,13 @@ pub fn tabs() -> Vec<Tab> {
                         I::small("layer.flatten", "Flatten", "flatten"),
                     ],
                 ),
-                Group::new("Adjust", vec![I::large("invert", "Invert colours", "invert").key("Ctrl+Shift+I")]),
+                Group::new(
+                    "Adjust",
+                    vec![
+                        I::large("adjust", "Adjustments", "adjust").menu().desc("Brightness and contrast, hue and saturation, greyscale, sepia, blur and sharpen; on the selection when there is one."),
+                        I::large("invert", "Invert colours", "invert").key("Ctrl+Shift+I"),
+                    ],
+                ),
             ],
         ),
     ]

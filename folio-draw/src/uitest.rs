@@ -252,6 +252,36 @@ impl UiTest {
             check(app.dialog.is_none(), "dialog still open")?;
             check(app.doc.w == 400 && app.doc.h == 250, &format!("resized to {}x{}", app.doc.w, app.doc.h))
         });
+        step!("adjustments: greyscale, brightness, blur", |app: &mut DrawApp, h: &mut dyn Host, r: &mut Res| {
+            // the brush stroke from earlier is red
+            let red = |a: &DrawApp| (0..a.doc.w).flat_map(|x| (0..a.doc.h).map(move |y| (x, y))).find(|&(x, y)| { let p = px(a, x, y); p[0] > 200 && p[1] < 80 });
+            app.doc.sel_none();
+            let at = red(app);
+            ribbon_click(app, h, r, "view", "adjust")?;
+            check(app.menu.is_some(), "Adjustments menu didn't open")?;
+            app.menu = None;
+            app.command("adj.grey", h);
+            if let Some((x, y)) = at {
+                let p = px(app, x, y);
+                check(p[0] == p[1] && p[1] == p[2], &format!("not grey: {p:?}"))?;
+            }
+            key(app, h, r, Key::Char('z'), ctrl());
+            let p0 = px(app, 5, 5);
+            app.command("adj.bc", h);
+            shot(app, r);
+            ev(app, h, r, Event::Text("-50".into()));
+            key(app, h, r, Key::Enter, Mods::NONE);
+            let p1 = px(app, 5, 5);
+            check(p1[0] as i32 + p1[1] as i32 + p1[2] as i32 + 30 < p0[0] as i32 + p0[1] as i32 + p0[2] as i32, &format!("corner not darker: {p0:?} -> {p1:?}"))?;
+            key(app, h, r, Key::Char('z'), ctrl());
+            check(px(app, 5, 5) == p0, &format!("undo didn't restore: {:?}", px(app, 5, 5)))?;
+            app.command("adj.blur", h);
+            shot(app, r);
+            key(app, h, r, Key::Enter, Mods::NONE);
+            check(app.doc.history().0.last().map(|l| *l == "Blur").unwrap_or(false), "blur not applied")?;
+            app.ribbon.select_tab("home");
+            Ok(())
+        });
         step!("zoom from the View tab", |app: &mut DrawApp, h: &mut dyn Host, r: &mut Res| {
             ribbon_click(app, h, r, "view", "zoom.100")?;
             check((app.zoom - 1.0).abs() < 0.001, "100% isn't 1")?;

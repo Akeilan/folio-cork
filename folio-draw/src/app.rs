@@ -841,6 +841,24 @@ impl DrawApp {
                 self.doc.label_last("Invert colours");
             }
             "shape.fill" => self.shape_fill = !self.shape_fill,
+            "adj.grey" | "adj.sepia" => {
+                use folio_draw_engine::adjust;
+                self.doc.adjust(if id == "adj.grey" { adjust::GREY } else { adjust::SEPIA }, 0.0, 0.0, 0.0);
+                self.doc.label_last(if id == "adj.grey" { "Greyscale" } else { "Sepia" });
+            }
+            "adj.bc" => self.dialog = Some(Dialog::new("adj.bc", "Brightness and contrast").text("a", "Brightness (-100 to 100)", "0").text("b", "Contrast (-100 to 100)", "0").button("ok", "OK").button("cancel", "Cancel")),
+            "adj.hue" => {
+                self.dialog = Some(
+                    Dialog::new("adj.hue", "Hue and saturation")
+                        .text("a", "Hue (-180 to 180 degrees)", "0")
+                        .text("b", "Saturation (-100 to 100)", "0")
+                        .text("c", "Lightness (-100 to 100)", "0")
+                        .button("ok", "OK")
+                        .button("cancel", "Cancel"),
+                )
+            }
+            "adj.blur" => self.dialog = Some(Dialog::new("adj.blur", "Blur").text("a", "Radius (pixels, 1 to 50)", "2").button("ok", "OK").button("cancel", "Cancel")),
+            "adj.sharpen" => self.dialog = Some(Dialog::new("adj.sharpen", "Sharpen").text("a", "Amount (1 to 500)", "100").button("ok", "OK").button("cancel", "Cancel")),
             "select-invert" => {
                 self.doc.commit_float();
                 self.doc.sel_invert();
@@ -973,6 +991,19 @@ impl DrawApp {
                     .map(|(k, n)| MenuItem::new(&format!("brush:{k}"), n).check(self.brush == *k))
                     .collect(),
             ),
+            "adjust" => Menu::new(
+                "adjust",
+                rect,
+                vec![
+                    MenuItem::new("adj.bc", "Brightness and contrast..."),
+                    MenuItem::new("adj.hue", "Hue and saturation..."),
+                    MenuItem::new("adj.grey", "Greyscale"),
+                    MenuItem::new("adj.sepia", "Sepia"),
+                    MenuItem::sep(),
+                    MenuItem::new("adj.blur", "Blur..."),
+                    MenuItem::new("adj.sharpen", "Sharpen..."),
+                ],
+            ),
             "size" => Menu::new("size", rect, SIZES.iter().map(|s| MenuItem::new(&format!("size:{s}"), &format!("{s} px")).check((self.size - s).abs() < 0.01)).collect()),
             "color1" | "color2" => Menu::new(id, rect, vec![]).with_palette(PALETTE.iter().map(|&c| Color::hex(c)).collect(), 10),
             _ => return,
@@ -1005,6 +1036,18 @@ impl DrawApp {
 
     fn dialog_done(&mut self, d: Dialog, button: &str, host: &mut dyn Host, r: &mut Res) {
         match (d.id.as_str(), button) {
+            ("adj.bc" | "adj.hue" | "adj.blur" | "adj.sharpen", "ok") => {
+                use folio_draw_engine::adjust;
+                let num = |id: &str, lo: f32, hi: f32| d.value(id).trim().replace(',', ".").parse::<f32>().unwrap_or(0.0).clamp(lo, hi);
+                let (kind, a, b, c, label) = match d.id.as_str() {
+                    "adj.bc" => (adjust::BRIGHT_CONTRAST, num("a", -100.0, 100.0), num("b", -100.0, 100.0), 0.0, "Brightness and contrast"),
+                    "adj.hue" => (adjust::HUE_SAT, num("a", -180.0, 180.0), num("b", -100.0, 100.0), num("c", -100.0, 100.0), "Hue and saturation"),
+                    "adj.blur" => (adjust::BLUR, num("a", 1.0, 50.0), 0.0, 0.0, "Blur"),
+                    _ => (adjust::SHARPEN, num("a", 1.0, 500.0), 0.0, 0.0, "Sharpen"),
+                };
+                self.doc.adjust(kind, a, b, c);
+                self.doc.label_last(label);
+            }
             ("text", "ok") => {
                 let t = d.value("text");
                 self.text_size = d.choice_index("size");
