@@ -113,6 +113,13 @@ pub fn tabs() -> Vec<Tab> {
                     ],
                 ),
                 Group::new(
+                    "Picture",
+                    vec![
+                        I::large("emb.place", "Place picture", "place").desc("Put a picture in the hoop, fitted, on its own layer."),
+                        I::large("emb.trace", "Convert to shapes", "trace").desc("Turn the picture into shapes, one layer per thread colour."),
+                    ],
+                ),
+                Group::new(
                     "Stitches",
                     vec![
                         I::large("emb.view", "Stitch view", "stitches").desc("Show every planned stitch over the picture."),

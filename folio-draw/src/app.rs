@@ -125,6 +125,7 @@ pub enum BackPage {
     PasteFrom,
     ExportStitches,
     ImportStitches,
+    PlacePicture,
 }
 
 pub struct Back {
@@ -1349,6 +1350,17 @@ impl DrawApp {
                 }
             }
             "emb.import" => self.open_back(BackPage::ImportStitches),
+            "emb.place" => {
+                if crate::emb::settings(&self.doc).is_none() {
+                    self.flash("Start an embroidery design first (New embroidery).");
+                } else {
+                    self.open_back(BackPage::PlacePicture);
+                }
+            }
+            "emb.trace" => match crate::emb::convert_layer(&mut self.doc) {
+                Ok((n, c)) => self.flash(&format!("{n} shapes in {c} colours, one layer per colour.")),
+                Err(e) => self.flash(&e),
+            },
             id if id.starts_with("emb.new:") => {
                 let hoop = id[8..].parse::<usize>().unwrap_or(0);
                 self.request(After::NewEmb(hoop));
@@ -1834,7 +1846,7 @@ impl DrawApp {
     pub fn open_back(&mut self, page: BackPage) {
         let dir = self.path.as_ref().and_then(|p| p.parent()).map(|p| p.to_path_buf()).unwrap_or_else(folio_kit::platform::home_dir);
         let files = match page {
-            BackPage::Open | BackPage::PasteFrom => FilePane::new(&dir, &["png", "jpg", "jpeg", "bmp", "gif", "webp", "tif", "tiff", "ico", "ora", "psd"], false, ""),
+            BackPage::Open | BackPage::PasteFrom | BackPage::PlacePicture => FilePane::new(&dir, &["png", "jpg", "jpeg", "bmp", "gif", "webp", "tif", "tiff", "ico", "ora", "psd"], false, ""),
             BackPage::ImportStitches => FilePane::new(&dir, &["pes", "dst", "jef", "exp", "vp3", "xxx", "pec"], false, ""),
             BackPage::ExportStitches => {
                 let stem = self.path.as_ref().and_then(|p| p.file_stem()).map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "Design".into());
@@ -1912,6 +1924,17 @@ impl DrawApp {
                 }
                 BackPage::ExportStitches => match self.export_stitches(&p) {
                     Ok(()) => {
+                        self.layout();
+                        return;
+                    }
+                    Err(e) => b.files.error = e,
+                },
+                BackPage::PlacePicture => match std::fs::read(&p).map_err(|e| e.to_string()).and_then(|b| files::decode(&b)) {
+                    Ok((w, h, px)) => {
+                        let name = p.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "Picture".into());
+                        crate::emb::place_picture(&mut self.doc, w, h, px, &name);
+                        self.doc.label_last("Place picture");
+                        self.flash("Picture placed. Convert to shapes turns it into stitches.");
                         self.layout();
                         return;
                     }
@@ -2334,6 +2357,7 @@ impl DrawApp {
         let heading = match b.page {
             BackPage::ExportStitches => "Export stitches",
             BackPage::ImportStitches => "Import stitches",
+            BackPage::PlacePicture => "Place picture",
             BackPage::Open => "Open",
             BackPage::PasteFrom => "Paste from",
             BackPage::SaveAs => "Save As",
@@ -2423,7 +2447,7 @@ impl CommandState for St {
             "undo" => self.can_undo,
             "redo" => self.can_redo,
             "crop" => self.has_sel,
-            "emb.view" | "emb.info" | "emb.export" => self.emb,
+            "emb.view" | "emb.info" | "emb.export" | "emb.place" | "emb.trace" => self.emb,
             _ => true,
         }
     }

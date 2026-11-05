@@ -9,6 +9,7 @@ use folio_kit::math::Det;
 use serde_json::{json, Value};
 
 pub const SHAPES_KIND: &str = "emb-shapes";
+pub const PICTURE_KIND: &str = "emb-picture";
 pub const PX_PER_MM: f32 = 10.0;
 
 /// Hoops: name, width and height in mm. The Skitch PP1 takes the 4" × 4" one.
@@ -312,4 +313,87 @@ pub fn stitch_lines(doc: &Doc, p: &plan::Plan) -> Vec<([u8; 3], Vec<(f32, f32)>)
         }
     }
     out
+}
+
+/// A thread's name for a layer: its name, or its colour.
+pub fn thread_label(t: &Value) -> String {
+    if let Some(n) = t["name"].as_str().filter(|n| !n.is_empty()) {
+        return n.to_string();
+    }
+    let c = &t["rgb"];
+    format!("#{:02X}{:02X}{:02X}", c[0].as_u64().unwrap_or(0), c[1].as_u64().unwrap_or(0), c[2].as_u64().unwrap_or(0))
+}
+
+/// Put a picture on a new layer, fitted to the hoop, ready to convert (the GTK version's
+/// Place picture). Returns the layer.
+pub fn place_picture(doc: &mut Doc, w: usize, h: usize, rgba: Vec<u8>, name: &str) -> Option<usize> {
+    use folio_draw_engine::emb::{convert, raster::Img};
+    let s = settings(doc)?;
+    let (cw, ch) = canvas_px(&s);
+    let pl = convert::place(&Img { w, h, px: rgba }, cw, ch, PX_PER_MM, 2.5, false);
+    doc.layer_add(name);
+    doc.float_from_rgba(cw, ch, pl.img.px, 0, 0);
+    doc.commit_float();
+    let mut spec = json!({"kind": PICTURE_KIND, "upscale": pl.upscale, "source": name, "fitted": false});
+    if let Some(b) = pl.bg {
+        spec["bg"] = json!(b);
+    }
+    let i = doc.active;
+    doc.text_layer_set(i, &spec.to_string(), None);
+    Some(i)
+}
+
+/// The active layer's picture as shapes, one new layer per thread colour above it, the biggest
+/// colour at the bottom (sewn first). Returns how many shapes and colours came out.
+pub fn convert_layer(doc: &mut Doc) -> Result<(usize, usize), String> {
+    use folio_draw_engine::emb::{convert, raster::Img};
+    let s = settings(doc).ok_or("This picture isn't an embroidery design.")?;
+    let mut li = doc.active;
+    if layer_spec(doc, li).is_some() {
+        // from a shape layer: the picture beneath it
+        li = (0..li).rev().find(|&i| layer_spec(doc, i).is_none()).ok_or("Select the layer with the picture first.")?;
+        doc.set_active(li);
+    }
+    let pspec: Value = serde_json::from_str(&doc.layers[li].text).unwrap_or(json!({}));
+    let (cw, ch) = canvas_px(&s);
+    let rgba = doc.layers[li].px.clone();
+    if !rgba.chunks_exact(4).any(|p| p[3] > 0) {
+        return Err("There is nothing on this layer to convert.".into());
+    }
+    let (ox, oy) = origin(&s);
+    let mut tp = json!({"colours": 0, "background": "remove", "smoothing": 1, "min_area": 1.5, "edge_radius": 2,
+        "upscale": pspec["upscale"].as_f64().unwrap_or(1.0), "threads": s["threads"].as_str().unwrap_or("brother")});
+    if !pspec["bg"].is_null() {
+        tp["bg"] = pspec["bg"].clone();
+    }
+    let pj = ej::parse(&tp.to_string())?;
+    let c = convert::convert(&Img { w: cw, h: ch, px: rgba }, PX_PER_MM, ox, oy, &convert::Params::from_json(&pj));
+    let shapes: Vec<Value> = c.shapes.iter().filter_map(|j| serde_json::from_str(&j.dump()).ok()).collect();
+    if shapes.is_empty() {
+        return Err("No shapes came out: the picture may be all background.".into());
+    }
+    let src = doc.layers[li].id;
+    let group = format!("pic{src}");
+    let mut by: Vec<(String, Vec<Value>)> = vec![];
+    for sh in shapes {
+        let key = sh["thread"].to_string();
+        match by.iter_mut().find(|(k, _)| *k == key) {
+            Some((_, v)) => v.push(sh),
+            None => by.push((key, vec![sh])),
+        }
+    }
+    let area = |v: &Vec<Value>| -> f64 { v.iter().map(|x| x["area"].as_f64().unwrap_or(0.0)).sum() };
+    by.sort_by(|a, b| area(&b.1).partial_cmp(&area(&a.1)).unwrap_or(std::cmp::Ordering::Equal));
+    let n: usize = by.iter().map(|(_, v)| v.len()).sum();
+    let colours = by.len();
+    doc.set_active(li);
+    let mark = doc.undo_mark();
+    for (_, list) in &by {
+        let objects: Vec<Value> = list.iter().enumerate().map(|(k, sh)| json!({"id": k + 1, "rings": sh["rings"], "thread": sh["thread"], "group": group})).collect();
+        let spec = json!({"kind": SHAPES_KIND, "source": src, "objects": objects, "next_id": list.len() + 1, "edited": false});
+        let label = thread_label(&list[0]["thread"]);
+        add_shape_layer(doc, &label, &spec);
+    }
+    doc.group_since(mark, "Convert to shapes");
+    Ok((n, colours))
 }

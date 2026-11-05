@@ -608,6 +608,25 @@ impl UiTest {
             check(app.doc.layers.len() == n + 1, "import made no layer")?;
             let p2 = crate::emb::make_plan(&app.doc).ok_or("no plan after import")?;
             check(p2.stitch_count() + 4 >= 2 * plan.stitch_count(), &format!("{} stitches after importing a copy", p2.stitch_count()))?;
+            // a two-colour picture placed in the hoop and converted to shapes
+            let (pw, ph) = (200usize, 100usize);
+            let mut pic = vec![0u8; pw * ph * 4];
+            for y in 0..ph {
+                for x in 0..pw {
+                    let o = (y * pw + x) * 4;
+                    let c: [u8; 4] = if x < 100 { [20, 60, 200, 255] } else { [250, 200, 20, 255] };
+                    pic[o..o + 4].copy_from_slice(&c);
+                }
+            }
+            let before = app.doc.layers.len();
+            crate::emb::place_picture(&mut app.doc, pw, ph, pic, "Flag").ok_or("not placed")?;
+            check(app.doc.layers.len() == before + 1, "no picture layer")?;
+            app.command("emb.trace", h);
+            let made = app.doc.layers.len() - before - 1;
+            check(made == 2, &format!("{made} colour layers from a two-colour picture"))?;
+            check(app.doc.history().0.last().map(|l| *l == "Convert to shapes").unwrap_or(false), "not one undo step")?;
+            let p3 = crate::emb::make_plan(&app.doc).ok_or("no plan")?;
+            check(p3.blocks.len() >= 4, &format!("{} colour blocks", p3.blocks.len()))?;
             let ora = d5.join("design.ora");
             check(app.save_to(&ora), "not saved")?;
             let back = DrawApp::load(&ora)?;

@@ -50,6 +50,8 @@ const ICONS: &[(&str, &str)] = &[
     ("trash", "<path d='M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13'/>"),
     ("frame-up", "<path d='M6 15l6-6 6 6'/>"),
     ("frame-down", "<path d='M6 9l6 6 6-6'/>"),
+    ("place", "<rect x='4' y='5' width='16' height='14' rx='1'/><path d='M4 16l5-5 4 4 3-3 4 4'/><circle cx='15' cy='9' r='1.5'/>"),
+    ("trace", "<path d='M5 18c2-8 4-12 7-12s5 4 7 12'/><path d='M5 18h14' stroke-dasharray='2 1.5'/>"),
     ("invert", "<circle cx='12' cy='12' r='8'/><path d='M12 4a8 8 0 0 1 0 16z' fill='currentColor'/>"),
 ];
 
