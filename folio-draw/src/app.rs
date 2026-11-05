@@ -27,6 +27,7 @@ pub const PALETTE: [u32; 20] = [
     0x7092BE, 0xC8BFE7,
 ];
 pub const SIZES: [f32; 6] = [1.0, 3.0, 5.0, 8.0, 12.0, 20.0];
+pub const BLENDS: [&str; 8] = ["Normal", "Multiply", "Screen", "Overlay", "Darken", "Lighten", "Difference", "Add"];
 pub const TEXT_SIZES: [u32; 8] = [12, 18, 24, 36, 48, 72, 96, 144];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -43,6 +44,7 @@ pub enum Tool {
     FreeSelect,
     Wand,
     Text,
+    Magnifier,
 }
 
 impl Tool {
@@ -60,6 +62,7 @@ impl Tool {
             Tool::FreeSelect => "freeselect",
             Tool::Wand => "wand",
             Tool::Text => "text",
+            Tool::Magnifier => "zoom",
         }
     }
     pub fn from_id(s: &str) -> Option<Tool> {
@@ -76,6 +79,7 @@ impl Tool {
             "freeselect" => Tool::FreeSelect,
             "wand" => Tool::Wand,
             "text" => Tool::Text,
+            "zoom" => Tool::Magnifier,
             _ => return None,
         })
     }
@@ -95,6 +99,7 @@ enum Drag {
 pub enum BackPage {
     Open,
     SaveAs,
+    PasteFrom,
 }
 
 pub struct Back {
@@ -464,7 +469,12 @@ impl DrawApp {
         }
         match ev {
             Event::Key { key, mods, down: true, .. } => self.key(key, *mods, host),
-            Event::MouseDown { x, y, button, .. } if self.side.contains(*x, *y) => self.side_click(*x, *y, *button),
+            Event::MouseDown { x, y, button, clicks } if self.side.contains(*x, *y) => {
+                self.side_click(*x, *y, *button);
+                if *clicks >= 2 && self.side_hits.iter().any(|(id, r)| id.starts_with("row:") && r.contains(*x, *y)) {
+                    self.command("layer.props", host);
+                }
+            }
             Event::MouseDown { x, y, button, .. } if self.canvas.contains(*x, *y) => self.press(*x, *y, *button),
             Event::MouseMove { x, y } => {
                 self.motion(*x, *y);
@@ -492,6 +502,7 @@ impl DrawApp {
         match self.tool {
             Tool::Select | Tool::FreeSelect | Tool::Wand if self.in_selection(self.to_doc(x, y)) => Cursor::Move,
             Tool::Text => Cursor::Text,
+            Tool::Magnifier => Cursor::Pointer,
             _ => Cursor::Crosshair,
         }
     }
@@ -587,6 +598,7 @@ impl DrawApp {
                     'o' => Some(Tool::Ellipse),
                     's' => Some(Tool::Select),
                     't' => Some(Tool::Text),
+                    'm' => Some(Tool::Magnifier),
                     _ => None,
                 };
                 if let Some(t) = t {
@@ -654,6 +666,9 @@ impl DrawApp {
                 self.doc.op_begin();
                 self.drag = Some(Drag::Shape { tool: self.tool, a: p, color: fg });
             }
+            Tool::Magnifier => {
+                self.zoom_step(if right { -1 } else { 1 }, Some((x, y)));
+            }
             Tool::Text => {
                 self.doc.commit_float();
                 self.text_at = Some(p);
@@ -679,7 +694,8 @@ impl DrawApp {
             Tool::Select => {
                 if self.in_selection(p) && !self.mods.shift && !self.mods.alt {
                     if self.doc.float.is_none() {
-                        self.doc.float_lift(true);
+                        // Ctrl leaves the original where it was
+                        self.doc.float_lift(!self.mods.ctrl);
                         if self.transparent_sel {
                             self.doc.float_color_key(self.c2, 0);
                         }
@@ -985,6 +1001,32 @@ impl DrawApp {
             "layer.merge" => {
                 self.doc.layer_merge_down();
             }
+            "layer.props" => {
+                let a = self.doc.active;
+                if let Some(l) = self.doc.layers.get(a) {
+                    self.dialog = Some(
+                        Dialog::new("layer.props", "Layer properties")
+                            .text("name", "Name", &l.name)
+                            .text("opacity", "Opacity (0 to 100 %)", &format!("{}", (l.opacity * 100.0).round()))
+                            .choice("blend", "Blend mode", &BLENDS, l.blend as usize)
+                            .check("visible", "Visible", l.visible)
+                            .button("ok", "OK")
+                            .button("cancel", "Cancel"),
+                    );
+                }
+            }
+            "paste-layer" => {
+                if let Some(img) = host.clipboard_image() {
+                    self.doc.commit_float();
+                    let n = self.doc.layers.len() + 1;
+                    self.doc.layer_add(&format!("Layer {n}"));
+                    self.paste_rgba(img.w as usize, img.h as usize, img.rgba);
+                    self.doc.commit_float();
+                    let m = self.doc.undo_mark().saturating_sub(2);
+                    self.doc.group_since(m, "Paste as new layer");
+                    self.show_layers = true;
+                }
+            }
             "layer.flatten" => {
                 self.doc.flatten();
             }
@@ -1004,6 +1046,7 @@ impl DrawApp {
                 self.save();
             }
             "save-as" => self.open_back(BackPage::SaveAs),
+            "paste-file" => self.open_back(BackPage::PasteFrom),
             "close" => self.request(After::Close),
             _ => {}
         }
@@ -1105,6 +1148,7 @@ impl DrawApp {
                     MenuItem::new("remove-bg", "Remove background"),
                 ],
             ),
+            "paste" => Menu::new("paste", rect, vec![MenuItem::new("paste", "Paste").key("Ctrl+V"), MenuItem::new("paste-layer", "Paste as new layer"), MenuItem::new("paste-file", "Paste from file...")]),
             "size" => Menu::new("size", rect, SIZES.iter().map(|s| MenuItem::new(&format!("size:{s}"), &format!("{s} px")).check((self.size - s).abs() < 0.01)).collect()),
             "color1" | "color2" => Menu::new(id, rect, vec![MenuItem::new(&format!("edit-color:{id}"), "More colours...")]).with_palette(PALETTE.iter().map(|&c| Color::hex(c)).collect(), 10),
             _ => return,
@@ -1214,6 +1258,15 @@ impl DrawApp {
                 } else {
                     self.flash("Type a colour as #RRGGBB.");
                 }
+            }
+            ("layer.props", "ok") => {
+                let a = self.doc.active;
+                let op = d.value("opacity").trim().replace(',', ".").parse::<f32>().unwrap_or(100.0).clamp(0.0, 100.0) / 100.0;
+                let delay = self.doc.layers.get(a).map(|l| l.delay_ms).unwrap_or(0);
+                let name = d.value("name");
+                let name = if name.trim().is_empty() { None } else { Some(name) };
+                self.doc.layer_set_props(a, name, op, d.checked("visible"), d.choice_index("blend") as u8, delay, true);
+                self.doc.label_last("Layer properties");
             }
             ("text", "ok") => {
                 let t = d.value("text");
@@ -1340,7 +1393,7 @@ impl DrawApp {
     pub fn open_back(&mut self, page: BackPage) {
         let dir = self.path.as_ref().and_then(|p| p.parent()).map(|p| p.to_path_buf()).unwrap_or_else(folio_kit::platform::home_dir);
         let files = match page {
-            BackPage::Open => FilePane::new(&dir, &["png", "jpg", "jpeg", "bmp", "gif", "webp", "tif", "tiff", "ico", "ora", "psd"], false, ""),
+            BackPage::Open | BackPage::PasteFrom => FilePane::new(&dir, &["png", "jpg", "jpeg", "bmp", "gif", "webp", "tif", "tiff", "ico", "ora", "psd"], false, ""),
             BackPage::SaveAs => {
                 let stem = self.path.as_ref().and_then(|p| p.file_stem()).map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "Untitled".into());
                 FilePane::new(&dir, &["png", "jpg", "bmp", "gif", "webp", "tiff", "ico", "ora", "psd"], true, &format!("{stem}.png"))
@@ -1409,6 +1462,16 @@ impl DrawApp {
                     self.layout();
                     self.request(After::Open(p));
                     return;
+                }
+                BackPage::PasteFrom => {
+                    match std::fs::read(&p).map_err(|e| e.to_string()).and_then(|b| files::decode(&b)) {
+                        Ok((w, h, px)) => {
+                            self.layout();
+                            self.paste_rgba(w, h, px);
+                            return;
+                        }
+                        Err(e) => b.files.error = e,
+                    }
                 }
                 BackPage::SaveAs => {
                     if self.save_to(&p) {
@@ -1763,7 +1826,11 @@ impl DrawApp {
         }
         let main = Rect::new(left.w, top, self.w - left.w, self.h - top);
         gfx::fill_rect(cx.pm, main, theme.window);
-        let heading = if b.page == BackPage::Open { "Open" } else { "Save As" };
+        let heading = match b.page {
+            BackPage::Open => "Open",
+            BackPage::PasteFrom => "Paste from",
+            BackPage::SaveAs => "Save As",
+        };
         cx.label(heading, Rect::new(main.x + 32.0 * s, top + 16.0 * s, 400.0 * s, 40.0 * s), 26.0, theme.text, false, Align::Left);
         let mut fx = main.x + 32.0 * s;
         if b.page == BackPage::Open && !self.settings.recent.is_empty() {
