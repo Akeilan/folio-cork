@@ -397,3 +397,139 @@ pub fn convert_layer(doc: &mut Doc) -> Result<(usize, usize), String> {
     doc.group_since(mark, "Convert to shapes");
     Ok((n, colours))
 }
+
+/// A shape layer's description and fresh pixels (one undo step).
+pub fn store_layer(doc: &mut Doc, i: usize, spec: &Value) {
+    let Some(s) = settings(doc) else { return };
+    let px = render_layer(spec, &s);
+    let (w, h) = canvas_px(&s);
+    let mut block = vec![0u8; w * h * 4];
+    for (d, p) in block.chunks_exact_mut(4).zip(px.chunks_exact(4)) {
+        let a = p[3] as u32;
+        d[0] = (p[2] as u32 * a / 255) as u8;
+        d[1] = (p[1] as u32 * a / 255) as u8;
+        d[2] = (p[0] as u32 * a / 255) as u8;
+        d[3] = p[3];
+    }
+    doc.text_layer_set(i, &spec.to_string(), Some((0, 0, w, h, &block, w * 4)));
+}
+
+/// Picture pixels to mm and back.
+pub fn px_to_mm(s: &Value, x: f32, y: f32) -> (f32, f32) {
+    let (ox, oy) = origin(s);
+    (x / PX_PER_MM + ox, y / PX_PER_MM + oy)
+}
+
+pub fn mm_to_px(s: &Value, x: f32, y: f32) -> (f32, f32) {
+    let (ox, oy) = origin(s);
+    ((x - ox) * PX_PER_MM, (y - oy) * PX_PER_MM)
+}
+
+/// (x0, y0, x1, y1) in mm of an object.
+pub fn object_bounds(o: &Value) -> (f32, f32, f32, f32) {
+    let mut b = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+    let mut add = |x: f32, y: f32| {
+        b = (b.0.min(x), b.1.min(y), b.2.max(x), b.3.max(y));
+    };
+    if o["kind"] == "stitches" {
+        for bl in transformed_stitches(o)["blocks"].as_array().cloned().unwrap_or_default() {
+            for p in bl["pts"].as_array().cloned().unwrap_or_default() {
+                add(p[0].as_f64().unwrap_or(0.0) as f32, p[1].as_f64().unwrap_or(0.0) as f32);
+            }
+        }
+    } else {
+        for rings in object_shapes(o) {
+            for r in rings.as_array().cloned().unwrap_or_default() {
+                for p in r.as_array().cloned().unwrap_or_default() {
+                    add(p[0].as_f64().unwrap_or(0.0) as f32, p[1].as_f64().unwrap_or(0.0) as f32);
+                }
+            }
+        }
+    }
+    if b.0 > b.2 {
+        (0.0, 0.0, 0.0, 0.0)
+    } else {
+        b
+    }
+}
+
+fn inside_rings(rings: &Value, x: f32, y: f32) -> bool {
+    // even-odd over the outline and its holes
+    let mut inside = false;
+    for r in rings.as_array().cloned().unwrap_or_default() {
+        let pts: Vec<(f32, f32)> = r.as_array().cloned().unwrap_or_default().iter().map(|p| (p[0].as_f64().unwrap_or(0.0) as f32, p[1].as_f64().unwrap_or(0.0) as f32)).collect();
+        let n = pts.len();
+        if n < 3 {
+            continue;
+        }
+        let mut j = n - 1;
+        for i in 0..n {
+            let (xi, yi) = pts[i];
+            let (xj, yj) = pts[j];
+            if (yi > y) != (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi {
+                inside = !inside;
+            }
+            j = i;
+        }
+    }
+    inside
+}
+
+/// The topmost visible object under a point (mm): (layer, object id).
+pub fn object_at(doc: &Doc, x: f32, y: f32) -> Option<(usize, i64)> {
+    for i in (0..doc.layers.len()).rev() {
+        if !doc.layers[i].visible {
+            continue;
+        }
+        let Some(spec) = layer_spec(doc, i) else { continue };
+        for o in spec["objects"].as_array().cloned().unwrap_or_default().iter().rev() {
+            if o["hidden"].as_bool().unwrap_or(false) {
+                continue;
+            }
+            let hit = if o["kind"] == "stitches" {
+                let b = object_bounds(o);
+                x >= b.0 - 0.6 && x <= b.2 + 0.6 && y >= b.1 - 0.6 && y <= b.3 + 0.6
+            } else {
+                object_shapes(o).iter().any(|r| inside_rings(r, x, y))
+            };
+            if hit {
+                return Some((i, o["id"].as_i64().unwrap_or(0)));
+            }
+        }
+    }
+    None
+}
+
+/// Move an object by (dx, dy) mm.
+pub fn move_object(o: &mut Value, dx: f32, dy: f32) {
+    if o["kind"] == "stitches" {
+        let t = &mut o["transform"];
+        if !t.is_object() {
+            *t = json!({});
+        }
+        t["dx"] = json!(t["dx"].as_f64().unwrap_or(0.0) + dx as f64);
+        t["dy"] = json!(t["dy"].as_f64().unwrap_or(0.0) + dy as f64);
+        return;
+    }
+    let shift = |rings: &mut Value| {
+        if let Some(rs) = rings.as_array_mut() {
+            for r in rs {
+                if let Some(pts) = r.as_array_mut() {
+                    for p in pts {
+                        p[0] = json!(p[0].as_f64().unwrap_or(0.0) + dx as f64);
+                        p[1] = json!(p[1].as_f64().unwrap_or(0.0) + dy as f64);
+                    }
+                }
+            }
+        }
+    };
+    if o["kind"] == "lettering" {
+        if let Some(gs) = o["glyphs"].as_array_mut() {
+            for g in gs {
+                shift(g);
+            }
+        }
+    } else {
+        shift(&mut o["rings"]);
+    }
+}
