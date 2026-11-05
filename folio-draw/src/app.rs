@@ -199,6 +199,9 @@ pub struct DrawApp {
     pub stitch_view: bool,
     pub density_view: bool,
     density_cache: Option<(u64, usize, usize, Vec<u8>)>,
+    /// The stitch-out simulator: how many commands have run, and when the next step is due.
+    pub stitch_out: Option<usize>,
+    stitch_due: Option<Duration>,
     stitch_cache: Option<(u64, Vec<([u8; 3], Vec<(f32, f32)>)>)>,
     pub export_ext: String,
     /// The selected embroidery object: (layer, object id).
@@ -225,7 +228,7 @@ pub struct DrawApp {
     drag: Option<Drag>,
     pub mods: Mods,
     pub mouse: (f32, f32),
-    now: Duration,
+    pub now: Duration,
     pub exit: bool,
     pub code: i32,
     pub flash: Option<(String, Duration)>,
@@ -273,6 +276,8 @@ impl DrawApp {
             stitch_view: false,
             density_view: false,
             density_cache: None,
+            stitch_out: None,
+            stitch_due: None,
             stitch_cache: None,
             export_ext: "pes".into(),
             emb_sel: None,
@@ -482,6 +487,22 @@ impl DrawApp {
                 return;
             }
             Event::Tick => {
+                if let (Some(at), Some(due)) = (self.stitch_out, self.stitch_due) {
+                    if self.now >= due {
+                        // 400 stitches a minute, ten times over: about 67 commands a tick at 40 ms
+                        let total = crate::emb::make_plan(&self.doc).map(|p| crate::emb::command_count(&p)).unwrap_or(0);
+                        let next = at + 67;
+                        if next >= total {
+                            self.stitch_out = None;
+                            self.stitch_due = None;
+                            self.flash(&format!("Stitched out: {total} commands, about {:.0} seconds on the machine.", total as f32 / 400.0 * 60.0));
+                        } else {
+                            self.stitch_out = Some(next);
+                            self.stitch_due = Some(self.now + Duration::from_millis(40));
+                        }
+                        self.doc.mark_all();
+                    }
+                }
                 if let Some(due) = self.playing {
                     if self.now >= due {
                         let n = self.doc.layers.len().max(1);
@@ -1473,6 +1494,22 @@ impl DrawApp {
             }
             "pane.layers" => self.show_layers = !self.show_layers,
             "view.grid" => self.gridlines = !self.gridlines,
+            "emb.stitchout" => {
+                if self.stitch_out.take().is_some() {
+                    self.stitch_due = None;
+                    self.doc.mark_all();
+                    return;
+                }
+                match crate::emb::make_plan(&self.doc) {
+                    Some(p) if crate::emb::command_count(&p) > 1 => {
+                        self.stitch_view = true;
+                        self.stitch_out = Some(0);
+                        self.stitch_due = Some(self.now);
+                    }
+                    Some(_) => self.flash("There are no stitches to sew yet."),
+                    None => self.flash("This picture isn't an embroidery design."),
+                }
+            }
             "emb.density" => {
                 if crate::emb::settings(&self.doc).is_none() {
                     self.flash("This picture isn't an embroidery design.");
@@ -2437,6 +2474,7 @@ impl DrawApp {
             emb: !self.doc.emb.is_empty(),
             stitch_view: self.stitch_view,
             density_view: self.density_view,
+            stitch_out: self.stitch_out.is_some(),
             emb_sel: self.emb_sel.is_some(),
         }
     }
@@ -2651,9 +2689,19 @@ impl DrawApp {
         }
         if self.stitch_view {
             let ch = self.doc.changes;
-            if self.stitch_cache.as_ref().map(|c| c.0 != ch).unwrap_or(true) {
+            let mut needle = None;
+            if let Some(upto) = self.stitch_out {
+                let (lines, at) = crate::emb::make_plan(&self.doc).map(|p| crate::emb::stitch_lines_upto(&self.doc, &p, upto)).unwrap_or_default();
+                self.stitch_cache = Some((u64::MAX, lines));
+                needle = at;
+            } else if self.stitch_cache.as_ref().map(|c| c.0 != ch).unwrap_or(true) {
                 let lines = crate::emb::make_plan(&self.doc).map(|p| crate::emb::stitch_lines(&self.doc, &p)).unwrap_or_default();
                 self.stitch_cache = Some((ch, lines));
+            }
+            if let Some(q) = needle {
+                let t = ((q.0 - self.scroll.0) * self.zoom, (q.1 - self.scroll.1) * self.zoom);
+                let rr = (6.0 * self.zoom).max(4.0);
+                gfx::stroke_round(&mut cv, Rect::new(t.0 - rr, t.1 - rr, rr * 2.0, rr * 2.0), rr, Color::rgb(204, 0, 0), 2.0);
             }
             if let Some((_, lines)) = &self.stitch_cache {
                 let w = (0.35 * crate::emb::PX_PER_MM * self.zoom).max(1.0);
@@ -2853,6 +2901,7 @@ pub struct St {
     pub emb: bool,
     pub stitch_view: bool,
     pub density_view: bool,
+    pub stitch_out: bool,
     pub emb_sel: bool,
 }
 
@@ -2862,7 +2911,7 @@ impl CommandState for St {
             "undo" => self.can_undo,
             "redo" => self.can_redo,
             "crop" => self.has_sel,
-            "emb.view" | "emb.density" | "emb.info" | "emb.export" | "emb.place" | "emb.trace" | "tool.emb" => self.emb,
+            "emb.view" | "emb.density" | "emb.stitchout" | "emb.info" | "emb.export" | "emb.place" | "emb.trace" | "tool.emb" => self.emb,
             "emb.recolour" | "emb.stitch" => self.emb_sel,
             "emb.hoop" => self.emb,
             _ => true,
@@ -2877,6 +2926,7 @@ impl CommandState for St {
             "frames" => self.frames,
             "emb.view" => self.stitch_view,
             "emb.density" => self.density_view,
+            "emb.stitchout" => self.stitch_out,
             "frame.play" => self.playing,
             t => t.strip_prefix("tool.").map(|t| t == self.tool.id()).unwrap_or(false),
         }
@@ -2906,6 +2956,9 @@ impl folio_kit::platform::App for DrawApp {
     fn next_tick(&self) -> Option<Duration> {
         if self.test.is_some() {
             return Some(Duration::from_millis(60));
+        }
+        if let Some(due) = self.stitch_due {
+            return Some(due.saturating_sub(self.now).max(Duration::from_millis(10)));
         }
         if let Some(due) = self.playing {
             return Some(due.saturating_sub(self.now).max(Duration::from_millis(10)));
