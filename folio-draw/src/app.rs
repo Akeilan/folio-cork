@@ -148,6 +148,7 @@ pub struct DrawApp {
     pub side: Rect,
     pub show_layers: bool,
     pub gridlines: bool,
+    pub transparent_sel: bool,
     pub rulers: bool,
     side_hits: Vec<(String, Rect)>,
     view: Option<sk::Pixmap>,
@@ -203,6 +204,7 @@ impl DrawApp {
             side: Rect::default(),
             show_layers: false,
             gridlines: false,
+            transparent_sel: false,
             rulers: false,
             side_hits: vec![],
             view: None,
@@ -678,6 +680,9 @@ impl DrawApp {
                 if self.in_selection(p) && !self.mods.shift && !self.mods.alt {
                     if self.doc.float.is_none() {
                         self.doc.float_lift(true);
+                        if self.transparent_sel {
+                            self.doc.float_color_key(self.c2, 0);
+                        }
                     }
                     if let Some(f) = &self.doc.float {
                         self.drag = Some(Drag::Move { start: p, orig: (f.x, f.y) });
@@ -934,6 +939,15 @@ impl DrawApp {
                         .button("cancel", "Cancel"),
                 )
             }
+            "select-transparent" => self.transparent_sel = !self.transparent_sel,
+            "remove-bg" => {
+                self.doc.commit_float();
+                if self.doc.remove_background() {
+                    self.doc.label_last("Remove background");
+                } else {
+                    self.flash("No background could be told apart from the subject.");
+                }
+            }
             "select-invert" => {
                 self.doc.commit_float();
                 self.doc.sel_invert();
@@ -1064,6 +1078,7 @@ impl DrawApp {
                     MenuItem::new("select-all", "Select all").key("Ctrl+A"),
                     MenuItem::new("select-invert", "Invert selection"),
                     MenuItem::new("select-none", "Select none"),
+                    MenuItem::new("select-transparent", "Transparent selection").check(self.transparent_sel),
                     MenuItem::new("delete", "Delete").key("Delete"),
                 ],
             ),
@@ -1086,6 +1101,8 @@ impl DrawApp {
                     MenuItem::sep(),
                     MenuItem::new("adj.blur", "Blur..."),
                     MenuItem::new("adj.sharpen", "Sharpen..."),
+                    MenuItem::sep(),
+                    MenuItem::new("remove-bg", "Remove background"),
                 ],
             ),
             "size" => Menu::new("size", rect, SIZES.iter().map(|s| MenuItem::new(&format!("size:{s}"), &format!("{s} px")).check((self.size - s).abs() < 0.01)).collect()),

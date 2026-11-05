@@ -224,6 +224,20 @@ impl UiTest {
             check(dark > 40, &format!("{dark} dark pixels where the text should be"))?;
             check(app.doc.history().0.last().map(|l| *l == "Text").unwrap_or(false), "undo step not named Text")
         });
+        step!("transparent selection leaves colour 2 behind", |app: &mut DrawApp, h: &mut dyn Host, r: &mut Res| {
+            app.c2 = [255, 255, 255, 255];
+            app.command("select-transparent", h);
+            check(app.transparent_sel, "not on")?;
+            app.set_tool(Tool::Select);
+            // the black pencil line at y=50 on white: move it down 30 px
+            app.doc.sel_rect(40, 40, 120, 20);
+            drag_on(app, h, r, (100.0, 50.0), (100.0, 80.0), Button::Left);
+            key(app, h, r, Key::Escape, Mods::NONE);
+            check(px(app, 100, 80)[0] < 60, &format!("line not moved: {:?}", px(app, 100, 80)))?;
+            // the white round the line didn't cover what was below it
+            app.command("select-transparent", h);
+            Ok(())
+        });
         step!("copy and paste", |app: &mut DrawApp, h: &mut dyn Host, r: &mut Res| {
             app.doc.sel_rect(300, 350, 200, 150);
             key(app, h, r, Key::Char('c'), ctrl());
