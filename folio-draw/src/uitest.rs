@@ -182,6 +182,29 @@ impl UiTest {
             check(px(app, 1000, 600)[0] > 200, "the curve didn't bend away from the straight line")?;
             check(app.doc.history().0.last().map(|l| *l == "Curve").unwrap_or(false), "not one Curve step")
         });
+        step!("a new shape can be moved and resized before it is kept", |app: &mut DrawApp, h: &mut dyn Host, r: &mut Res| {
+            app.set_tool(Tool::Rect);
+            app.shape_fill = false;
+            app.c1 = [0, 0, 0, 255];
+            drag_on(app, h, r, (800.0, 300.0), (860.0, 340.0), Button::Left);
+            check(app.pending.is_some(), "no pending shape after drawing")?;
+            // drag from inside moves it 100 px right
+            drag_on(app, h, r, (830.0, 320.0), (930.0, 320.0), Button::Left);
+            check(px(app, 830, 300)[0] > 200 && px(app, 930, 300)[0] < 60, "the rectangle didn't move")?;
+            // the bottom right handle makes it bigger
+            let hb = app.pending_handles()[4];
+            drag_on(app, h, r, hb, (hb.0 + 40.0, hb.1 + 40.0), Button::Left);
+            let p = app.pending.ok_or("pending lost while resizing")?;
+            check((p.b.0 - 1000.0).abs() < 1.0 && (p.b.1 - 380.0).abs() < 1.0, &format!("resized to {:?}", p.b))?;
+            check(px(app, 1000, 360)[0] < 60, "the right edge isn't at its new place")?;
+            // a second Rectangle steps; Escape on a fresh one takes it away
+            key(app, h, r, Key::Enter, Mods::NONE);
+            check(app.pending.is_none(), "Enter didn't keep it")?;
+            check(app.doc.history().0.last().map(|l| *l == "Rectangle").unwrap_or(false), "not one Rectangle step")?;
+            drag_on(app, h, r, (800.0, 450.0), (860.0, 480.0), Button::Left);
+            key(app, h, r, Key::Escape, Mods::NONE);
+            check(app.pending.is_none() && px(app, 830, 450)[0] > 200, "Escape didn't take the new shape away")
+        });
         step!("colour picker takes a colour", |app: &mut DrawApp, h: &mut dyn Host, r: &mut Res| {
             key(app, h, r, Key::Char('i'), Mods::NONE);
             check(app.tool == Tool::Picker, "I didn't choose the picker")?;
