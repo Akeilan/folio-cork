@@ -173,6 +173,8 @@ pub struct DrawApp {
     /// A polygon or curve being made over several clicks: its points and colour.
     pub multi: Option<(Tool, Vec<Pt>, [u8; 4], u8)>,
     pub pending: Option<Pending>,
+    /// Frames playing: when the next one is due.
+    pub playing: Option<Duration>,
     pub text_size: usize,
     pub zoom: f32,
     pub scroll: (f32, f32),
@@ -232,6 +234,7 @@ impl DrawApp {
             text_edit: None,
             multi: None,
             pending: None,
+            playing: None,
             text_size: 2,
             zoom: 1.0,
             scroll: (0.0, 0.0),
@@ -415,6 +418,15 @@ impl DrawApp {
                 return;
             }
             Event::Tick => {
+                if let Some(due) = self.playing {
+                    if self.now >= due {
+                        let n = self.doc.layers.len().max(1);
+                        let next = (self.doc.active + 1) % n;
+                        self.doc.set_active(next);
+                        self.doc.mark_all();
+                        self.playing = Some(self.now + self.frame_delay());
+                    }
+                }
                 if let Some(mut t) = self.test.take() {
                     t.step(self, host, r);
                     if t.done {
@@ -626,6 +638,8 @@ impl DrawApp {
                     self.doc.sel_none();
                 }
             }
+            Key::Char('.') if self.doc.solo => self.command("frame.next", host),
+            Key::Char(',') if self.doc.solo => self.command("frame.prev", host),
             Key::Char(ch) => {
                 let t = match ch.to_ascii_lowercase() {
                     'p' => Some(Tool::Pencil),
@@ -673,6 +687,9 @@ impl DrawApp {
 
     fn press(&mut self, x: f32, y: f32, button: Button, clicks: u32) {
         let p = self.to_doc(x, y);
+        if self.playing.take().is_some() {
+            return;
+        }
         if self.pending.is_some() && button == Button::Left && self.pending_press(p, x, y) {
             return;
         }
@@ -1007,6 +1024,11 @@ impl DrawApp {
         self.doc.shape(pts, true, self.size, color, other, if self.shape_fill { 3 } else { 1 }, true);
     }
 
+    fn frame_delay(&self) -> Duration {
+        let d = self.doc.layers.get(self.doc.active).map(|l| l.delay_ms).unwrap_or(0);
+        Duration::from_millis(if d == 0 { 100 } else { d.max(20) } as u64)
+    }
+
     /// Keep the pending shape for good (one undo step).
     pub fn commit_pending(&mut self) {
         if let Some(p) = self.pending.take() {
@@ -1295,6 +1317,30 @@ impl DrawApp {
             }
             "pane.layers" => self.show_layers = !self.show_layers,
             "view.grid" => self.gridlines = !self.gridlines,
+            "frames" => {
+                self.doc.solo = !self.doc.solo;
+                self.playing = None;
+                self.doc.mark_all();
+            }
+            "frame.next" | "frame.prev" => {
+                let n = self.doc.layers.len();
+                if n > 1 {
+                    self.doc.solo = true;
+                    let a = self.doc.active;
+                    let to = if id == "frame.next" { (a + 1) % n } else { (a + n - 1) % n };
+                    self.doc.set_active(to);
+                    self.doc.mark_all();
+                }
+            }
+            "frame.play" => {
+                if self.playing.is_some() {
+                    self.playing = None;
+                } else if self.doc.layers.len() > 1 {
+                    self.doc.solo = true;
+                    self.doc.mark_all();
+                    self.playing = Some(self.now + self.frame_delay());
+                }
+            }
             "view.rulers" => {
                 self.rulers = !self.rulers;
                 self.layout();
@@ -1448,6 +1494,11 @@ impl DrawApp {
             _ => return,
         };
         self.menu = Some(menu);
+    }
+
+    /// Treat the picture as saved, so a test can open another one without the prompt.
+    pub fn saved_for_test(&mut self) {
+        self.saved_changes = self.doc.changes;
     }
 
     pub fn menu_pick_for_test(&mut self, menu: &str, id: &str) {
@@ -1880,6 +1931,8 @@ impl DrawApp {
             layers: self.show_layers,
             grid: self.gridlines,
             rulers: self.rulers,
+            frames: self.doc.solo,
+            playing: self.playing.is_some(),
         }
     }
 
@@ -2200,6 +2253,8 @@ pub struct St {
     pub layers: bool,
     pub grid: bool,
     pub rulers: bool,
+    pub frames: bool,
+    pub playing: bool,
 }
 
 impl CommandState for St {
@@ -2217,6 +2272,8 @@ impl CommandState for St {
             "pane.layers" => self.layers,
             "view.grid" => self.grid,
             "view.rulers" => self.rulers,
+            "frames" => self.frames,
+            "frame.play" => self.playing,
             t => t.strip_prefix("tool.").map(|t| t == self.tool.id()).unwrap_or(false),
         }
     }
@@ -2245,6 +2302,9 @@ impl folio_kit::platform::App for DrawApp {
     fn next_tick(&self) -> Option<Duration> {
         if self.test.is_some() {
             return Some(Duration::from_millis(60));
+        }
+        if let Some(due) = self.playing {
+            return Some(due.saturating_sub(self.now).max(Duration::from_millis(10)));
         }
         if self.flash.is_some() {
             return Some(Duration::from_millis(500));
