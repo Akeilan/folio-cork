@@ -829,6 +829,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "folio-draw"
+version = "0.1.0"
+dependencies = [
+ "folio-draw-engine",
+ "folio-kit",
+]
+
+[[package]]
 name = "folio-draw-engine"
 version = "0.3.0"
 dependencies = [
