@@ -941,6 +941,29 @@ impl UiTest {
             app.ribbon.collapsed = false;
             Ok(())
         });
+        step!("a shape can be filled with no outline", |app: &mut DrawApp, h: &mut dyn Host, r: &mut Res| {
+            app.saved_for_test();
+            app.command("new", h);
+            ev(app, h, r, Event::MouseMove { x: 1.0, y: 1.0 });
+            app.c1 = [0, 0, 0, 255];
+            app.c2 = [237, 28, 36, 255];
+            check(app.shape_mode(true) == 1, "an unfilled shape should be its outline alone")?;
+            app.command("shape.fill", h);
+            check(app.shape_mode(true) == 3, "filled and outlined")?;
+            app.command("shape.outline", h);
+            check(app.shape_outline == false && app.shape_mode(true) == 2, &format!("mode {}", app.shape_mode(true)))?;
+            app.set_tool(Tool::Rect);
+            drag_on(app, h, r, (60.0, 60.0), (200.0, 160.0), Button::Left);
+            app.commit_pending();
+            let inside = px(app, 130, 110);
+            check(inside[0] > 200 && inside[1] < 80, &format!("not filled with colour 2: {inside:?}"))?;
+            let edge = px(app, 60, 110);
+            check(!(edge[0] < 60 && edge[1] < 60 && edge[2] < 60), &format!("the outline is still drawn: {edge:?}"))?;
+            // turning the fill off puts the outline back rather than leaving nothing
+            app.command("shape.fill", h);
+            check(app.shape_outline && app.shape_mode(true) == 1, "a shape was left as neither")?;
+            Ok(())
+        });
         step!("the Text tool's font, underline and filled box", |app: &mut DrawApp, h: &mut dyn Host, r: &mut Res| {
             app.saved_for_test();
             app.command("new", h);

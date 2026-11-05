@@ -19,6 +19,7 @@ const ICONS: &[(&str, &str)] = &[
     ("rect", "<rect x='4' y='6' width='16' height='12'/>"),
     ("ellipse", "<ellipse cx='12' cy='12' rx='8.5' ry='6.5'/>"),
     ("shape-fill", "<rect x='4' y='6' width='16' height='12' fill='currentColor' fill-opacity='.35'/>"),
+    ("shape-outline", "<rect x='4' y='6' width='16' height='12' stroke-width='2.5'/>"),
     ("size", "<path d='M4 6h16' stroke-width='1'/><path d='M4 11h16' stroke-width='2'/><path d='M4 17h16' stroke-width='3.5'/>"),
     ("color", "<circle cx='12' cy='12' r='8'/>"),
     ("zoom-in", "<circle cx='10.5' cy='10.5' r='6.5'/><path d='M15.5 15.5 20 20M8 10.5h5M10.5 8v5'/>"),

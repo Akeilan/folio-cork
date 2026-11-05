@@ -39,7 +39,7 @@ pub fn tabs() -> Vec<Tab> {
                     "Shapes",
                     vec![
                         vec![I::icon("tool.line", "Line", "line").key("L"), I::icon("tool.curve", "Curve", "curve").desc("Drag a line, then drag twice to bend it."), I::icon("tool.rect", "Rectangle", "rect").key("R")],
-                        vec![I::icon("tool.ellipse", "Oval", "ellipse").key("O"), I::icon("tool.polygon", "Polygon", "polygon").desc("Click each corner; double-click, or click the first corner, to close it."), I::icon("shape.fill", "Fill shapes with colour 2", "shape-fill")],
+                        vec![I::icon("tool.ellipse", "Oval", "ellipse").key("O"), I::icon("tool.polygon", "Polygon", "polygon").desc("Click each corner; double-click, or click the first corner, to close it."), I::icon("shape.fill", "Fill shapes with colour 2", "shape-fill"), I::icon("shape.outline", "Draw the shape's outline", "shape-outline")],
                     ],
                 ),
                 Group::new("Size", vec![I::large("size", "Size", "size").menu()]),
