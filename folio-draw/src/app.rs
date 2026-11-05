@@ -197,6 +197,8 @@ pub struct DrawApp {
     pub playing: Option<Duration>,
     /// The stitch view: every planned stitch drawn over the picture.
     pub stitch_view: bool,
+    pub density_view: bool,
+    density_cache: Option<(u64, usize, usize, Vec<u8>)>,
     stitch_cache: Option<(u64, Vec<([u8; 3], Vec<(f32, f32)>)>)>,
     pub export_ext: String,
     /// The selected embroidery object: (layer, object id).
@@ -269,6 +271,8 @@ impl DrawApp {
             pending: None,
             playing: None,
             stitch_view: false,
+            density_view: false,
+            density_cache: None,
             stitch_cache: None,
             export_ext: "pes".into(),
             emb_sel: None,
@@ -1469,6 +1473,27 @@ impl DrawApp {
             }
             "pane.layers" => self.show_layers = !self.show_layers,
             "view.grid" => self.gridlines = !self.gridlines,
+            "emb.density" => {
+                if crate::emb::settings(&self.doc).is_none() {
+                    self.flash("This picture isn't an embroidery design.");
+                    return;
+                }
+                self.density_view = !self.density_view;
+                if self.density_view {
+                    match crate::emb::make_plan(&self.doc) {
+                        Some(p) => {
+                            let (covered, three, four) = crate::emb::density_stats(&self.doc, &p);
+                            let pct = |n: usize| if covered == 0 { 0.0 } else { n as f32 * 100.0 / covered as f32 };
+                            self.flash(&format!(
+                                "Density: {:.0}% of the stitched area has three layers of thread, {:.0}% four or more.",
+                                pct(three),
+                                pct(four)
+                            ));
+                        }
+                        None => self.flash("Nothing to measure yet."),
+                    }
+                }
+            }
             "emb.view" => {
                 self.stitch_view = !self.stitch_view;
             }
@@ -2411,6 +2436,7 @@ impl DrawApp {
             playing: self.playing.is_some(),
             emb: !self.doc.emb.is_empty(),
             stitch_view: self.stitch_view,
+            density_view: self.density_view,
             emb_sel: self.emb_sel.is_some(),
         }
     }
@@ -2596,6 +2622,31 @@ impl DrawApp {
                 let b = crate::emb::mm_to_px(&st, x1, y1);
                 let (p, q) = (to(a), to(b));
                 ants(&mut cv, Rect::new(p.0, p.1, q.0 - p.0, q.1 - p.1));
+            }
+        }
+        if self.density_view {
+            let ch = self.doc.changes;
+            if self.density_cache.as_ref().map(|c| c.0 != ch).unwrap_or(true) {
+                let map = crate::emb::make_plan(&self.doc).and_then(|p| crate::emb::density_rgba(&self.doc, &p));
+                self.density_cache = map.map(|(w, h, px)| (ch, w, h, px));
+            }
+            if let Some((_, dw, dh, px)) = self.density_cache.clone() {
+                if let Some(mut src) = sk::Pixmap::new(dw as u32, dh as u32) {
+                    for (d, q) in src.pixels_mut().iter_mut().zip(px.chunks_exact(4)) {
+                        *d = sk::PremultipliedColorU8::from_rgba(
+                            (q[0] as u32 * q[3] as u32 / 255) as u8,
+                            (q[1] as u32 * q[3] as u32 / 255) as u8,
+                            (q[2] as u32 * q[3] as u32 / 255) as u8,
+                            q[3],
+                        )
+                        .unwrap_or_else(|| sk::PremultipliedColorU8::from_rgba(0, 0, 0, 0).unwrap());
+                    }
+                    let t = sk::Transform::from_translate(-self.scroll.0 * self.zoom, -self.scroll.1 * self.zoom).pre_scale(self.zoom, self.zoom);
+                    let pat = sk::Pattern::new(src.as_ref(), sk::SpreadMode::Pad, sk::FilterQuality::Nearest, 1.0, sk::Transform::identity());
+                    let mut paint = sk::Paint::default();
+                    paint.shader = pat;
+                    cv.fill_rect(sk::Rect::from_xywh(0.0, 0.0, cv.width() as f32, cv.height() as f32).unwrap(), &paint, t, None);
+                }
             }
         }
         if self.stitch_view {
@@ -2801,6 +2852,7 @@ pub struct St {
     pub playing: bool,
     pub emb: bool,
     pub stitch_view: bool,
+    pub density_view: bool,
     pub emb_sel: bool,
 }
 
@@ -2810,7 +2862,7 @@ impl CommandState for St {
             "undo" => self.can_undo,
             "redo" => self.can_redo,
             "crop" => self.has_sel,
-            "emb.view" | "emb.info" | "emb.export" | "emb.place" | "emb.trace" | "tool.emb" => self.emb,
+            "emb.view" | "emb.density" | "emb.info" | "emb.export" | "emb.place" | "emb.trace" | "tool.emb" => self.emb,
             "emb.recolour" | "emb.stitch" => self.emb_sel,
             "emb.hoop" => self.emb,
             _ => true,
@@ -2824,6 +2876,7 @@ impl CommandState for St {
             "view.rulers" => self.rulers,
             "frames" => self.frames,
             "emb.view" => self.stitch_view,
+            "emb.density" => self.density_view,
             "frame.play" => self.playing,
             t => t.strip_prefix("tool.").map(|t| t == self.tool.id()).unwrap_or(false),
         }

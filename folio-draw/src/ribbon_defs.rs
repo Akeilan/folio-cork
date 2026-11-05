@@ -136,6 +136,7 @@ pub fn tabs() -> Vec<Tab> {
                     "Stitches",
                     vec![
                         I::large("emb.view", "Stitch view", "stitches").desc("Show every planned stitch over the picture."),
+                        I::large("emb.density", "Density", "density").desc("Colour the design by how many layers of thread cover it: green is fine, amber three layers, red four or more."),
                         I::large("emb.info", "Stitch information", "emb-info"),
                         I::large("emb.export", "Export stitches", "emb-export").menu().desc("Save the design as a file for the embroidery machine."),
                     ],
