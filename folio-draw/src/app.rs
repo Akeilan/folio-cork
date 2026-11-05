@@ -1916,7 +1916,7 @@ impl DrawApp {
                         // the hoop's centre stays the design's centre
                         self.doc.canvas_size(new.0, new.1, 0.5, 0.5);
                     }
-                    self.doc.emb = stt.to_string();
+                    self.doc.set_emb(&stt.to_string());
                     for (i, sp) in &specs {
                         crate::emb::store_layer(&mut self.doc, *i, sp);
                     }
