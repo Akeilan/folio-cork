@@ -829,16 +829,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "folio-draw-engine"
+version = "0.3.0"
+dependencies = [
+ "folio-math",
+]
+
+[[package]]
 name = "folio-kit"
 version = "0.3.0"
 dependencies = [
  "cosmic-text",
+ "folio-math",
  "folio-platform",
  "image",
  "libm",
  "resvg",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "folio-math"
+version = "0.3.0"
+dependencies = [
+ "libm",
 ]
 
 [[package]]
