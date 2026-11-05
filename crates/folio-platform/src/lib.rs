@@ -138,6 +138,9 @@ pub trait Host {
     fn minimize(&mut self);
     fn toggle_maximize(&mut self);
     fn is_maximized(&self) -> bool;
+    /// Fill the screen, hiding the desktop's panels; `false` goes back to a window.
+    fn set_fullscreen(&mut self, on: bool);
+    fn is_fullscreen(&self) -> bool;
     fn close(&mut self);
     /// The system's light/dark preference, when it says.
     fn system_dark(&self) -> Option<bool>;
@@ -184,6 +187,7 @@ pub struct Headless {
     pub image: Option<Image>,
     pub clock: Duration,
     pub maximized: bool,
+    pub fullscreen: bool,
     pub closed: bool,
     pub redraws: u32,
     pub dark: Option<bool>,
@@ -202,6 +206,12 @@ impl Host for Headless {
     fn drag_window(&mut self) {}
     fn drag_resize(&mut self, _edge: Edge) {}
     fn minimize(&mut self) {}
+    fn set_fullscreen(&mut self, on: bool) {
+        self.fullscreen = on;
+    }
+    fn is_fullscreen(&self) -> bool {
+        self.fullscreen
+    }
     fn toggle_maximize(&mut self) {
         self.maximized = !self.maximized;
     }

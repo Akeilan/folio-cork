@@ -930,6 +930,17 @@ impl UiTest {
             let p = pm.pixel(60, 16).ok_or("no pixel")?;
             check(p.red() > 60, "the title bar isn't drawn where the buttons are")
         });
+        step!("full screen, and Esc comes back", |app: &mut DrawApp, h: &mut dyn Host, r: &mut Res| {
+            check(!app.full_screen, "it started in full screen")?;
+            key(app, h, r, Key::F(11), Mods::NONE);
+            check(app.full_screen && h.is_fullscreen(), &format!("not full screen: app {} window {}", app.full_screen, h.is_fullscreen()))?;
+            check(app.ribbon.collapsed, "the ribbon didn't fold away")?;
+            shot(app, r);
+            key(app, h, r, Key::Escape, Mods::NONE);
+            check(!app.full_screen && !h.is_fullscreen(), "Esc didn't come back")?;
+            app.ribbon.collapsed = false;
+            Ok(())
+        });
         step!("dark theme", |app: &mut DrawApp, _h: &mut dyn Host, r: &mut Res| {
             app.theme = folio_kit::theme::Theme::new(true, crate::app::MAROON, crate::app::ACCENT);
             let pm = shot(app, r);
