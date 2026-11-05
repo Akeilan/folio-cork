@@ -141,6 +141,8 @@ pub struct DrawApp {
     pub bar: Rect,
     pub side: Rect,
     pub show_layers: bool,
+    pub gridlines: bool,
+    pub rulers: bool,
     side_hits: Vec<(String, Rect)>,
     view: Option<sk::Pixmap>,
     drag: Option<Drag>,
@@ -192,6 +194,8 @@ impl DrawApp {
             bar: Rect::default(),
             side: Rect::default(),
             show_layers: false,
+            gridlines: false,
+            rulers: false,
             side_hits: vec![],
             view: None,
             drag: None,
@@ -228,7 +232,8 @@ impl DrawApp {
         self.bar = Rect::new(0.0, self.h - BAR_H * s, self.w, BAR_H * s);
         let sw = if self.show_layers && self.back.is_none() { 230.0 * s } else { 0.0 };
         self.side = Rect::new(self.w - sw, top, sw, self.bar.y - top);
-        self.canvas = Rect::new(0.0, top, (self.w - sw).max(10.0), (self.bar.y - top).max(10.0));
+        let ru = if self.rulers { 18.0 * s } else { 0.0 };
+        self.canvas = Rect::new(ru, top + ru, (self.w - sw - ru).max(10.0), (self.bar.y - top - ru).max(10.0));
     }
 
     // ---------------- view ----------------
@@ -493,6 +498,10 @@ impl DrawApp {
                 "zoom.fit"
             } else if c('1') {
                 "zoom.100"
+            } else if c('r') {
+                "view.rulers"
+            } else if c('g') {
+                "view.grid"
             } else {
                 return;
             };
@@ -502,6 +511,25 @@ impl DrawApp {
         match key {
             Key::Delete => self.command("delete", host),
             Key::F(7) => self.command("pane.layers", host),
+            Key::Left | Key::Right | Key::Up | Key::Down => {
+                let step = if m.shift { 10 } else { 1 };
+                let (dx, dy) = match key {
+                    Key::Left => (-step, 0),
+                    Key::Right => (step, 0),
+                    Key::Up => (0, -step),
+                    _ => (0, step),
+                };
+                if self.doc.float.is_none() && self.doc.sel.is_some() {
+                    self.doc.float_lift(true);
+                }
+                if let Some(f) = &self.doc.float {
+                    let (x, y, w, h) = (f.x + dx, f.y + dy, f.w, f.h);
+                    self.doc.float_set_rect(x, y, w, h);
+                } else {
+                    self.scroll.0 += dx as f32 * 20.0 / self.zoom;
+                    self.scroll.1 += dy as f32 * 20.0 / self.zoom;
+                }
+            }
             Key::Escape => {
                 if self.drag.is_some() {
                     self.cancel_drag();
@@ -912,6 +940,11 @@ impl DrawApp {
                 self.doc.flatten();
             }
             "pane.layers" => self.show_layers = !self.show_layers,
+            "view.grid" => self.gridlines = !self.gridlines,
+            "view.rulers" => {
+                self.rulers = !self.rulers;
+                self.layout();
+            }
             "zoom.in" => self.zoom_step(1, None),
             "zoom.out" => self.zoom_step(-1, None),
             "zoom.100" => self.set_zoom(1.0, None),
@@ -1420,6 +1453,8 @@ impl DrawApp {
             c2: self.c2,
             shape_fill: self.shape_fill,
             layers: self.show_layers,
+            grid: self.gridlines,
+            rulers: self.rulers,
         }
     }
 
@@ -1458,6 +1493,7 @@ impl DrawApp {
             self.paint_back(pm, r);
         } else {
             self.paint_canvas(pm);
+            self.paint_rulers(pm, r);
             self.paint_side(pm, r);
             self.paint_bar(pm, r);
             let mut cx = Ctx { pm, text: &mut r.text, icons: &mut r.icons, theme: &theme, s };
@@ -1519,6 +1555,22 @@ impl DrawApp {
             let paint = sk::PixmapPaint { quality: q, ..Default::default() };
             cv.draw_pixmap(0, 0, v.as_ref(), &paint, sk::Transform::from_row(self.zoom, 0.0, 0.0, self.zoom, ox, oy), None);
         }
+        if self.gridlines && self.zoom >= 2.0 {
+            // a line round every pixel once they are big enough to see
+            let c = Color::rgba(128, 128, 128, 90);
+            let mut x = (self.scroll.0.max(0.0)).floor();
+            while x <= self.doc.w as f32 && (x - self.scroll.0) * self.zoom < cw as f32 {
+                let sx = ((x - self.scroll.0) * self.zoom).round() + 0.5;
+                gfx::vline(&mut cv, sx, img.y.max(0.0), img.bottom().min(ch as f32), c);
+                x += 1.0;
+            }
+            let mut y = (self.scroll.1.max(0.0)).floor();
+            while y <= self.doc.h as f32 && (y - self.scroll.1) * self.zoom < ch as f32 {
+                let sy = ((y - self.scroll.1) * self.zoom).round() + 0.5;
+                gfx::hline(&mut cv, img.x.max(0.0), img.right().min(cw as f32), sy, c);
+                y += 1.0;
+            }
+        }
         gfx::stroke_round(&mut cv, Rect::new(img.x - 1.0, img.y - 1.0, img.w + 2.0, img.h + 2.0), 0.0, self.theme.border, 1.0);
         // the selection and a rectangle being dragged out
         let ants = |cv: &mut sk::Pixmap, r: Rect| {
@@ -1556,6 +1608,50 @@ impl DrawApp {
             ants(&mut cv, Rect::new(p.0, p.1, w as f32 * self.zoom, h as f32 * self.zoom));
         }
         gfx::blit_copy(pm, &cv, c.x as i32, c.y as i32);
+    }
+
+    fn paint_rulers(&mut self, pm: &mut sk::Pixmap, r: &mut Res) {
+        if !self.rulers {
+            return;
+        }
+        let theme = self.theme.clone();
+        let s = self.s;
+        let c = self.canvas;
+        let ru = 18.0 * s;
+        let mut cx = Ctx { pm, text: &mut r.text, icons: &mut r.icons, theme: &theme, s };
+        let top = Rect::new(c.x - ru, c.y - ru, c.w + ru, ru);
+        let left = Rect::new(c.x - ru, c.y, ru, c.h);
+        gfx::fill_rect(cx.pm, top, theme.panel);
+        gfx::fill_rect(cx.pm, left, theme.panel);
+        gfx::hline(cx.pm, top.x, top.right(), top.bottom() - 0.5, theme.border);
+        gfx::vline(cx.pm, left.right() - 0.5, left.y, left.bottom(), theme.border);
+        // a labelled tick about every 80 screen pixels, at a round number of picture pixels
+        let raw = 80.0 / self.zoom;
+        let mag = 10f32.dpow(raw.max(1.0).dln() / std::f32::consts::LN_10).floor().max(1.0);
+        let step = [1.0, 2.0, 5.0, 10.0].iter().map(|k| k * mag).find(|&v| v >= raw).unwrap_or(10.0 * mag);
+        let mut v = (self.scroll.0 / step).floor() * step;
+        while (v - self.scroll.0) * self.zoom < c.w {
+            let x = c.x + (v - self.scroll.0) * self.zoom;
+            if x >= c.x {
+                gfx::vline(cx.pm, x.round() + 0.5, top.y + ru * 0.4, top.bottom(), theme.muted);
+                cx.label(&format!("{}", v as i64), Rect::new(x + 2.0 * s, top.y, 60.0 * s, ru * 0.7), 9.0, theme.muted, false, Align::Left);
+            }
+            v += step;
+        }
+        let mut v = (self.scroll.1 / step).floor() * step;
+        while (v - self.scroll.1) * self.zoom < c.h {
+            let y = c.y + (v - self.scroll.1) * self.zoom;
+            if y >= c.y {
+                gfx::hline(cx.pm, left.x + ru * 0.4, left.right(), y.round() + 0.5, theme.muted);
+                cx.label(&format!("{}", v as i64), Rect::new(left.x + 1.0, y + 1.0 * s, ru, ru * 0.7), 8.0, theme.muted, false, Align::Left);
+            }
+            v += step;
+        }
+        // where the mouse is
+        if c.contains(self.mouse.0, self.mouse.1) {
+            gfx::vline(cx.pm, self.mouse.0.round() + 0.5, top.y, top.bottom(), theme.accent);
+            gfx::hline(cx.pm, left.x, left.right(), self.mouse.1.round() + 0.5, theme.accent);
+        }
     }
 
     fn paint_bar(&mut self, pm: &mut sk::Pixmap, r: &mut Res) {
@@ -1638,6 +1734,8 @@ pub struct St {
     pub c2: [u8; 4],
     pub shape_fill: bool,
     pub layers: bool,
+    pub grid: bool,
+    pub rulers: bool,
 }
 
 impl CommandState for St {
@@ -1653,6 +1751,8 @@ impl CommandState for St {
         match id {
             "shape.fill" => self.shape_fill,
             "pane.layers" => self.layers,
+            "view.grid" => self.grid,
+            "view.rulers" => self.rulers,
             t => t.strip_prefix("tool.").map(|t| t == self.tool.id()).unwrap_or(false),
         }
     }
