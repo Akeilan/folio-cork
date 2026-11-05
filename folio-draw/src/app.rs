@@ -168,6 +168,20 @@ pub struct Res {
 pub const GIF_LOOPS: &[(i32, &str)] =
     &[(0, "Forever"), (-1, "Once"), (1, "2 times"), (2, "3 times"), (4, "5 times"), (9, "10 times")];
 
+/// The icon a quick-access button uses.
+fn quick_icon(id: &str) -> String {
+    match id {
+        "undo" => "undo",
+        "redo" => "redo",
+        "crop" => "crop",
+        "resize" => "resize",
+        "remove-bg" => "nobg",
+        "pane.layers" => "layers",
+        _ => "save",
+    }
+    .into()
+}
+
 pub struct DrawApp {
     pub doc: Doc,
     pub path: Option<PathBuf>,
@@ -257,7 +271,9 @@ impl DrawApp {
             s: 1.0,
             w: 1280.0,
             h: 800.0,
-            title: TitleBar::new("app", vec![("save", "save", "Save (Ctrl+S)"), ("undo", "undo", "Undo (Ctrl+Z)"), ("redo", "redo", "Redo (Ctrl+Y)")]),
+            title: TitleBar::new("app", vec![("save", "save", "Save (Ctrl+S)"), ("undo", "undo", "Undo (Ctrl+Z)"), ("redo", "redo", "Redo (Ctrl+Y)")])
+                .with_search()
+                .with_quick_menu(),
             ribbon: Ribbon::new(ribbon_defs::tabs()),
             menu: None,
             dialog: None,
@@ -338,6 +354,23 @@ impl DrawApp {
         self.wand_contiguous = st.wand_contiguous;
         self.doc.sample_all = st.sample_all;
         self.stab = st.stab;
+        if !st.quick.is_empty() {
+            let have = self.title.quick.clone();
+            let known = self.quick_choices();
+            self.title.quick = st
+                .quick
+                .iter()
+                .filter_map(|id| {
+                    have.iter()
+                        .find(|q| q.0 == *id)
+                        .cloned()
+                        .or_else(|| known.iter().find(|(k, _)| k == id).map(|(k, label)| ((*k).to_string(), quick_icon(k), label.to_string())))
+                })
+                .collect();
+            if self.title.quick.is_empty() {
+                self.title.quick = have;
+            }
+        }
         if let Some(p) = self.path.clone() {
             self.settings.add_recent(&p);
         }
@@ -356,6 +389,7 @@ impl DrawApp {
         self.settings.wand_contiguous = self.wand_contiguous;
         self.settings.sample_all = self.doc.sample_all;
         self.settings.stab = self.stab;
+        self.settings.quick = self.title.quick.iter().map(|q| q.0.clone()).collect();
         self.settings.save();
     }
 
@@ -543,12 +577,43 @@ impl DrawApp {
             }
             return;
         }
+        // the search box has the keyboard while it is focused; the list of matches keeps the arrows
+        let arrows = matches!(ev, Event::Key { key: Key::Up | Key::Down, .. });
+        if !arrows {
+        if let Some(a) = self.title.search_event(ev, host, &mut r.text, self.s) {
+                match a {
+                    TitleAction::SearchChanged => self.open_search_menu(),
+                    TitleAction::SearchEnter => {
+                        let first = self.search_matches().first().map(|(id, _)| id.clone());
+                        self.title.search.as_mut().map(|f| {
+                            f.focused = false;
+                            f.set("")
+                        });
+                        self.menu = None;
+                        if let Some(id) = first {
+                            self.command(&id, host);
+                        }
+                    }
+                    TitleAction::SearchCancel => self.menu = None,
+                    _ => {}
+                }
+                return;
+            }
+        }
         if let Some(m) = self.menu.as_mut() {
             match m.event(ev) {
                 MenuResult::Picked(id) => {
                     let mid = m.id.clone();
                     self.menu = None;
-                    self.menu_pick(&mid, &id);
+                    if mid == "search" {
+                        if let Some(f) = self.title.search.as_mut() {
+                            f.focused = false;
+                            f.set("");
+                        }
+                        self.command(&id, host);
+                    } else {
+                        self.menu_pick(&mid, &id);
+                    }
                     return;
                 }
                 MenuResult::Closed => {
@@ -568,6 +633,7 @@ impl DrawApp {
                 TitleAction::Maximize => host.toggle_maximize(),
                 TitleAction::Close => self.request(After::Close),
                 TitleAction::Drag => host.drag_window(),
+                TitleAction::SearchChanged | TitleAction::SearchEnter | TitleAction::SearchCancel => {}
             }
             return;
         }
@@ -637,6 +703,10 @@ impl DrawApp {
 
     fn key(&mut self, key: &Key, m: Mods, host: &mut dyn Host) {
         let c = |ch: char| matches!(key, Key::Char(k) if k.eq_ignore_ascii_case(&ch));
+        if m.alt && c('q') {
+            self.title.focus_search();
+            return;
+        }
         if m.ctrl {
             let cmd = if c('z') {
                 "undo"
@@ -1152,6 +1222,90 @@ impl DrawApp {
     }
 
     /// Change the selected embroidery object and store its layer again (one undo step).
+    /// Every command the ribbon offers, as (id, label), for the search box.
+    pub fn all_commands(&self) -> Vec<(String, String)> {
+        let mut out: Vec<(String, String)> = vec![];
+        for t in &self.ribbon.tabs {
+            for g in &t.groups {
+                for it in &g.items {
+                    if it.id.is_empty() || out.iter().any(|(id, _)| *id == it.id) {
+                        continue;
+                    }
+                    out.push((it.id.clone(), it.label.replace('\n', " ")));
+                }
+            }
+        }
+        for (id, label) in [
+            ("new", "New picture"),
+            ("open", "Open"),
+            ("save", "Save"),
+            ("save-as", "Save as"),
+            ("undo", "Undo"),
+            ("redo", "Redo"),
+            ("select-all", "Select all"),
+            ("select-invert", "Invert selection"),
+            ("select-none", "Select none"),
+            ("canvas-size", "Canvas size"),
+            ("rotate.angle", "Rotate by angle"),
+            ("skew", "Skew"),
+            ("stabilizer", "Stabilizer"),
+            ("wand-settings", "Magic wand settings"),
+            ("close", "Close picture"),
+        ] {
+            if !out.iter().any(|(i, _)| i == id) {
+                out.push((id.into(), label.into()));
+            }
+        }
+        out
+    }
+
+    /// The commands whose names hold the words typed in the search box, best first.
+    pub fn search_matches(&self) -> Vec<(String, String)> {
+        let q = self.title.search_text().trim().to_lowercase();
+        if q.is_empty() {
+            return vec![];
+        }
+        let mut starts = vec![];
+        let mut holds = vec![];
+        for (id, label) in self.all_commands() {
+            let l = label.to_lowercase();
+            if l.starts_with(&q) {
+                starts.push((id, label));
+            } else if l.contains(&q) {
+                holds.push((id, label));
+            }
+        }
+        starts.extend(holds);
+        starts.truncate(12);
+        starts
+    }
+
+    fn open_search_menu(&mut self) {
+        let hits = self.search_matches();
+        if hits.is_empty() {
+            self.menu = None;
+            return;
+        }
+        let r = self.title.search_rect();
+        let items = hits.into_iter().map(|(id, label)| MenuItem::new(&id, &label)).collect();
+        self.menu = Some(Menu::new("search", Rect::new(r.x, r.bottom(), r.w, 0.0), items));
+    }
+
+    /// The buttons the quick-access bar can show, and whether each is on it now.
+    pub fn quick_choices(&self) -> Vec<(&'static str, &'static str)> {
+        vec![
+            ("save", "Save"),
+            ("undo", "Undo"),
+            ("redo", "Redo"),
+            ("new", "New picture"),
+            ("open", "Open"),
+            ("crop", "Crop"),
+            ("resize", "Resize"),
+            ("remove-bg", "Remove background"),
+            ("pane.layers", "Layers pane"),
+        ]
+    }
+
     fn edit_emb_object(&mut self, label: &str, f: impl FnOnce(&mut serde_json::Value)) {
         let Some((li, id)) = self.emb_sel else { return };
         let Some(mut spec) = crate::emb::layer_spec(&self.doc, li) else { return };
@@ -1494,6 +1648,17 @@ impl DrawApp {
             }
             "pane.layers" => self.show_layers = !self.show_layers,
             "view.grid" => self.gridlines = !self.gridlines,
+            "quick.menu" => {
+                let on: Vec<String> = self.title.quick.iter().map(|q| q.0.clone()).collect();
+                let items = self
+                    .quick_choices()
+                    .into_iter()
+                    .map(|(id, label)| MenuItem::new(&format!("quick:{id}"), label).check(on.iter().any(|q| q == id)))
+                    .collect();
+                let r = self.title.rect;
+                self.menu = Some(Menu::new("quick", Rect::new(r.x + 40.0 * self.s, r.bottom(), 0.0, 0.0), items));
+            }
+            "search" => self.title.focus_search(),
             "emb.stitchout" => {
                 if self.stitch_out.take().is_some() {
                     self.stitch_due = None;
@@ -1886,6 +2051,38 @@ impl DrawApp {
                     .button("ok", "OK")
                     .button("cancel", "Cancel"),
             );
+            return;
+        }
+        if let Some(which) = id.strip_prefix("quick:") {
+            let icons: Vec<(&str, &str, &str)> = vec![
+                ("save", "save", "Save (Ctrl+S)"),
+                ("undo", "undo", "Undo (Ctrl+Z)"),
+                ("redo", "redo", "Redo (Ctrl+Y)"),
+                ("new", "save", "New picture (Ctrl+N)"),
+                ("open", "save", "Open (Ctrl+O)"),
+                ("crop", "crop", "Crop"),
+                ("resize", "resize", "Resize"),
+                ("remove-bg", "nobg", "Remove background"),
+                ("pane.layers", "layers", "Layers pane (F7)"),
+            ];
+            if let Some(at) = self.title.quick.iter().position(|q| q.0 == which) {
+                if self.title.quick.len() > 1 {
+                    self.title.quick.remove(at);
+                }
+            } else if let Some((id, icon, tip)) = icons.iter().find(|(i, _, _)| *i == which) {
+                // keep them in the order they are offered in
+                let order: Vec<&str> = self.quick_choices().iter().map(|(i, _)| *i).collect();
+                let at = order.iter().position(|o| *o == *id).unwrap_or(usize::MAX);
+                let pos = self
+                    .title
+                    .quick
+                    .iter()
+                    .position(|q| order.iter().position(|o| *o == q.0).unwrap_or(usize::MAX) > at)
+                    .unwrap_or(self.title.quick.len());
+                self.title.quick.insert(pos, ((*id).into(), (*icon).into(), (*tip).into()));
+            }
+            self.settings.quick = self.title.quick.iter().map(|q| q.0.clone()).collect();
+            self.settings.save();
             return;
         }
         if let Some(v) = id.strip_prefix("frame.loop:").and_then(|s| s.parse::<i32>().ok()) {
