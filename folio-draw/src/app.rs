@@ -123,6 +123,8 @@ pub enum BackPage {
     Open,
     SaveAs,
     PasteFrom,
+    ExportStitches,
+    ImportStitches,
 }
 
 pub struct Back {
@@ -139,6 +141,7 @@ impl Back {
 
 pub enum After {
     New,
+    NewEmb(usize),
     Open(PathBuf),
     Close,
 }
@@ -175,6 +178,10 @@ pub struct DrawApp {
     pub pending: Option<Pending>,
     /// Frames playing: when the next one is due.
     pub playing: Option<Duration>,
+    /// The stitch view: every planned stitch drawn over the picture.
+    pub stitch_view: bool,
+    stitch_cache: Option<(u64, Vec<([u8; 3], Vec<(f32, f32)>)>)>,
+    pub export_ext: String,
     pub text_size: usize,
     pub zoom: f32,
     pub scroll: (f32, f32),
@@ -235,6 +242,9 @@ impl DrawApp {
             multi: None,
             pending: None,
             playing: None,
+            stitch_view: false,
+            stitch_cache: None,
+            export_ext: "pes".into(),
             text_size: 2,
             zoom: 1.0,
             scroll: (0.0, 0.0),
@@ -1317,6 +1327,40 @@ impl DrawApp {
             }
             "pane.layers" => self.show_layers = !self.show_layers,
             "view.grid" => self.gridlines = !self.gridlines,
+            "emb.view" => {
+                self.stitch_view = !self.stitch_view;
+            }
+            "emb.info" => {
+                match crate::emb::make_plan(&self.doc) {
+                    Some(p) => {
+                        let (x0, y0, x1, y1) = p.bounds();
+                        let size = if p.stitch_count() > 0 { format!("{:.1} × {:.1} mm", x1 - x0, y1 - y0) } else { "empty".into() };
+                        let threads: Vec<String> = p.blocks.iter().map(|b| if b.thread.name.is_empty() { format!("#{:02X}{:02X}{:02X}", b.thread.rgb[0], b.thread.rgb[1], b.thread.rgb[2]) } else { b.thread.name.clone() }).collect();
+                        let note = format!(
+                            "{} stitches, {} colour changes, {} trims.\nDesign size: {size}.\nThreads in order: {}.",
+                            p.stitch_count(),
+                            p.blocks.len().saturating_sub(1),
+                            p.count(folio_draw_engine::emb::plan::TRIM),
+                            if threads.is_empty() { "none".to_string() } else { threads.join(", ") }
+                        );
+                        self.dialog = Some(Dialog::new("info", "Stitch information").note(&note).button("ok", "Close"));
+                    }
+                    None => self.flash("This picture isn't an embroidery design."),
+                }
+            }
+            "emb.import" => self.open_back(BackPage::ImportStitches),
+            id if id.starts_with("emb.new:") => {
+                let hoop = id[8..].parse::<usize>().unwrap_or(0);
+                self.request(After::NewEmb(hoop));
+            }
+            id if id.starts_with("emb.export:") => {
+                if crate::emb::settings(&self.doc).is_none() {
+                    self.flash("This picture isn't an embroidery design.");
+                } else {
+                    self.export_ext = id[11..].to_string();
+                    self.open_back(BackPage::ExportStitches);
+                }
+            }
             "frames" => {
                 self.doc.solo = !self.doc.solo;
                 self.playing = None;
@@ -1489,6 +1533,8 @@ impl DrawApp {
                 ],
             ),
             "paste" => Menu::new("paste", rect, vec![MenuItem::new("paste", "Paste").key("Ctrl+V"), MenuItem::new("paste-layer", "Paste as new layer"), MenuItem::new("paste-file", "Paste from file...")]),
+            "emb.new" => Menu::new("emb.new", rect, crate::emb::HOOPS.iter().enumerate().map(|(i, h)| MenuItem::new(&format!("emb.new:{i}"), h.0)).collect()),
+            "emb.export" => Menu::new("emb.export", rect, crate::emb::FORMATS.iter().map(|(e, l)| MenuItem::new(&format!("emb.export:{e}"), l)).collect()),
             "size" => Menu::new("size", rect, SIZES.iter().map(|s| MenuItem::new(&format!("size:{s}"), &format!("{s} px")).check((self.size - s).abs() < 0.01)).collect()),
             "color1" | "color2" => Menu::new(id, rect, vec![MenuItem::new(&format!("edit-color:{id}"), "More colours...")]).with_palette(PALETTE.iter().map(|&c| Color::hex(c)).collect(), 10),
             _ => return,
@@ -1687,6 +1733,47 @@ impl DrawApp {
         }
     }
 
+    /// The planned stitches written as a machine file (the format its name says).
+    pub fn export_stitches(&mut self, p: &Path) -> Result<(), String> {
+        self.commit_pending();
+        let plan = crate::emb::make_plan(&self.doc).ok_or("This picture isn't an embroidery design.")?;
+        let ext = p.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_else(|| "pes".into());
+        let name = p.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+        let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+        let date = civil_date(secs);
+        let bytes = crate::emb::write(&plan, &ext, &name, &date)?;
+        folio_kit::platform::atomic_write(p, &bytes)?;
+        self.flash(&format!("{} stitches saved to {}", plan.stitch_count(), p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()));
+        Ok(())
+    }
+
+    /// A machine file's stitches as a stitch object on a new shape layer.
+    pub fn import_stitches(&mut self, p: &Path) -> Result<(), String> {
+        let data = std::fs::read(p).map_err(|e| e.to_string())?;
+        let ext = p.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
+        let plan = folio_draw_engine::emb::formats::read_named(&data, &ext)?;
+        if crate::emb::settings(&self.doc).is_none() {
+            self.replace(crate::emb::new_doc(0), None);
+        }
+        let blocks: Vec<serde_json::Value> = plan
+            .blocks
+            .iter()
+            .map(|b| {
+                serde_json::json!({
+                    "thread": {"rgb": b.thread.rgb, "name": b.thread.name},
+                    "stop": b.stop,
+                    "pts": b.cmds.iter().map(|c| serde_json::json!([c.0, c.1, c.2])).collect::<Vec<_>>(),
+                })
+            })
+            .collect();
+        let name = p.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "Design".into());
+        let spec = serde_json::json!({"objects": [{"id": 1, "kind": "stitches", "name": name, "blocks": blocks}], "next_id": 2});
+        crate::emb::add_shape_layer(&mut self.doc, &name, &spec);
+        self.doc.label_last("Import stitches");
+        self.stitch_view = true;
+        Ok(())
+    }
+
     pub fn load(path: &Path) -> Result<Doc, String> {
         let b = std::fs::read(path).map_err(|e| format!("Can't open {}: {e}", path.display()))?;
         files::load(&b)
@@ -1716,6 +1803,10 @@ impl DrawApp {
                 self.exit = true;
             }
             After::New => self.replace(Doc::new(1152, 648, [255, 255, 255, 255]), None),
+            After::NewEmb(hoop) => {
+                self.replace(crate::emb::new_doc(hoop), None);
+                self.ribbon.select_tab("embroidery");
+            }
             After::Open(p) => match Self::load(&p) {
                 Ok(d) => {
                     self.settings.add_recent(&p);
@@ -1744,6 +1835,12 @@ impl DrawApp {
         let dir = self.path.as_ref().and_then(|p| p.parent()).map(|p| p.to_path_buf()).unwrap_or_else(folio_kit::platform::home_dir);
         let files = match page {
             BackPage::Open | BackPage::PasteFrom => FilePane::new(&dir, &["png", "jpg", "jpeg", "bmp", "gif", "webp", "tif", "tiff", "ico", "ora", "psd"], false, ""),
+            BackPage::ImportStitches => FilePane::new(&dir, &["pes", "dst", "jef", "exp", "vp3", "xxx", "pec"], false, ""),
+            BackPage::ExportStitches => {
+                let stem = self.path.as_ref().and_then(|p| p.file_stem()).map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "Design".into());
+                let e = self.export_ext.clone();
+                FilePane::new(&dir, &[e.as_str()], true, &format!("{stem}.{e}"))
+            }
             BackPage::SaveAs => {
                 let stem = self.path.as_ref().and_then(|p| p.file_stem()).map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "Untitled".into());
                 FilePane::new(&dir, &["png", "jpg", "bmp", "gif", "webp", "tiff", "ico", "ora", "psd"], true, &format!("{stem}.png"))
@@ -1813,6 +1910,20 @@ impl DrawApp {
                     self.request(After::Open(p));
                     return;
                 }
+                BackPage::ExportStitches => match self.export_stitches(&p) {
+                    Ok(()) => {
+                        self.layout();
+                        return;
+                    }
+                    Err(e) => b.files.error = e,
+                },
+                BackPage::ImportStitches => match self.import_stitches(&p) {
+                    Ok(()) => {
+                        self.layout();
+                        return;
+                    }
+                    Err(e) => b.files.error = e,
+                },
                 BackPage::PasteFrom => {
                     match std::fs::read(&p).map_err(|e| e.to_string()).and_then(|b| files::decode(&b)) {
                         Ok((w, h, px)) => {
@@ -1933,6 +2044,8 @@ impl DrawApp {
             rulers: self.rulers,
             frames: self.doc.solo,
             playing: self.playing.is_some(),
+            emb: !self.doc.emb.is_empty(),
+            stitch_view: self.stitch_view,
         }
     }
 
@@ -2100,6 +2213,31 @@ impl DrawApp {
             let p = to((x as f32, y as f32));
             ants(&mut cv, Rect::new(p.0, p.1, w as f32 * self.zoom, h as f32 * self.zoom));
         }
+        if self.stitch_view {
+            let ch = self.doc.changes;
+            if self.stitch_cache.as_ref().map(|c| c.0 != ch).unwrap_or(true) {
+                let lines = crate::emb::make_plan(&self.doc).map(|p| crate::emb::stitch_lines(&self.doc, &p)).unwrap_or_default();
+                self.stitch_cache = Some((ch, lines));
+            }
+            if let Some((_, lines)) = &self.stitch_cache {
+                let w = (0.35 * crate::emb::PX_PER_MM * self.zoom).max(1.0);
+                for (rgb, run) in lines {
+                    let mut pb = sk::PathBuilder::new();
+                    for (i, q) in run.iter().enumerate() {
+                        let t = ((q.0 - self.scroll.0) * self.zoom, (q.1 - self.scroll.1) * self.zoom);
+                        if i == 0 {
+                            pb.move_to(t.0, t.1);
+                        } else {
+                            pb.line_to(t.0, t.1);
+                        }
+                    }
+                    if let Some(path) = pb.finish() {
+                        let stroke = sk::Stroke { width: w, line_cap: sk::LineCap::Round, line_join: sk::LineJoin::Round, ..Default::default() };
+                        cv.stroke_path(&path, &gfx::paint(Color::rgb(rgb[0], rgb[1], rgb[2])), &stroke, sk::Transform::identity(), None);
+                    }
+                }
+            }
+        }
         gfx::blit_copy(pm, &cv, c.x as i32, c.y as i32);
     }
 
@@ -2194,6 +2332,8 @@ impl DrawApp {
         let main = Rect::new(left.w, top, self.w - left.w, self.h - top);
         gfx::fill_rect(cx.pm, main, theme.window);
         let heading = match b.page {
+            BackPage::ExportStitches => "Export stitches",
+            BackPage::ImportStitches => "Import stitches",
             BackPage::Open => "Open",
             BackPage::PasteFrom => "Paste from",
             BackPage::SaveAs => "Save As",
@@ -2221,6 +2361,24 @@ impl DrawApp {
         }
         b.files.paint(&mut cx, Rect::new(fx, top + 70.0 * s, main.right() - fx - 32.0 * s, main.h - 90.0 * s));
     }
+}
+
+/// YYYYMMDDhhmmss from seconds since 1970 (UTC), for the files that record when they were made.
+fn civil_date(secs: u64) -> String {
+    let days = (secs / 86400) as i64;
+    let rem = secs % 86400;
+    let (z, era);
+    z = days + 719468;
+    era = z.div_euclid(146097);
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    format!("{y:04}{m:02}{d:02}{:02}{:02}{:02}", rem / 3600, rem / 60 % 60, rem % 60)
 }
 
 fn square(a: Pt, p: Pt, line: bool) -> Pt {
@@ -2255,6 +2413,8 @@ pub struct St {
     pub rulers: bool,
     pub frames: bool,
     pub playing: bool,
+    pub emb: bool,
+    pub stitch_view: bool,
 }
 
 impl CommandState for St {
@@ -2263,6 +2423,7 @@ impl CommandState for St {
             "undo" => self.can_undo,
             "redo" => self.can_redo,
             "crop" => self.has_sel,
+            "emb.view" | "emb.info" | "emb.export" => self.emb,
             _ => true,
         }
     }
@@ -2273,6 +2434,7 @@ impl CommandState for St {
             "view.grid" => self.grid,
             "view.rulers" => self.rulers,
             "frames" => self.frames,
+            "emb.view" => self.stitch_view,
             "frame.play" => self.playing,
             t => t.strip_prefix("tool.").map(|t| t == self.tool.id()).unwrap_or(false),
         }

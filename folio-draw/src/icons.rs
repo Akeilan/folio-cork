@@ -42,6 +42,11 @@ const ICONS: &[(&str, &str)] = &[
     ("frame-prev", "<path d='M15 6l-6 6 6 6'/>"),
     ("frame-next", "<path d='M9 6l6 6-6 6'/>"),
     ("frame-play", "<path d='M8 5l11 7-11 7z'/>"),
+    ("hoop", "<circle cx='12' cy='12' r='8'/><circle cx='12' cy='12' r='6'/><path d='M12 2v3'/>"),
+    ("emb-import", "<path d='M12 3v11M8 10l4 4 4-4'/><path d='M4 17v3h16v-3'/>"),
+    ("emb-export", "<path d='M12 14V3M8 7l4-4 4 4'/><path d='M4 17v3h16v-3'/>"),
+    ("stitches", "<path d='M4 8l4 8M8 8l4 8M12 8l4 8M16 8l4 8' stroke-dasharray='2 1.5'/>"),
+    ("emb-info", "<circle cx='12' cy='12' r='9'/><path d='M12 11v6M12 7.5v.5'/>"),
     ("invert", "<circle cx='12' cy='12' r='8'/><path d='M12 4a8 8 0 0 1 0 16z' fill='currentColor'/>"),
 ];
 

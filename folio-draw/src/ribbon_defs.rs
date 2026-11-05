@@ -100,5 +100,27 @@ pub fn tabs() -> Vec<Tab> {
                 ),
             ],
         ),
+        Tab::new(
+            "embroidery",
+            "Embroidery",
+            "M",
+            vec![
+                Group::new(
+                    "Design",
+                    vec![
+                        I::large("emb.new", "New embroidery", "hoop").menu().desc("A new design the size of a hoop."),
+                        I::large("emb.import", "Import stitches", "emb-import").desc("Open a machine file (PES, DST, JEF, EXP, VP3, XXX, PEC) as a stitch object."),
+                    ],
+                ),
+                Group::new(
+                    "Stitches",
+                    vec![
+                        I::large("emb.view", "Stitch view", "stitches").desc("Show every planned stitch over the picture."),
+                        I::large("emb.info", "Stitch information", "emb-info"),
+                        I::large("emb.export", "Export stitches", "emb-export").menu().desc("Save the design as a file for the embroidery machine."),
+                    ],
+                ),
+            ],
+        ),
     ]
 }
