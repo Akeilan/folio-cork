@@ -185,6 +185,17 @@ impl UiTest {
             key(app, h, r, Key::Char('g'), Mods { ctrl: true, shift: true, ..Mods::NONE });
             check(g && !app.ed.pg().shapes.iter().any(|s| s.is_group()), "grouping failed")
         });
+        step!("copy leaves a diagram picture for the other apps", |app: &mut CorkApp, h: &mut dyn Host, r: &mut Res| {
+            let ids: Vec<u64> = app.ed.pg().shapes.iter().filter(|s| s.kind == "rect" || s.kind == "ellipse").map(|s| s.id).collect();
+            app.ed.sel = ids.clone();
+            let f = folio_kit::platform::config_dir("folio-cork").join("clipboard.png");
+            let _ = std::fs::remove_file(&f);
+            key(app, h, r, Key::Char('c'), ctrl());
+            let png = std::fs::read(&f).map_err(|_| "no clipboard.png after Copy".to_string())?;
+            let board = crate::files::board_in_png(&png).ok_or("clipboard.png carries no drawing")?;
+            let doc = crate::vsdx::read(&board)?;
+            check(doc.pages[0].shapes.len() >= ids.len(), &format!("{} shapes in the copied diagram", doc.pages[0].shapes.len()))
+        });
         step!("align from the Arrange tab", |app: &mut CorkApp, h: &mut dyn Host, r: &mut Res| {
             let ids: Vec<u64> = app.ed.pg().shapes.iter().filter(|s| s.kind == "rect" || s.kind == "sticky").map(|s| s.id).collect();
             app.ed.sel = ids.clone();

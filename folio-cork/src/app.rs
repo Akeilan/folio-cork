@@ -1183,6 +1183,20 @@ impl CorkApp {
             let im = folio_kit::platform::Image { w: img.width(), h: img.height(), rgba };
             host.set_clipboard_image(&im);
             crate::settings::store_clip(&shapes, &imgs, &im);
+            let mut d = Document { pages: vec![], images: self.ed.doc.images.clone(), next_id: self.ed.doc.next_id };
+            for (k, v) in &imgs {
+                d.images.insert(k.clone(), v.clone());
+            }
+            let mut page = Page { shapes: shapes.clone(), ..Default::default() };
+            let layer = page.layers.first().map(|l| l.id).unwrap_or(0);
+            for s in page.shapes.iter_mut() {
+                s.layer = layer;
+            }
+            d.pages.push(page);
+            d.prune_images();
+            if let Ok(board) = crate::vsdx::write(&d) {
+                crate::settings::store_clip_board(&files::with_chunk(&gfx::encode_png(&img), files::BOARD_CHUNK, &board));
+            }
         }
     }
 
@@ -1293,7 +1307,7 @@ impl CorkApp {
             After::Open(p) => match files::load(&p) {
                 Ok(doc) => {
                     let mut ed = Editor::new(doc);
-                    ed.path = if p.extension().map(|e| e == "vsdx").unwrap_or(false) { Some(p.clone()) } else { None };
+                    ed.path = if files::keeps_path(&p) { Some(p.clone()) } else { None };
                     std::mem::swap(&mut self.ed, &mut ed);
                     self.carry_settings(&ed);
                     self.settings.add_recent(&p);

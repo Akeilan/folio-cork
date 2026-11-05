@@ -319,3 +319,30 @@ fn partial_redraw_matches_full_redraw() {
     }
     assert_eq!(diff, 0, "partial redraw differs from a full redraw in {diff} pixels");
 }
+
+#[test]
+fn diagram_picture_carries_the_drawing() {
+    // K3-08: the picture Page, Sheet and Show hold opens in Cork again, and saves back as one
+    let mut e = ed();
+    let a = e.insert_kind_at("rect", 100.0, 100.0);
+    let b = e.insert_kind_at("ellipse", 400.0, 300.0);
+    e.add_connector(End::glued(a, None), End::glued(b, None));
+    let png = crate::files::board_png(&e.doc).unwrap();
+    let pm = folio_kit::gfx::decode_image(&png).expect("still an ordinary picture");
+    assert!(pm.width() > 100 && pm.height() > 100);
+    let back = crate::vsdx::read(&crate::files::board_in_png(&png).unwrap()).unwrap();
+    assert_eq!(back.pages[0].shapes.len(), e.doc.pages[0].shapes.len());
+    // a damaged chunk is ignored, a plain picture has none
+    let mut bad = png.clone();
+    let n = bad.len();
+    bad[n - 20] ^= 0xFF;
+    assert!(crate::files::board_in_png(&bad).is_none());
+    assert!(crate::files::board_in_png(&folio_kit::gfx::encode_png(&pm)).is_none());
+    // save to the picture's own path and open it again
+    let p = std::env::temp_dir().join(format!("cork-diagram-{}.png", std::process::id()));
+    crate::files::save(&e.doc, &p).unwrap();
+    assert!(crate::files::keeps_path(&p));
+    let again = crate::files::load(&p).unwrap();
+    assert_eq!(again.pages[0].shapes.len(), 3);
+    let _ = std::fs::remove_file(&p);
+}

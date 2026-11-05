@@ -97,7 +97,7 @@ fn main() {
     }
     let (doc, path, err) = match &file {
         Some(p) => match files::load(p) {
-            Ok(d) => (d, if p.extension().map(|e| e == "vsdx").unwrap_or(false) { Some(p.clone()) } else { None }, None),
+            Ok(d) => (d, if files::keeps_path(p) { Some(p.clone()) } else { None }, None),
             Err(e) => (model::Document::default(), None, Some(e)),
         },
         None => (model::Document::default(), None, None),

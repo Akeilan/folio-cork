@@ -74,6 +74,9 @@ impl Settings {
     }
 
     pub fn add_recent(&mut self, p: &Path) {
+        if p.extension().map(|e| e.eq_ignore_ascii_case("png")).unwrap_or(false) {
+            return; // a diagram being edited for another app, not a drawing of the user's own
+        }
         let p = std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf()).to_string_lossy().to_string();
         self.recent.retain(|x| *x != p);
         self.recent.insert(0, p);
@@ -151,6 +154,14 @@ pub fn store_clip(shapes: &[Shape], images: &[(String, ImageData)], img: &folio_
     if let Ok(s) = serde_json::to_string(&c) {
         let _ = folio_kit::platform::atomic_write(&d.join("clipboard.json"), s.as_bytes());
     }
+}
+
+/// The same copy as a diagram picture (K3-08), for Page, Sheet and Show: when the picture they
+/// paste matches this one, they paste this file instead and the diagram stays editable.
+pub fn store_clip_board(png: &[u8]) {
+    let d = dir();
+    let _ = std::fs::create_dir_all(&d);
+    let _ = folio_kit::platform::atomic_write(&d.join("clipboard.png"), png);
 }
 
 pub fn match_clip(img: &folio_kit::platform::Image) -> Option<(Vec<Shape>, Vec<(String, ImageData)>)> {

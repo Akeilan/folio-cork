@@ -11,6 +11,7 @@ Diagrams, whiteboards and mood boards for Folio Studio. Cork is written in Rust 
   - A title bar in the app colour, menus, dialogs, a file browser, light and dark themes.
   - Deterministic maths.
 - `folio-cork`: the app.
+  - Diagrams in Page, Sheet and Show: Copy in Cork and paste there. The picture carries the drawing, and double-clicking it opens it in Cork again. The format is in [docs/FORMATS.md](docs/FORMATS.md).
 - `fonts`: the fonts that ship with Folio (Carlito, Liberation Serif, Liberation Mono; Latin, Greek and Cyrillic).
 - `docs`: [portability rules](docs/PORTABILITY.md), [file and wire formats](docs/FORMATS.md), [platform contract](docs/PLATFORM.md).
 
