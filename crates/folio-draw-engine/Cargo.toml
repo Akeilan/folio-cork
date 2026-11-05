@@ -1,0 +1,9 @@
+[package]
+name = "folio-draw-engine"
+version = "0.3.0"
+edition = "2021"
+description = "Folio Draw's engine: layers, brushes, shapes, selection, undo, embroidery and its own image codecs"
+
+# Only the deterministic maths: every codec and raster routine is written here.
+[dependencies]
+folio-math = { version = "0.3.0", path = "../folio-math" }
