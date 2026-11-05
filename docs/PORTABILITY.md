@@ -23,7 +23,7 @@ Every Folio app written in Rust follows these rules. `tools/check-portability.sh
 - The pixel tests use only the fonts that ship with Folio (`Text::bundled`), so a page draws the same on every machine.
 - Checked by:
   - `cargo test`: the stored pictures in `crates/folio-kit/tests/golden` and the stored fingerprints of rendered pages and exported SVG and PDF in `folio-cork/tests/golden.txt`;
-  - the release run, which repeats the tests built for the build machine's own CPU (AVX2, FMA), and again for ARM64 (the Pi 4B's CPU, with the renderer's NEON paths) under qemu. All of them must give the stored pixels and file fingerprints.
+  - `PORTS=1 tools/release.sh`, which repeats the tests built for the build machine's own CPU (AVX2, FMA), and again for ARM64 (the Pi 4B's CPU, with the renderer's NEON paths) under qemu. All of them must give the stored pixels and file fingerprints. These are not part of an ordinary release: see "What a release is tested on" below.
 - Known limit: the renderer works out its own curve geometry with the system's maths library in two places (rotating by an angle, which Folio doesn't use, and splitting some cubic curves). That can move an anti-aliased edge pixel on screen between systems. Saved files and exported SVG and PDF are not affected.
 
 ## 4. File formats are defined to the byte
@@ -31,7 +31,16 @@ Every Folio app written in Rust follows these rules. `tools/check-portability.sh
 - Little-endian, UTF-8, documented in `docs/FORMATS.md`. JSON numbers are written in the shortest form that reads back exactly.
 - A format change bumps its `format` number, and readers keep reading every older number.
 
-## 5. The Raspberry Pi 4B is the floor
+## 5. What a release is tested on
+
+A release must pass on Linux: Ubuntu 22.04 and 24.04, X11 and Wayland. That is the bar for every
+app, and it is all `tools/release.sh` runs by default. The rules above keep other processors and
+operating systems reachable, but their checks run only when asked for: `PORTS=1 tools/release.sh`
+adds the AVX2/FMA build, the ARM64 run under qemu and the Pi budgets. The suite is developed and
+used on Zorin OS (Product Owner, 2026-11-05), so Linux is what releases are held to while the apps
+are still growing.
+
+## 6. The Raspberry Pi 4B is the floor
 
 On a Pi 4B, the suite has to be usable, not optimal (Product Owner, 2026-11-04). Faster machines do much better.
 
