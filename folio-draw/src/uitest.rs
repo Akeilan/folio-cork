@@ -941,6 +941,53 @@ impl UiTest {
             app.ribbon.collapsed = false;
             Ok(())
         });
+        step!("the Text tool's font, underline and filled box", |app: &mut DrawApp, h: &mut dyn Host, r: &mut Res| {
+            app.saved_for_test();
+            app.command("new", h);
+            ev(app, h, r, Event::MouseMove { x: 1.0, y: 1.0 });
+            app.c1 = [0, 0, 0, 255];
+            app.c2 = [237, 28, 36, 255];
+            app.set_tool(Tool::Text);
+            let fonts = app.text_fonts();
+            check(fonts.len() > 1 && fonts[0].is_empty(), &format!("{} fonts, first {:?}", fonts.len(), fonts.first()))?;
+            let carlito = fonts.iter().position(|f| f == "Carlito").ok_or("Carlito isn't offered")?;
+            click_on(app, h, r, 80.0, 80.0, Button::Left);
+            let d = app.dialog.as_mut().ok_or("the Text box didn't open")?;
+            d.set_choice("font", carlito);
+            d.set_choice("size", 4);
+            key(app, h, r, Key::Char('u'), Mods { ctrl: true, ..Mods::NONE });
+            let d = app.dialog.as_mut().ok_or("the box closed")?;
+            d.set_check_for_test("underline", true);
+            d.set_check_for_test("opaque", true);
+            ev(app, h, r, Event::Text("Pint".into()));
+            key(app, h, r, Key::Enter, Mods::NONE);
+            check(app.dialog.is_none(), "the box stayed open")?;
+            check(app.text_font == carlito && app.text_underline && app.text_opaque, &format!("choices {} {} {}", app.text_font, app.text_underline, app.text_opaque))?;
+            let tl = app.doc.layers.len() - 1;
+            let spec: serde_json::Value = serde_json::from_str(&app.doc.layers[tl].text).map_err(|e| e.to_string())?;
+            check(spec["font_family"] == "Carlito", &format!("family {:?}", spec["font_family"]))?;
+            check(spec["underline"] == true && spec["text_opaque"] == true, "the spec forgot the choices")?;
+            // the box behind is filled with colour 2, and the letters are drawn on it
+            let (x, y) = (84usize, 84);
+            let c = px(app, x, y);
+            check(c[3] == 255, &format!("the box isn't opaque: {c:?}"))?;
+            let red = (80..200).any(|dx| (80..140).any(|dy| {
+                let q = px(app, dx, dy);
+                q[0] > 200 && q[1] < 80
+            }));
+            check(red, "no colour 2 behind the words")?;
+            let dark = (80..200).any(|dx| (80..140).any(|dy| px(app, dx, dy)[0] < 80));
+            check(dark, "the words aren't drawn")?;
+            // typing it again offers the same font back
+            click_on(app, h, r, 86.0, 86.0, Button::Left);
+            let d = app.dialog.as_ref().ok_or("it didn't reopen")?;
+            check(d.value("text") == "Pint" && d.choice_index("font") == carlito, &format!("{:?} font {}", d.value("text"), d.choice_index("font")))?;
+            key(app, h, r, Key::Escape, Mods::NONE);
+            app.text_underline = false;
+            app.text_opaque = false;
+            app.text_font = 0;
+            Ok(())
+        });
         step!("page setup lays the picture out, and Print makes the pages", |app: &mut DrawApp, h: &mut dyn Host, r: &mut Res| {
             app.saved_for_test();
             app.command("new", h);
