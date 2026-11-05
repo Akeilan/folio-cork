@@ -66,6 +66,13 @@ pub fn tabs() -> Vec<Tab> {
                     ],
                 ),
                 Group::new(
+                    "Show",
+                    vec![
+                        I::small("view.rulers", "Rulers", "rulers").key("Ctrl+R"),
+                        I::small("view.grid", "Gridlines", "grid").key("Ctrl+G").desc("A line round every pixel, from 200% up."),
+                    ],
+                ),
+                Group::new(
                     "Layers",
                     vec![
                         I::large("pane.layers", "Layers", "layers").key("F7").desc("Show or hide the Layers pane."),

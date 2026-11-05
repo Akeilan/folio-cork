@@ -34,6 +34,8 @@ const ICONS: &[(&str, &str)] = &[
     ("flatten", "<path d='M4 10h16M4 14h16'/><path d='M12 3v5M9 5l3 3 3-3M12 21v-5M9 19l3-3 3 3'/>"),
     ("text", "<path d='M5 6V4h14v2M12 4v16M9 20h6'/>"),
     ("adjust", "<circle cx='12' cy='12' r='3'/><path d='M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1'/>"),
+    ("rulers", "<rect x='3' y='8' width='18' height='8' rx='1'/><path d='M7 8v3M11 8v4M15 8v3M19 8v4'/>"),
+    ("grid", "<rect x='4' y='4' width='16' height='16'/><path d='M4 9.3h16M4 14.6h16M9.3 4v16M14.6 4v16'/>"),
     ("invert", "<circle cx='12' cy='12' r='8'/><path d='M12 4a8 8 0 0 1 0 16z' fill='currentColor'/>"),
 ];
 

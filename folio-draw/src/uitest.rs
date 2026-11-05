@@ -375,6 +375,27 @@ impl UiTest {
             key(app, h, r, Key::F(7), Mods::NONE);
             check(!app.show_layers, "F7 didn't hide the pane")
         });
+        step!("rulers, gridlines and nudging the selection", |app: &mut DrawApp, h: &mut dyn Host, r: &mut Res| {
+            let x0 = app.canvas.x;
+            key(app, h, r, Key::Char('r'), ctrl());
+            check(app.rulers && app.canvas.x > x0, "rulers took no room")?;
+            key(app, h, r, Key::Char('g'), ctrl());
+            check(app.gridlines, "gridlines off")?;
+            app.set_zoom(8.0, None);
+            let pm = shot(app, r);
+            let _ = pm;
+            key(app, h, r, Key::Char('r'), ctrl());
+            key(app, h, r, Key::Char('g'), ctrl());
+            app.command("zoom.fit", h);
+            app.set_tool(Tool::Select);
+            app.doc.sel_rect(10, 10, 20, 20);
+            let before = px(app, 15, 15);
+            key(app, h, r, Key::Right, Mods { shift: true, ..Mods::NONE });
+            let f = app.doc.float.as_ref().ok_or("arrow didn't lift the selection")?;
+            check(f.x == 20 && f.y == 10, &format!("float at {},{}", f.x, f.y))?;
+            key(app, h, r, Key::Escape, Mods::NONE);
+            check(px(app, 25, 15) == before, "the moved pixels aren't 10 px right")
+        });
         step!("dark theme", |app: &mut DrawApp, _h: &mut dyn Host, r: &mut Res| {
             app.theme = folio_kit::theme::Theme::new(true, crate::app::MAROON, crate::app::ACCENT);
             let pm = shot(app, r);
