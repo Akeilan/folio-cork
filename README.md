@@ -1,6 +1,6 @@
 # Folio Cork
 
-Diagrams, whiteboards and mood boards for Folio Studio. Cork is written in Rust on Folio's portable platform layer and toolkit, the base every Folio app moves to.
+Diagrams, whiteboards and mood boards for Folio Studio. Cork is written in Rust on Folio's portable platform layer and toolkit, the base every Folio app moves to. Draw is the next app being moved onto it.
 
 - `crates/folio-platform`: the only code that talks to the operating system.
   - Covers the window, input, clipboard, sound, files, sockets, threads and printing.
@@ -12,6 +12,9 @@ Diagrams, whiteboards and mood boards for Folio Studio. Cork is written in Rust 
   - Deterministic maths.
 - `folio-cork`: the app.
   - Diagrams in Page, Sheet and Show: Copy in Cork and paste there. The picture carries the drawing, and double-clicking it opens it in Cork again. The format is in [docs/FORMATS.md](docs/FORMATS.md).
+- `folio-draw`: Folio Draw moving to this base (D3-06).
+  - The GTK version keeps shipping until this one passes its tests; this one isn't packaged yet.
+  - Its engine is `crates/folio-draw-engine`, with no dependencies beyond `crates/folio-math` (the deterministic maths every engine shares).
 - `fonts`: the fonts that ship with Folio (Carlito, Liberation Serif, Liberation Mono; Latin, Greek and Cyrillic).
 - `docs`: [portability rules](docs/PORTABILITY.md), [file and wire formats](docs/FORMATS.md), [platform contract](docs/PLATFORM.md).
 
@@ -24,4 +27,5 @@ Diagrams, whiteboards and mood boards for Folio Studio. Cork is written in Rust 
 | `tools/conformance.sh` | Window conformance on a real display (X11, or Wayland through Weston). |
 | `folio-cork --ui-test DIR [--headless]` | The window test, in a window or in memory. |
 | `folio-cork --bench` | The Raspberry Pi 4B budgets. |
+| `folio-draw --ui-test DIR [--headless]` | Draw's window test. |
 | `tools/release.sh` | All of the above, the .deb built on 22.04, the installed tests on three machines, and the Wayland pass. |
