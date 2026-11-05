@@ -683,6 +683,90 @@ impl UiTest {
             check(back.emb == app.doc.emb, &format!("the .ora lost the settings: {:?} vs {:?}", back.emb, app.doc.emb))?;
             check(crate::emb::layer_spec(&back, back.layers.len() - 1).is_some(), "the .ora lost the shapes")
         });
+        step!("how many times a saved animation plays", |app: &mut DrawApp, h: &mut dyn Host, r: &mut Res| {
+            ribbon_click(app, h, r, "view", "frame.loop")?;
+            let m = app.menu.as_ref().ok_or("the Plays menu didn't open")?;
+            check(m.items.len() == crate::app::GIF_LOOPS.len(), &format!("{} choices", m.items.len()))?;
+            app.menu = None;
+            app.saved_for_test();
+            app.menu_pick_for_test("frame.loop", "frame.loop:4");
+            check(app.doc.gif_loop == 4, &format!("gif_loop {}", app.doc.gif_loop))?;
+            check(app.dirty(), "a loop count can't be saved")?;
+            app.menu_pick_for_test("frame.loop", "frame.loop:0");
+            check(app.doc.gif_loop == 0, "back to forever")
+        });
+        step!("Remove background cuts the subject out", |app: &mut DrawApp, h: &mut dyn Host, r: &mut Res| {
+            app.saved_for_test();
+            app.command("new", h);
+            ev(app, h, r, Event::MouseMove { x: 1.0, y: 1.0 });
+            let (w, hh) = (app.doc.w as f32, app.doc.h as f32);
+            app.c2 = [237, 28, 36, 255];
+            app.shape_fill = true;
+            app.set_tool(Tool::Ellipse);
+            drag_on(app, h, r, (w * 0.3, hh * 0.3), (w * 0.7, hh * 0.7), Button::Left);
+            app.shape_fill = false;
+            let mid = px(app, app.doc.w / 2, app.doc.h / 2);
+            check(mid[0] > 200 && mid[1] < 80, &format!("no red subject: {mid:?}"))?;
+            app.command("remove-bg", h);
+            let corner = px(app, 4, 4);
+            check(corner[3] == 0, &format!("the background is still there: {corner:?}"))?;
+            let mid = px(app, app.doc.w / 2, app.doc.h / 2);
+            check(mid[3] == 255 && mid[0] > 200, &format!("the subject went too: {mid:?}"))?;
+            key(app, h, r, Key::Char('z'), ctrl());
+            check(px(app, 4, 4)[3] == 255, "undo didn't bring the background back")?;
+            let (_, redo) = app.doc.history();
+            check(redo == vec!["Remove background"], &format!("not one undo step: {redo:?}"))
+        });
+        step!("the magic wand's tolerance and sample-all are kept", |app: &mut DrawApp, h: &mut dyn Host, r: &mut Res| {
+            app.command("wand-settings", h);
+            shot(app, r);
+            check(app.dialog.is_some(), "the Magic wand box didn't open")?;
+            ev(app, h, r, Event::Text("80".into()));
+            key(app, h, r, Key::Enter, Mods::NONE);
+            check(app.dialog.is_none(), "the box stayed open")?;
+            check((app.wand_tol - 80.0).abs() < 0.01, &format!("tolerance {}", app.wand_tol))?;
+            app.command("select-sample-all", h);
+            check(app.doc.sample_all, "Sample all layers didn't come on")?;
+            app.remember();
+            let st = crate::settings::Settings::load();
+            check((st.wand_tol - 80.0).abs() < 0.01 && st.sample_all, &format!("not kept: {} {}", st.wand_tol, st.sample_all))?;
+            app.command("select-sample-all", h);
+            check(!app.doc.sample_all, "it didn't go off again")
+        });
+        step!("the stabilizer steadies a hand-drawn line", |app: &mut DrawApp, h: &mut dyn Host, r: &mut Res| {
+            app.saved_for_test();
+            app.command("new", h);
+            ev(app, h, r, Event::MouseMove { x: 1.0, y: 1.0 });
+            app.set_tool(Tool::Pencil);
+            app.command("stabilizer", h);
+            shot(app, r);
+            check(app.dialog.is_some(), "the Stabilizer box didn't open")?;
+            ev(app, h, r, Event::Text("100".into()));
+            key(app, h, r, Key::Enter, Mods::NONE);
+            check(app.stab[0][0] == 100, &format!("StreamLine {:?}", app.stab[0]))?;
+            // a zigzag: with the line on a long string the peaks are cut off
+            let y0 = app.doc.h as f32 * 0.5;
+            let a = sp(app, 100.0, y0);
+            ev(app, h, r, Event::MouseMove { x: a.0, y: a.1 });
+            ev(app, h, r, Event::MouseDown { x: a.0, y: a.1, button: Button::Left, clicks: 1 });
+            for i in 1..=12 {
+                let q = sp(app, 100.0 + i as f32 * 20.0, y0 + if i % 2 == 0 { -60.0 } else { 60.0 });
+                ev(app, h, r, Event::MouseMove { x: q.0, y: q.1 });
+            }
+            let e = sp(app, 340.0, y0);
+            ev(app, h, r, Event::MouseMove { x: e.0, y: e.1 });
+            ev(app, h, r, Event::MouseUp { x: e.0, y: e.1, button: Button::Left });
+            let flat = app.doc.flatten_rgba();
+            let dw = app.doc.w;
+            let inked = |x: i32, dy: i32| flat[(((y0 as i32 + dy) as usize) * dw + x as usize) * 4] < 200;
+            let band = |lo: i32, hi: i32| (100..=340).any(|x| (lo..=hi).any(|dy| inked(x, dy)));
+            let rows: Vec<i32> = (-70..=70).filter(|dy| (100..=340).any(|x| inked(x, *dy))).collect();
+            check(!band(-60, -45) && !band(45, 60), &format!("the peaks of the zigzag are still there: rows {:?} to {:?}", rows.first(), rows.last()))?;
+            check(band(-20, 20), "the stabilized line isn't there at all")?;
+            app.stab = [[0; 3]; 3];
+            app.remember();
+            Ok(())
+        });
         step!("dark theme", |app: &mut DrawApp, _h: &mut dyn Host, r: &mut Res| {
             app.theme = folio_kit::theme::Theme::new(true, crate::app::MAROON, crate::app::ACCENT);
             let pm = shot(app, r);
