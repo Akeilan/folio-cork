@@ -282,6 +282,34 @@ impl UiTest {
             app.ribbon.select_tab("home");
             Ok(())
         });
+        step!("canvas size, rotate by angle, skew and a typed colour", |app: &mut DrawApp, h: &mut dyn Host, r: &mut Res| {
+            let (w, hh) = (app.doc.w, app.doc.h);
+            app.command("canvas-size", h);
+            shot(app, r);
+            ev(app, h, r, Event::Text((w + 100).to_string()));
+            key(app, h, r, Key::Enter, Mods::NONE);
+            check(app.doc.w == w + 100 && app.doc.h == hh, &format!("canvas {}x{}", app.doc.w, app.doc.h))?;
+            app.command("rotate.angle", h);
+            shot(app, r);
+            ev(app, h, r, Event::Text("45".into()));
+            key(app, h, r, Key::Enter, Mods::NONE);
+            check(app.doc.w > w + 100 && app.doc.h > hh, &format!("rotated 45: {}x{}", app.doc.w, app.doc.h))?;
+            key(app, h, r, Key::Char('z'), ctrl());
+            check(app.doc.w == w + 100, "undo rotate")?;
+            app.command("skew", h);
+            shot(app, r);
+            ev(app, h, r, Event::Text("20".into()));
+            key(app, h, r, Key::Enter, Mods::NONE);
+            check(app.doc.w > w + 100, &format!("skewed width {}", app.doc.w))?;
+            key(app, h, r, Key::Char('z'), ctrl());
+            key(app, h, r, Key::Char('z'), ctrl());
+            check(app.doc.w == w && app.doc.h == hh, "undo back to the start")?;
+            app.menu_pick_for_test("color1", "edit-color:color1");
+            shot(app, r);
+            ev(app, h, r, Event::Text("#123456".into()));
+            key(app, h, r, Key::Enter, Mods::NONE);
+            check(app.c1 == [0x12, 0x34, 0x56, 255], &format!("colour 1 is {:?}", app.c1))
+        });
         step!("zoom from the View tab", |app: &mut DrawApp, h: &mut dyn Host, r: &mut Res| {
             ribbon_click(app, h, r, "view", "zoom.100")?;
             check((app.zoom - 1.0).abs() < 0.001, "100% isn't 1")?;
