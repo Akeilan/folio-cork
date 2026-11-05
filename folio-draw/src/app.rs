@@ -99,6 +99,23 @@ enum Drag {
     Lasso(Vec<Pt>),
     Move { start: Pt, orig: (i32, i32) },
     Pan { start: (f32, f32), scroll: (f32, f32) },
+    PendMove { start: Pt, orig: Pending },
+    PendResize { handle: usize, orig: Pending },
+}
+
+/// A shape just drawn that can still be moved and resized before it is kept.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Pending {
+    pub tool: Tool,
+    pub a: Pt,
+    pub b: Pt,
+    pub color: [u8; 4],
+}
+
+impl Pending {
+    pub fn bbox(&self) -> (f32, f32, f32, f32) {
+        (self.a.0.min(self.b.0), self.a.1.min(self.b.1), self.a.0.max(self.b.0), self.a.1.max(self.b.1))
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -155,6 +172,7 @@ pub struct DrawApp {
     text_edit: Option<usize>,
     /// A polygon or curve being made over several clicks: its points and colour.
     pub multi: Option<(Tool, Vec<Pt>, [u8; 4], u8)>,
+    pub pending: Option<Pending>,
     pub text_size: usize,
     pub zoom: f32,
     pub scroll: (f32, f32),
@@ -174,7 +192,7 @@ pub struct DrawApp {
     pub exit: bool,
     pub code: i32,
     pub flash: Option<(String, Duration)>,
-    pending: Option<After>,
+    then: Option<After>,
     pub after: Option<After>,
     pub res: Option<Res>,
     pm: Option<sk::Pixmap>,
@@ -213,6 +231,7 @@ impl DrawApp {
             text_at: None,
             text_edit: None,
             multi: None,
+            pending: None,
             text_size: 2,
             zoom: 1.0,
             scroll: (0.0, 0.0),
@@ -232,7 +251,7 @@ impl DrawApp {
             exit: false,
             code: 0,
             flash: None,
-            pending: None,
+            then: None,
             after: None,
             res: Some(Res { text: Text::bundled(), icons }),
             pm: None,
@@ -590,6 +609,11 @@ impl DrawApp {
                     self.scroll.1 += dy as f32 * 20.0 / self.zoom;
                 }
             }
+            Key::Escape if self.pending.is_some() && self.drag.is_none() => {
+                self.pending = None;
+                self.doc.op_cancel();
+            }
+            Key::Enter if self.pending.is_some() => self.commit_pending(),
             Key::Escape if self.multi.is_some() => {
                 self.multi = None;
                 self.doc.op_cancel();
@@ -626,6 +650,7 @@ impl DrawApp {
     }
 
     pub fn set_tool(&mut self, t: Tool) {
+        self.commit_pending();
         if self.multi.take().is_some() {
             self.doc.op_cancel();
         }
@@ -648,6 +673,12 @@ impl DrawApp {
 
     fn press(&mut self, x: f32, y: f32, button: Button, clicks: u32) {
         let p = self.to_doc(x, y);
+        if self.pending.is_some() && button == Button::Left && self.pending_press(p, x, y) {
+            return;
+        }
+        if button != Button::Middle {
+            self.commit_pending();
+        }
         if self.multi.is_some() || matches!(self.tool, Tool::Polygon | Tool::Curve) {
             if button != Button::Middle {
                 self.multi_press(p, x, y, button, clicks);
@@ -785,6 +816,37 @@ impl DrawApp {
                     self.doc.float_set_rect(nx, ny, w, h);
                 }
             }
+            Some(Drag::PendMove { start, orig }) => {
+                let (dx, dy) = (p.0 - start.0, p.1 - start.1);
+                self.pending = Some(Pending { a: (orig.a.0 + dx, orig.a.1 + dy), b: (orig.b.0 + dx, orig.b.1 + dy), ..orig });
+                self.redraw_pending();
+            }
+            Some(Drag::PendResize { handle, orig }) => {
+                let np = if orig.tool == Tool::Line {
+                    if handle == 0 {
+                        Pending { a: p, ..orig }
+                    } else {
+                        Pending { b: p, ..orig }
+                    }
+                } else {
+                    let (mut x0, mut y0, mut x1, mut y1) = orig.bbox();
+                    if matches!(handle, 0 | 6 | 7) {
+                        x0 = p.0;
+                    }
+                    if matches!(handle, 2 | 3 | 4) {
+                        x1 = p.0;
+                    }
+                    if matches!(handle, 0 | 1 | 2) {
+                        y0 = p.1;
+                    }
+                    if matches!(handle, 4 | 5 | 6) {
+                        y1 = p.1;
+                    }
+                    Pending { a: (x0, y0), b: (x1, y1), ..orig }
+                };
+                self.pending = Some(np);
+                self.redraw_pending();
+            }
             Some(Drag::Pan { start, scroll }) => {
                 self.scroll = (scroll.0 - (x - start.0) / self.zoom, scroll.1 - (y - start.1) / self.zoom);
             }
@@ -823,13 +885,10 @@ impl DrawApp {
                 let b = if self.mods.shift { square(a, p, tool == Tool::Line) } else { p };
                 self.doc.op_restore();
                 self.draw_shape(tool, a, b, color);
-                self.doc.op_end();
-                self.doc.label_last(match tool {
-                    Tool::Line => "Line",
-                    Tool::Rect => "Rectangle",
-                    _ => "Oval",
-                });
+                // kept open: it can still be moved and resized
+                self.pending = Some(Pending { tool, a, b, color });
             }
+            Drag::PendMove { .. } | Drag::PendResize { .. } => {}
             Drag::Select { a, .. } => {
                 let b = self.to_doc(x, y);
                 let (x0, y0) = (a.0.min(b.0).max(0.0).floor(), a.1.min(b.1).max(0.0).floor());
@@ -853,6 +912,10 @@ impl DrawApp {
     fn cancel_drag(&mut self) {
         match self.drag.take() {
             Some(Drag::Shape { .. }) => self.doc.op_cancel(),
+            Some(Drag::PendMove { orig, .. }) | Some(Drag::PendResize { orig, .. }) => {
+                self.pending = Some(orig);
+                self.redraw_pending();
+            }
             Some(Drag::Stroke) => {
                 self.doc.stroke_end();
                 self.doc.undo();
@@ -944,6 +1007,56 @@ impl DrawApp {
         self.doc.shape(pts, true, self.size, color, other, if self.shape_fill { 3 } else { 1 }, true);
     }
 
+    /// Keep the pending shape for good (one undo step).
+    pub fn commit_pending(&mut self) {
+        if let Some(p) = self.pending.take() {
+            self.doc.op_end();
+            self.doc.label_last(match p.tool {
+                Tool::Line => "Line",
+                Tool::Rect => "Rectangle",
+                _ => "Oval",
+            });
+        }
+    }
+
+    fn redraw_pending(&mut self) {
+        if let Some(p) = self.pending {
+            self.doc.op_restore();
+            self.draw_shape(p.tool, p.a, p.b, p.color);
+        }
+    }
+
+    /// The pending shape's handles in picture coordinates: both ends of a line, else the box's
+    /// corners and sides (0 top left, then clockwise).
+    pub fn pending_handles(&self) -> Vec<Pt> {
+        let Some(p) = self.pending else { return vec![] };
+        if p.tool == Tool::Line {
+            return vec![p.a, p.b];
+        }
+        let (x0, y0, x1, y1) = p.bbox();
+        let (mx, my) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0);
+        vec![(x0, y0), (mx, y0), (x1, y0), (x1, my), (x1, y1), (mx, y1), (x0, y1), (x0, my)]
+    }
+
+    fn pending_press(&mut self, p: Pt, x: f32, y: f32) -> bool {
+        let Some(pend) = self.pending else { return false };
+        let slop = 6.0;
+        for (i, h) in self.pending_handles().iter().enumerate() {
+            let s = self.to_screen(*h);
+            if (s.0 - x).abs() <= slop && (s.1 - y).abs() <= slop {
+                self.drag = Some(Drag::PendResize { handle: i, orig: pend });
+                return true;
+            }
+        }
+        let (x0, y0, x1, y1) = pend.bbox();
+        let m = slop / self.zoom;
+        if p.0 >= x0 - m && p.0 <= x1 + m && p.1 >= y0 - m && p.1 <= y1 + m {
+            self.drag = Some(Drag::PendMove { start: p, orig: pend });
+            return true;
+        }
+        false
+    }
+
     /// How a new selection combines with the one there: Shift adds, Alt takes away, both intersect.
     fn sel_mode(&self) -> u8 {
         match (self.mods.shift, self.mods.alt) {
@@ -979,6 +1092,15 @@ impl DrawApp {
     // ---------------- commands ----------------
 
     pub fn command(&mut self, id: &str, host: &mut dyn Host) {
+        match id {
+            // these change the pending shape rather than keep it
+            "shape.fill" => {
+                self.shape_fill = !self.shape_fill;
+                self.redraw_pending();
+                return;
+            }
+            _ => self.commit_pending(),
+        }
         if let Some(t) = id.strip_prefix("tool.").and_then(Tool::from_id) {
             self.set_tool(t);
             return;
@@ -1339,7 +1461,11 @@ impl DrawApp {
                 self.c2 = v;
             } else {
                 self.c1 = v;
+                if let Some(p) = self.pending.as_mut() {
+                    p.color = v;
+                }
             }
+            self.redraw_pending();
             return;
         }
         if let Some(which) = id.strip_prefix("edit-color:") {
@@ -1361,6 +1487,7 @@ impl DrawApp {
         }
         if let Some(s) = id.strip_prefix("size:").and_then(|s| s.parse::<f32>().ok()) {
             self.size = s;
+            self.redraw_pending();
             return;
         }
         let mut h = folio_kit::platform::Headless::default();
@@ -1464,11 +1591,11 @@ impl DrawApp {
             }
             ("unsaved", "save") => {
                 if self.save() {
-                    self.after = self.pending.take();
+                    self.after = self.then.take();
                 }
             }
-            ("unsaved", "discard") => self.after = self.pending.take(),
-            ("unsaved", _) => self.pending = None,
+            ("unsaved", "discard") => self.after = self.then.take(),
+            ("unsaved", _) => self.then = None,
             _ => {}
         }
         let _ = host;
@@ -1523,7 +1650,7 @@ impl DrawApp {
                     .button("discard", "Don't Save")
                     .button("cancel", "Cancel"),
             );
-            self.pending = Some(after);
+            self.then = Some(after);
         } else {
             self.after = Some(after);
         }
@@ -1648,8 +1775,8 @@ impl DrawApp {
                 BackPage::SaveAs => {
                     if self.save_to(&p) {
                         self.layout();
-                        if self.pending.is_some() {
-                            self.after = self.pending.take();
+                        if self.then.is_some() {
+                            self.after = self.then.take();
                         }
                         return;
                     }
@@ -1881,6 +2008,21 @@ impl DrawApp {
             }
         };
         let to = |p: Pt| ((p.0 - self.scroll.0) * self.zoom, (p.1 - self.scroll.1) * self.zoom);
+        if self.pending.is_some() {
+            let hs: Vec<(f32, f32)> = self.pending_handles().iter().map(|h| to(*h)).collect();
+            if let Some(p) = self.pending {
+                if p.tool != Tool::Line {
+                    let (x0, y0, x1, y1) = p.bbox();
+                    let (q0, q1) = (to((x0, y0)), to((x1, y1)));
+                    ants(&mut cv, Rect::new(q0.0, q0.1, q1.0 - q0.0, q1.1 - q0.1));
+                }
+            }
+            for h in hs {
+                let r = Rect::new(h.0 - 4.0, h.1 - 4.0, 8.0, 8.0);
+                gfx::fill_rect(&mut cv, r, Color::WHITE);
+                gfx::stroke_round(&mut cv, r, 0.0, ACCENT, 1.0);
+            }
+        }
         if let Some(Drag::Lasso(pts)) = &self.drag {
             let mut pb = sk::PathBuilder::new();
             for (i, p) in pts.iter().enumerate() {
