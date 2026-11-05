@@ -169,6 +169,41 @@ impl UiTest {
             check(px(app, 400, 425) == [34, 177, 76, 255], &format!("moved {:?}", px(app, 400, 425)))?;
             check(px(app, 400, 230) != [34, 177, 76, 255], "the old place still holds it")
         });
+        step!("free-form selection, magic wand and Shift to add", |app: &mut DrawApp, h: &mut dyn Host, r: &mut Res| {
+            app.set_tool(Tool::FreeSelect);
+            let pts = [(600.0, 400.0), (700.0, 400.0), (650.0, 480.0)];
+            let a = sp(app, pts[0].0, pts[0].1);
+            ev(app, h, r, Event::MouseMove { x: a.0, y: a.1 });
+            ev(app, h, r, Event::MouseDown { x: a.0, y: a.1, button: Button::Left, clicks: 1 });
+            for p in &pts[1..] {
+                let q = sp(app, p.0, p.1);
+                ev(app, h, r, Event::MouseMove { x: q.0, y: q.1 });
+            }
+            ev(app, h, r, Event::MouseUp { x: a.0, y: a.1, button: Button::Left });
+            let (x, y, w, hh) = app.doc.sel_bounds().ok_or("free-form selected nothing")?;
+            check((598..=602).contains(&x) && (398..=402).contains(&y) && w >= 95 && hh >= 75, &format!("bounds {x},{y} {w}x{hh}"))?;
+            // the wand on the green fill, Shift adds it to the triangle
+            app.set_tool(Tool::Wand);
+            app.mods = Mods { shift: true, ..Mods::NONE };
+            click_on(app, h, r, 400.0, 425.0, Button::Left);
+            app.mods = Mods::NONE;
+            let (x2, y2, w2, h2) = app.doc.sel_bounds().ok_or("wand cleared the selection")?;
+            check(x2 < 400 && x2 + w2 >= 700 && y2 < 425 && y2 + h2 >= 480, &format!("added bounds {x2},{y2} {w2}x{h2}"))?;
+            app.command("select-none", h);
+            check(app.doc.sel_bounds().is_none(), "select none")
+        });
+        step!("the brush kinds from the Brushes menu", |app: &mut DrawApp, h: &mut dyn Host, r: &mut Res| {
+            ribbon_click(app, h, r, "home", "tool.brush")?;
+            app.menu = None;
+            for (k, x) in [(folio_draw_engine::doc::TOOL_CALLIGRAPHY, 950.0), (folio_draw_engine::doc::TOOL_AIRBRUSH, 1000.0), (folio_draw_engine::doc::TOOL_MARKER, 1050.0)] {
+                app.brush = k;
+                app.set_tool(Tool::Brush);
+                drag_on(app, h, r, (x, 300.0), (x, 400.0), Button::Left);
+                let changed = (295..405).any(|y| px(app, x as usize, y) != [255, 255, 255, 255]);
+                check(changed, &format!("brush {k} left nothing"))?;
+            }
+            Ok(())
+        });
         step!("copy and paste", |app: &mut DrawApp, h: &mut dyn Host, r: &mut Res| {
             app.doc.sel_rect(300, 350, 200, 150);
             key(app, h, r, Key::Char('c'), ctrl());
@@ -236,6 +271,31 @@ impl UiTest {
             check(app.save_to(&p), "not saved")?;
             let back = DrawApp::load(&p)?;
             check(back.layers.len() == 2, &format!("{} layers after reopening", back.layers.len()))
+        });
+        step!("the Layers pane shows, hides and merges layers", |app: &mut DrawApp, h: &mut dyn Host, r: &mut Res| {
+            check(app.show_layers, "adding a layer didn't show the pane")?;
+            shot(app, r);
+            check(app.side.w > 100.0 && app.canvas.right() <= app.side.x + 1.0, "pane not beside the picture")?;
+            // the new layer is on top and active: paint on it, then hide it from the pane
+            app.c1 = [63, 72, 204, 255];
+            app.set_tool(Tool::Pencil);
+            drag_on(app, h, r, (20.0, 20.0), (120.0, 20.0), Button::Left);
+            check(px(app, 70, 20)[2] > 180, "nothing drawn on the new layer")?;
+            let top = app.doc.layers.len() - 1;
+            let eye = format!("eye:{top}");
+            shot(app, r);
+            let rr = app.side_hits_rect(&eye).ok_or("no eye button for the top layer")?;
+            ev(app, h, r, Event::MouseDown { x: rr.cx(), y: rr.cy(), button: Button::Left, clicks: 1 });
+            ev(app, h, r, Event::MouseUp { x: rr.cx(), y: rr.cy(), button: Button::Left });
+            check(!app.doc.layers[top].visible, "the eye didn't hide the layer")?;
+            check(px(app, 70, 20)[2] < 180 || px(app, 70, 20)[0] > 30, "hidden layer still shows")?;
+            key(app, h, r, Key::Char('z'), ctrl());
+            check(app.doc.layers[top].visible, "undo didn't show it again")?;
+            app.command("layer.merge", h);
+            check(app.doc.layers.len() == 1, &format!("{} layers after merge down", app.doc.layers.len()))?;
+            check(px(app, 70, 20)[2] > 180, "merged picture lost the stroke")?;
+            key(app, h, r, Key::F(7), Mods::NONE);
+            check(!app.show_layers, "F7 didn't hide the pane")
         });
         step!("dark theme", |app: &mut DrawApp, _h: &mut dyn Host, r: &mut Res| {
             app.theme = folio_kit::theme::Theme::new(true, crate::app::MAROON, crate::app::ACCENT);

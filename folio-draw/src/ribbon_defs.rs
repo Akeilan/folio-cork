@@ -20,7 +20,7 @@ pub fn tabs() -> Vec<Tab> {
                 Group::new(
                     "Image",
                     vec![
-                        I::large("tool.select", "Select", "select").key("S").desc("Drag out a rectangle. Drag inside it to move what it holds."),
+                        I::large("tool.select", "Select", "select").split().key("S").desc("Drag out a rectangle. Drag inside it to move what it holds. Shift adds, Alt takes away."),
                         I::small("crop", "Crop", "crop").key("Ctrl+Shift+X").desc("Trim the picture to the selection."),
                         I::small("resize", "Resize", "resize").key("Ctrl+W"),
                         I::small("rotate", "Rotate", "rotate").menu(),
@@ -33,7 +33,7 @@ pub fn tabs() -> Vec<Tab> {
                         vec![I::icon("tool.eraser", "Eraser", "eraser").key("E"), I::icon("tool.picker", "Colour picker", "picker").key("I")],
                     ],
                 ),
-                Group::new("Brushes", vec![I::large("tool.brush", "Brush", "brush").key("B").desc("Paint with soft edges.")]),
+                Group::new("Brushes", vec![I::large("tool.brush", "Brushes", "brush").split().key("B").desc("Paint with soft edges, a calligraphy nib, an airbrush or a marker.")]),
                 Group::rows(
                     "Shapes",
                     vec![
@@ -65,7 +65,16 @@ pub fn tabs() -> Vec<Tab> {
                         I::large("zoom.fit", "Fit to window", "zoom-fit").key("Ctrl+0"),
                     ],
                 ),
-                Group::new("Layers", vec![I::large("layer.add", "New layer", "layer-add"), I::large("invert", "Invert colours", "invert").key("Ctrl+Shift+I")]),
+                Group::new(
+                    "Layers",
+                    vec![
+                        I::large("pane.layers", "Layers", "layers").key("F7").desc("Show or hide the Layers pane."),
+                        I::large("layer.add", "New layer", "layer-add").key("Ctrl+Shift+N"),
+                        I::small("layer.merge", "Merge down", "merge"),
+                        I::small("layer.flatten", "Flatten", "flatten"),
+                    ],
+                ),
+                Group::new("Adjust", vec![I::large("invert", "Invert colours", "invert").key("Ctrl+Shift+I")]),
             ],
         ),
     ]

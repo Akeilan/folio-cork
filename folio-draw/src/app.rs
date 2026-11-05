@@ -39,6 +39,8 @@ pub enum Tool {
     Rect,
     Ellipse,
     Select,
+    FreeSelect,
+    Wand,
 }
 
 impl Tool {
@@ -53,6 +55,8 @@ impl Tool {
             Tool::Rect => "rect",
             Tool::Ellipse => "ellipse",
             Tool::Select => "select",
+            Tool::FreeSelect => "freeselect",
+            Tool::Wand => "wand",
         }
     }
     pub fn from_id(s: &str) -> Option<Tool> {
@@ -66,6 +70,8 @@ impl Tool {
             "rect" => Tool::Rect,
             "ellipse" => Tool::Ellipse,
             "select" => Tool::Select,
+            "freeselect" => Tool::FreeSelect,
+            "wand" => Tool::Wand,
             _ => return None,
         })
     }
@@ -76,6 +82,7 @@ enum Drag {
     Stroke,
     Shape { tool: Tool, a: Pt, color: [u8; 4] },
     Select { a: Pt, b: Pt },
+    Lasso(Vec<Pt>),
     Move { start: Pt, orig: (i32, i32) },
     Pan { start: (f32, f32), scroll: (f32, f32) },
 }
@@ -121,10 +128,14 @@ pub struct DrawApp {
     pub c1: [u8; 4],
     pub c2: [u8; 4],
     pub shape_fill: bool,
+    pub brush: u8,
     pub zoom: f32,
     pub scroll: (f32, f32),
     pub canvas: Rect,
     pub bar: Rect,
+    pub side: Rect,
+    pub show_layers: bool,
+    side_hits: Vec<(String, Rect)>,
     view: Option<sk::Pixmap>,
     drag: Option<Drag>,
     pub mods: Mods,
@@ -166,10 +177,14 @@ impl DrawApp {
             c1: [0, 0, 0, 255],
             c2: [255, 255, 255, 255],
             shape_fill: false,
+            brush: doc::TOOL_BRUSH,
             zoom: 1.0,
             scroll: (0.0, 0.0),
             canvas: Rect::default(),
             bar: Rect::default(),
+            side: Rect::default(),
+            show_layers: false,
+            side_hits: vec![],
             view: None,
             drag: None,
             mods: Mods::NONE,
@@ -203,7 +218,9 @@ impl DrawApp {
         let s = self.s;
         let top = TITLE_H * s + if self.back.is_some() { 0.0 } else { self.ribbon.height(s) };
         self.bar = Rect::new(0.0, self.h - BAR_H * s, self.w, BAR_H * s);
-        self.canvas = Rect::new(0.0, top, self.w, (self.bar.y - top).max(10.0));
+        let sw = if self.show_layers && self.back.is_none() { 230.0 * s } else { 0.0 };
+        self.side = Rect::new(self.w - sw, top, sw, self.bar.y - top);
+        self.canvas = Rect::new(0.0, top, (self.w - sw).max(10.0), (self.bar.y - top).max(10.0));
     }
 
     // ---------------- view ----------------
@@ -397,6 +414,7 @@ impl DrawApp {
         }
         match ev {
             Event::Key { key, mods, down: true, .. } => self.key(key, *mods, host),
+            Event::MouseDown { x, y, button, .. } if self.side.contains(*x, *y) => self.side_click(*x, *y, *button),
             Event::MouseDown { x, y, button, .. } if self.canvas.contains(*x, *y) => self.press(*x, *y, *button),
             Event::MouseMove { x, y } => {
                 self.motion(*x, *y);
@@ -422,7 +440,7 @@ impl DrawApp {
             return Cursor::Default;
         }
         match self.tool {
-            Tool::Select if self.in_selection(self.to_doc(x, y)) => Cursor::Move,
+            Tool::Select | Tool::FreeSelect | Tool::Wand if self.in_selection(self.to_doc(x, y)) => Cursor::Move,
             _ => Cursor::Crosshair,
         }
     }
@@ -450,6 +468,8 @@ impl DrawApp {
                 "save"
             } else if c('o') {
                 "open"
+            } else if c('n') && m.shift {
+                "layer.add"
             } else if c('n') {
                 "new"
             } else if c('w') {
@@ -472,6 +492,7 @@ impl DrawApp {
         }
         match key {
             Key::Delete => self.command("delete", host),
+            Key::F(7) => self.command("pane.layers", host),
             Key::Escape => {
                 if self.drag.is_some() {
                     self.cancel_drag();
@@ -531,7 +552,7 @@ impl DrawApp {
             Tool::Pencil | Tool::Brush | Tool::Eraser => {
                 let (tool, size, hard) = match self.tool {
                     Tool::Pencil => (doc::TOOL_PENCIL, self.size.min(4.0).max(1.0), 1.0),
-                    Tool::Brush => (doc::TOOL_BRUSH, self.size * 1.5, 0.6),
+                    Tool::Brush => (self.brush, self.size * if self.brush == doc::TOOL_AIRBRUSH { 4.0 } else { 1.5 }, if self.brush == doc::TOOL_BRUSH { 0.6 } else { 1.0 }),
                     _ => (doc::TOOL_ERASER, self.size * 2.0, 1.0),
                 };
                 let col = if self.tool == Tool::Eraser { bg } else { fg };
@@ -558,8 +579,17 @@ impl DrawApp {
                 self.doc.op_begin();
                 self.drag = Some(Drag::Shape { tool: self.tool, a: p, color: fg });
             }
+            Tool::Wand => {
+                self.doc.commit_float();
+                self.doc.sel_mode = self.sel_mode();
+                self.doc.sel_magic(p.0 as i64, p.1 as i64, 32, !self.mods.ctrl);
+            }
+            Tool::FreeSelect => {
+                self.doc.commit_float();
+                self.drag = Some(Drag::Lasso(vec![p]));
+            }
             Tool::Select => {
-                if self.in_selection(p) {
+                if self.in_selection(p) && !self.mods.shift && !self.mods.alt {
                     if self.doc.float.is_none() {
                         self.doc.float_lift(true);
                     }
@@ -568,7 +598,9 @@ impl DrawApp {
                     }
                 } else {
                     self.doc.commit_float();
-                    self.doc.sel_none();
+                    if !self.mods.shift && !self.mods.alt {
+                        self.doc.sel_none();
+                    }
                     self.drag = Some(Drag::Select { a: p, b: p });
                 }
             }
@@ -589,6 +621,12 @@ impl DrawApp {
                 self.draw_shape(tool, a, b, color);
             }
             Some(Drag::Select { a, .. }) => self.drag = Some(Drag::Select { a, b: p }),
+            Some(Drag::Lasso(mut pts)) => {
+                if pts.last().map(|q| (q.0 - p.0).abs() + (q.1 - p.1).abs() > 0.5).unwrap_or(true) {
+                    pts.push(p);
+                }
+                self.drag = Some(Drag::Lasso(pts));
+            }
             Some(Drag::Move { start, orig }) => {
                 if let Some(f) = &self.doc.float {
                     let (w, h) = (f.w, f.h);
@@ -632,7 +670,14 @@ impl DrawApp {
                 let (x0, y0) = (a.0.min(b.0).max(0.0).floor(), a.1.min(b.1).max(0.0).floor());
                 let (x1, y1) = (a.0.max(b.0).min(self.doc.w as f32).ceil(), a.1.max(b.1).min(self.doc.h as f32).ceil());
                 if x1 - x0 >= 1.0 && y1 - y0 >= 1.0 {
+                    self.doc.sel_mode = self.sel_mode();
                     self.doc.sel_rect(x0 as i64, y0 as i64, (x1 - x0) as i64, (y1 - y0) as i64);
+                }
+            }
+            Drag::Lasso(pts) => {
+                if pts.len() >= 3 {
+                    self.doc.sel_mode = self.sel_mode();
+                    self.doc.sel_poly(&pts);
                 }
             }
             Drag::Move { .. } => self.doc.label_last("Move"),
@@ -648,6 +693,16 @@ impl DrawApp {
                 self.doc.undo();
             }
             _ => {}
+        }
+    }
+
+    /// How a new selection combines with the one there: Shift adds, Alt takes away, both intersect.
+    fn sel_mode(&self) -> u8 {
+        match (self.mods.shift, self.mods.alt) {
+            (true, true) => 3,
+            (true, false) => 1,
+            (false, true) => 2,
+            _ => 0,
         }
     }
 
@@ -763,11 +818,47 @@ impl DrawApp {
                 self.doc.label_last("Invert colours");
             }
             "shape.fill" => self.shape_fill = !self.shape_fill,
+            "select-invert" => {
+                self.doc.commit_float();
+                self.doc.sel_invert();
+            }
+            "select-none" => {
+                self.doc.commit_float();
+                self.doc.sel_none();
+            }
             "layer.add" => {
                 self.doc.commit_float();
                 let n = self.doc.layers.len() + 1;
                 self.doc.layer_add(&format!("Layer {n}"));
+                self.show_layers = true;
             }
+            "layer.dup" => {
+                self.doc.layer_duplicate();
+            }
+            "layer.delete" => {
+                if self.doc.layers.len() > 1 {
+                    self.doc.layer_delete();
+                }
+            }
+            "layer.up" => {
+                let a = self.doc.active;
+                if a + 1 < self.doc.layers.len() {
+                    self.doc.layer_move(a, a + 1);
+                }
+            }
+            "layer.down" => {
+                let a = self.doc.active;
+                if a > 0 {
+                    self.doc.layer_move(a, a - 1);
+                }
+            }
+            "layer.merge" => {
+                self.doc.layer_merge_down();
+            }
+            "layer.flatten" => {
+                self.doc.flatten();
+            }
+            "pane.layers" => self.show_layers = !self.show_layers,
             "zoom.in" => self.zoom_step(1, None),
             "zoom.out" => self.zoom_step(-1, None),
             "zoom.100" => self.set_zoom(1.0, None),
@@ -812,6 +903,28 @@ impl DrawApp {
                     MenuItem::new("flip.h", "Flip horizontal"),
                 ],
             ),
+            "tool.select" => Menu::new(
+                "select",
+                rect,
+                vec![
+                    MenuItem::new("tool.select", "Rectangular selection").check(self.tool == Tool::Select),
+                    MenuItem::new("tool.freeselect", "Free-form selection").check(self.tool == Tool::FreeSelect),
+                    MenuItem::new("tool.wand", "Magic wand").check(self.tool == Tool::Wand),
+                    MenuItem::sep(),
+                    MenuItem::new("select-all", "Select all").key("Ctrl+A"),
+                    MenuItem::new("select-invert", "Invert selection"),
+                    MenuItem::new("select-none", "Select none"),
+                    MenuItem::new("delete", "Delete").key("Delete"),
+                ],
+            ),
+            "tool.brush" => Menu::new(
+                "brush",
+                rect,
+                [(doc::TOOL_BRUSH, "Brush"), (doc::TOOL_CALLIGRAPHY, "Calligraphy brush"), (doc::TOOL_CALLIGRAPHY2, "Calligraphy pen"), (doc::TOOL_AIRBRUSH, "Airbrush"), (doc::TOOL_MARKER, "Marker")]
+                    .iter()
+                    .map(|(k, n)| MenuItem::new(&format!("brush:{k}"), n).check(self.brush == *k))
+                    .collect(),
+            ),
             "size" => Menu::new("size", rect, SIZES.iter().map(|s| MenuItem::new(&format!("size:{s}"), &format!("{s} px")).check((self.size - s).abs() < 0.01)).collect()),
             "color1" | "color2" => Menu::new(id, rect, vec![]).with_palette(PALETTE.iter().map(|&c| Color::hex(c)).collect(), 10),
             _ => return,
@@ -827,6 +940,11 @@ impl DrawApp {
             } else {
                 self.c1 = v;
             }
+            return;
+        }
+        if let Some(k) = id.strip_prefix("brush:").and_then(|s| s.parse::<u8>().ok()) {
+            self.brush = k;
+            self.set_tool(Tool::Brush);
             return;
         }
         if let Some(s) = id.strip_prefix("size:").and_then(|s| s.parse::<f32>().ok()) {
@@ -1030,6 +1148,86 @@ impl DrawApp {
         self.back = Some(b);
     }
 
+    pub fn side_hits_rect(&self, id: &str) -> Option<Rect> {
+        self.side_hits.iter().find(|(i, _)| i == id).map(|(_, r)| *r)
+    }
+
+    fn side_click(&mut self, x: f32, y: f32, _button: Button) {
+        let Some((id, _)) = self.side_hits.iter().find(|(_, r)| r.contains(x, y)).cloned() else { return };
+        if let Some(i) = id.strip_prefix("eye:").and_then(|i| i.parse::<usize>().ok()) {
+            if let Some(l) = self.doc.layers.get(i) {
+                let (name, op, vis, blend, delay) = (None, l.opacity, !l.visible, l.blend, l.delay_ms);
+                self.doc.layer_set_props(i, name, op, vis, blend, delay, true);
+                self.doc.label_last(if vis { "Show layer" } else { "Hide layer" });
+            }
+        } else if let Some(i) = id.strip_prefix("row:").and_then(|i| i.parse::<usize>().ok()) {
+            self.doc.set_active(i);
+        } else {
+            let mut h = folio_kit::platform::Headless::default();
+            self.command(&id, &mut h);
+        }
+    }
+
+    fn paint_side(&mut self, pm: &mut sk::Pixmap, r: &mut Res) {
+        let theme = self.theme.clone();
+        let s = self.s;
+        let side = self.side;
+        if side.w <= 0.0 {
+            return;
+        }
+        let mut cx = Ctx { pm, text: &mut r.text, icons: &mut r.icons, theme: &theme, s };
+        gfx::fill_rect(cx.pm, side, theme.panel);
+        gfx::vline(cx.pm, side.x, side.y, side.bottom(), theme.border);
+        cx.label("Layers", Rect::new(side.x + 12.0 * s, side.y + 4.0 * s, side.w, 28.0 * s), 14.0, theme.text, true, Align::Left);
+        self.side_hits.clear();
+        let row_h = 48.0 * s;
+        let n = self.doc.layers.len();
+        let mut y = side.y + 34.0 * s;
+        let (tw, th) = (56usize, 40usize);
+        for vi in 0..n {
+            let i = n - 1 - vi;
+            if y + row_h > side.bottom() - 40.0 * s {
+                break;
+            }
+            let row = Rect::new(side.x + 1.0, y, side.w - 2.0, row_h);
+            if i == self.doc.active {
+                gfx::fill_rect(cx.pm, row, theme.checked);
+            }
+            let eye = Rect::new(side.x + 8.0 * s, y + 14.0 * s, 20.0 * s, 20.0 * s);
+            let vis = self.doc.layers[i].visible;
+            gfx::stroke_round(cx.pm, eye, 3.0 * s, theme.text, 1.2);
+            if vis {
+                gfx::fill_round(cx.pm, eye.inset(5.0 * s), 2.0 * s, theme.text);
+            }
+            let tr = Rect::new(side.x + 36.0 * s, y + 4.0 * s, tw as f32 * s, th as f32 * s);
+            gfx::fill_rect(cx.pm, tr, Color::WHITE);
+            let mut t = self.doc.layer_thumb(i, tw, th);
+            for p in t.chunks_exact_mut(4) {
+                p.swap(0, 2);
+            }
+            if let Some(tp) = sk::Pixmap::from_vec(t, sk::IntSize::from_wh(tw as u32, th as u32).unwrap()) {
+                let paint = sk::PixmapPaint { quality: sk::FilterQuality::Bilinear, ..Default::default() };
+                cx.pm.draw_pixmap(0, 0, tp.as_ref(), &paint, sk::Transform::from_row(s, 0.0, 0.0, s, tr.x, tr.y), None);
+            }
+            gfx::stroke_round(cx.pm, tr, 0.0, theme.border, 1.0);
+            let name = self.doc.layers[i].name.clone();
+            cx.label(&name, Rect::new(tr.right() + 8.0 * s, y, side.right() - tr.right() - 12.0 * s, row_h), 13.0, theme.text, false, Align::Left);
+            self.side_hits.push((format!("eye:{i}"), eye.inset(-4.0 * s)));
+            self.side_hits.push((format!("row:{i}"), row));
+            y += row_h;
+        }
+        let by = side.bottom() - 34.0 * s;
+        let mut bx = side.x + 6.0 * s;
+        for (id, label) in [("layer.add", "+"), ("layer.dup", "⧉"), ("layer.delete", "✕"), ("layer.up", "▲"), ("layer.down", "▼"), ("layer.merge", "⤓")] {
+            let br = Rect::new(bx, by, 34.0 * s, 28.0 * s);
+            gfx::fill_round(cx.pm, br, 3.0 * s, theme.window);
+            gfx::stroke_round(cx.pm, br, 3.0 * s, theme.border, 1.0);
+            cx.label(label, br, 14.0, theme.text, false, Align::Center);
+            self.side_hits.push((id.to_string(), br));
+            bx += 36.0 * s;
+        }
+    }
+
     // ---------------- state for the ribbon ----------------
 
     pub fn state(&self) -> St {
@@ -1041,6 +1239,7 @@ impl DrawApp {
             c1: self.c1,
             c2: self.c2,
             shape_fill: self.shape_fill,
+            layers: self.show_layers,
         }
     }
 
@@ -1079,6 +1278,7 @@ impl DrawApp {
             self.paint_back(pm, r);
         } else {
             self.paint_canvas(pm);
+            self.paint_side(pm, r);
             self.paint_bar(pm, r);
             let mut cx = Ctx { pm, text: &mut r.text, icons: &mut r.icons, theme: &theme, s };
             let rr = Rect::new(0.0, TITLE_H * s, self.w, self.ribbon.height(s));
@@ -1151,7 +1351,21 @@ impl DrawApp {
             }
         };
         let to = |p: Pt| ((p.0 - self.scroll.0) * self.zoom, (p.1 - self.scroll.1) * self.zoom);
-        if let Some(Drag::Select { a, b }) = &self.drag {
+        if let Some(Drag::Lasso(pts)) = &self.drag {
+            let mut pb = sk::PathBuilder::new();
+            for (i, p) in pts.iter().enumerate() {
+                let q = to(*p);
+                if i == 0 {
+                    pb.move_to(q.0, q.1);
+                } else {
+                    pb.line_to(q.0, q.1);
+                }
+            }
+            if let Some(path) = pb.finish() {
+                let stroke = sk::Stroke { width: 1.0, dash: sk::StrokeDash::new(vec![4.0, 4.0], 0.0), ..Default::default() };
+                cv.stroke_path(&path, &gfx::paint(Color::BLACK), &stroke, sk::Transform::identity(), None);
+            }
+        } else if let Some(Drag::Select { a, b }) = &self.drag {
             let (p, q) = (to(*a), to(*b));
             ants(&mut cv, Rect::new(p.0.min(q.0), p.1.min(q.1), (p.0 - q.0).abs(), (p.1 - q.1).abs()));
         } else if let Some(f) = &self.doc.float {
@@ -1243,6 +1457,7 @@ pub struct St {
     pub c1: [u8; 4],
     pub c2: [u8; 4],
     pub shape_fill: bool,
+    pub layers: bool,
 }
 
 impl CommandState for St {
@@ -1257,6 +1472,7 @@ impl CommandState for St {
     fn checked(&self, id: &str) -> bool {
         match id {
             "shape.fill" => self.shape_fill,
+            "pane.layers" => self.layers,
             t => t.strip_prefix("tool.").map(|t| t == self.tool.id()).unwrap_or(false),
         }
     }
