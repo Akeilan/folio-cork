@@ -1,7 +1,7 @@
 #!/bin/bash
 # Folio Cork release checks: unit tests and the window test from source, the .deb, then the installed
 # package on 22.04, 22.04 without LibreOffice and 24.04 (window test on X), and a Wayland pass on 24.04.
-#   XD=<X display> tools/release.sh
+#   XD=<X display> tools/release.sh        (PORTS=1 adds the other-CPU checks: AVX2/FMA build, ARM64 under qemu, Pi budgets)
 set -u
 R=/home/claude/folio-cork
 XD=${XD:-99}
@@ -13,14 +13,18 @@ if [ -z "${INSTALLED_ONLY:-}" ]; then
   (cd $R && tools/check-portability.sh)
   echo "== unit, pixel and conformance tests (no display)"
   (cd $R && cargo test -q --workspace --features folio-platform/audio 2>&1 | grep -E "test result: FAILED|FAILED|panicked"; echo "  $(cd $R && cargo test -q --workspace --features folio-platform/audio 2>&1 | grep -c 'test result: ok') test groups ok")
+  if [ -n "${PORTS:-}" ]; then
   echo "== same results built for this CPU's own instructions (AVX2/FMA)"
   (cd $R && RUSTFLAGS="-C target-cpu=native" CARGO_TARGET_DIR=/tmp/cork-native cargo test -q -p folio-cork templates 2>&1 | grep "test result"; RUSTFLAGS="-C target-cpu=native" CARGO_TARGET_DIR=/tmp/cork-native cargo test -q -p folio-kit --test pixels 2>&1 | grep "test result"; rm -rf /tmp/cork-native)
   echo "== the same tests on ARM64 (the Pi's CPU), under qemu: identical pixels and files"
   (cd $R && RUSTC_BOOTSTRAP=1 CARGO_TARGET_DIR=/tmp/cork-arm64 cargo test -q --config tools/arm64.toml -Z build-std=std,panic_abort,panic_unwind --target aarch64-unknown-linux-gnu --workspace 2>&1 | grep -E "test result: FAILED|panicked|differ"; echo "  $(cd $R && RUSTC_BOOTSTRAP=1 CARGO_TARGET_DIR=/tmp/cork-arm64 cargo test -q --config tools/arm64.toml -Z build-std=std,panic_abort,panic_unwind --target aarch64-unknown-linux-gnu --workspace 2>&1 | grep -c 'test result: ok') test groups ok on arm64"; rm -rf /tmp/cork-arm64)
+  fi
   echo "== window conformance (X11)"
   (cd $R && cargo build -q -p folio-platform --example conform && DISPLAY=:$XD WAYLAND_DISPLAY= tools/conformance.sh | tail -1)
+  if [ -n "${PORTS:-}" ]; then
   echo "== Pi 4B budgets, measured here (X3-12)"
   (cd $R && cargo build -q --release -p folio-cork && ./target/release/folio-cork --bench)
+  fi
   echo "== window test (source, X)"
   (cd $R && DISPLAY=:$XD WAYLAND_DISPLAY= cargo run -q --release -p folio-cork -- --ui-test /tmp/cork-ui-src 2>&1 | grep -E "^FAIL|passed")
   echo "== Folio Draw on the portable base (D3-06, not shipped yet): window test on X and without a display"
