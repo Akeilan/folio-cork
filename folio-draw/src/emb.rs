@@ -315,6 +315,43 @@ pub fn add_shape_layer(doc: &mut Doc, name: &str, spec: &Value) -> usize {
     doc.text_layer_add(name, &spec.to_string(), 0, 0, w, h, &block, w * 4)
 }
 
+/// The density map as straight-alpha RGBA the size of the picture: 1 or 2 thread layers green,
+/// 3 amber, 4 or more orange to red. Nothing where no thread covers.
+pub fn density_rgba(doc: &Doc, p: &plan::Plan) -> Option<(usize, usize, Vec<u8>)> {
+    let s = settings(doc)?;
+    let (w, h) = canvas_px(&s);
+    let (ox, oy) = origin(&s);
+    let d = folio_draw_engine::emb::density(p, PX_PER_MM, ox, oy, w, h);
+    let mut out = vec![0u8; w * h * 4];
+    for (i, v) in d.iter().enumerate() {
+        if *v == 0 {
+            continue;
+        }
+        let rgb = if *v <= 2 {
+            [77u8, 176, 79]
+        } else if *v == 3 {
+            [255, 191, 0]
+        } else {
+            let t = ((*v as f32 - 4.0) / 3.0).min(1.0);
+            [255, (140.0 * (1.0 - t)).round() as u8, 0]
+        };
+        out[i * 4] = rgb[0];
+        out[i * 4 + 1] = rgb[1];
+        out[i * 4 + 2] = rgb[2];
+        out[i * 4 + 3] = 200;
+    }
+    Some((w, h, out))
+}
+
+/// How much of the design is covered, and how much of it is stitched three or four times over.
+pub fn density_stats(doc: &Doc, p: &plan::Plan) -> (usize, usize, usize) {
+    let Some(s) = settings(doc) else { return (0, 0, 0) };
+    let (w, h) = canvas_px(&s);
+    let (ox, oy) = origin(&s);
+    let d = folio_draw_engine::emb::density(p, PX_PER_MM, ox, oy, w, h);
+    (d.iter().filter(|v| **v > 0).count(), d.iter().filter(|v| **v == 3).count(), d.iter().filter(|v| **v >= 4).count())
+}
+
 /// Every stitch as a line in picture pixels, with its thread colour (for the stitch view).
 pub fn stitch_lines(doc: &Doc, p: &plan::Plan) -> Vec<([u8; 3], Vec<(f32, f32)>)> {
     let Some(s) = settings(doc) else { return vec![] };

@@ -683,6 +683,31 @@ impl UiTest {
             check(back.emb == app.doc.emb, &format!("the .ora lost the settings: {:?} vs {:?}", back.emb, app.doc.emb))?;
             check(crate::emb::layer_spec(&back, back.layers.len() - 1).is_some(), "the .ora lost the shapes")
         });
+        step!("the density view colours the design by its thread layers", |app: &mut DrawApp, h: &mut dyn Host, r: &mut Res| {
+            app.saved_for_test();
+            app.command("emb.new:0", h);
+            ev(app, h, r, Event::MouseMove { x: 1.0, y: 1.0 });
+            // a 20 mm square: filled, so the middle gets several passes
+            let spec = serde_json::json!({"objects": [{"id": 1, "kind": "shape", "rings": [[[-10, -10], [10, -10], [10, 10], [-10, 10]]],
+                "thread": {"rgb": [200, 20, 30]}, "stitch": {"type": "fill"}}], "next_id": 2});
+            crate::emb::add_shape_layer(&mut app.doc, "Square", &spec);
+            let plan = crate::emb::make_plan(&app.doc).ok_or("no plan")?;
+            let (covered, _, _) = crate::emb::density_stats(&app.doc, &plan);
+            check(covered > 1000, &format!("only {covered} pixels covered"))?;
+            let (dw, dh, map) = crate::emb::density_rgba(&app.doc, &plan).ok_or("no density map")?;
+            check(dw == app.doc.w && dh == app.doc.h, &format!("map {dw}x{dh} isn't the picture's size"))?;
+            let mid = ((app.doc.h / 2) * dw + app.doc.w / 2) * 4;
+            check(map[mid + 3] > 0, "nothing covers the middle of the square")?;
+            check(map[3] == 0, "the empty corner is coloured in")?;
+            app.command("emb.density", h);
+            check(app.density_view, "the density view didn't come on")?;
+            let pm = shot(app, r);
+            let (sx, sy) = app.to_screen(((app.doc.w / 2) as f32, (app.doc.h / 2) as f32));
+            let c = pm.pixel(sx as u32, sy as u32).ok_or("no pixel")?;
+            check(c.green() > 60 || c.red() > 60, &format!("the density colour isn't on screen: {:?}", (c.red(), c.green(), c.blue())))?;
+            app.command("emb.density", h);
+            check(!app.density_view, "it didn't go off again")
+        });
         step!("lettering from a font, and an envelope that bends it", |app: &mut DrawApp, h: &mut dyn Host, r: &mut Res| {
             app.saved_for_test();
             app.command("emb.new:1", h);
