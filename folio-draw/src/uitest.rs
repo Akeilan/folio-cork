@@ -899,6 +899,37 @@ impl UiTest {
             app.remember();
             Ok(())
         });
+        step!("the search box runs a command, and Quick Access is the user's to choose", |app: &mut DrawApp, h: &mut dyn Host, r: &mut Res| {
+            shot(app, r);
+            key(app, h, r, Key::Char('q'), Mods { alt: true, ..Mods::NONE });
+            check(app.title.search.as_ref().map(|f| f.focused).unwrap_or(false), "Alt+Q didn't put the cursor in the search box")?;
+            ev(app, h, r, Event::Text("gridl".into()));
+            shot(app, r);
+            let m = app.menu.as_ref().ok_or("no list of matches")?;
+            check(m.id == "search" && !m.items.is_empty(), &format!("{} matches", m.items.len()))?;
+            check(m.items.iter().any(|i| i.id == "view.grid"), "Gridlines isn't among them")?;
+            let before = app.gridlines;
+            key(app, h, r, Key::Enter, Mods::NONE);
+            check(app.gridlines != before, "the command didn't run")?;
+            check(app.menu.is_none() && app.title.search_text().is_empty(), "the box didn't clear")?;
+            app.command("view.grid", h);
+            // Quick Access: the chevron's menu adds and takes away buttons, and they are remembered
+            app.command("quick.menu", h);
+            let m = app.menu.as_ref().ok_or("no Quick Access menu")?;
+            check(m.items.iter().filter(|i| i.checked).count() == 3, "three buttons to start with")?;
+            app.menu = None;
+            app.menu_pick_for_test("quick", "quick:crop");
+            check(app.title.quick.iter().any(|q| q.0 == "crop"), "Crop wasn't added")?;
+            app.menu_pick_for_test("quick", "quick:undo");
+            check(!app.title.quick.iter().any(|q| q.0 == "undo"), "Undo wasn't taken away")?;
+            let st = crate::settings::Settings::load();
+            check(st.quick.contains(&"crop".to_string()) && !st.quick.contains(&"undo".to_string()), &format!("not kept: {:?}", st.quick))?;
+            app.menu_pick_for_test("quick", "quick:undo");
+            app.menu_pick_for_test("quick", "quick:crop");
+            let pm = shot(app, r);
+            let p = pm.pixel(60, 16).ok_or("no pixel")?;
+            check(p.red() > 60, "the title bar isn't drawn where the buttons are")
+        });
         step!("dark theme", |app: &mut DrawApp, _h: &mut dyn Host, r: &mut Res| {
             app.theme = folio_kit::theme::Theme::new(true, crate::app::MAROON, crate::app::ACCENT);
             let pm = shot(app, r);

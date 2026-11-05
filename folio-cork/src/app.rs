@@ -346,6 +346,8 @@ impl CorkApp {
                 TitleAction::Maximize => host.toggle_maximize(),
                 TitleAction::Close => self.request(After::Close, host),
                 TitleAction::Drag => host.drag_window(),
+                // Cork has no search box in its title bar (its own is over the stencils)
+                TitleAction::SearchChanged | TitleAction::SearchEnter | TitleAction::SearchCancel => {}
             }
             return;
         }

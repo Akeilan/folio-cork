@@ -14,12 +14,13 @@ pub struct Settings {
     pub wand_contiguous: bool,
     pub sample_all: bool,
     pub stab: [[u8; 3]; 3],
+    pub quick: Vec<String>,
     pub recent: Vec<String>,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { size: 3.0, c1: [0, 0, 0, 255], c2: [255, 255, 255, 255], rulers: false, grid: false, layers: false, wand_tol: 32.0, wand_contiguous: true, sample_all: false, stab: [[0; 3]; 3], recent: vec![] }
+        Settings { size: 3.0, c1: [0, 0, 0, 255], c2: [255, 255, 255, 255], rulers: false, grid: false, layers: false, wand_tol: 32.0, wand_contiguous: true, sample_all: false, stab: [[0; 3]; 3], quick: vec!["save".into(), "undo".into(), "redo".into()], recent: vec![] }
     }
 }
 
@@ -60,6 +61,7 @@ impl Settings {
                     }
                 }
                 "recent" => s.recent.push(v.to_string()),
+                "quick" => s.quick = v.trim().split(',').filter(|x| !x.trim().is_empty()).map(|x| x.trim().to_string()).collect(),
                 _ => {}
             }
         }
@@ -85,6 +87,7 @@ impl Settings {
                 out += &format!("stabilizer={},{},{},{}\n", i, v[0], v[1], v[2]);
             }
         }
+        out += &format!("quick={}\n", self.quick.join(","));
         for r in &self.recent {
             out += &format!("recent={r}\n");
         }
