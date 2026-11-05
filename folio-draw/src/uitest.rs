@@ -396,6 +396,24 @@ impl UiTest {
             key(app, h, r, Key::Escape, Mods::NONE);
             check(px(app, 25, 15) == before, "the moved pixels aren't 10 px right")
         });
+        step!("settings are kept, saved files come back as Recent", |app: &mut DrawApp, h: &mut dyn Host, r: &mut Res| {
+            app.size = 8.0;
+            app.c2 = [1, 2, 3, 255];
+            app.remember();
+            let st = crate::settings::Settings::load();
+            check(st.size == 8.0 && st.c2 == [1, 2, 3, 255], &format!("loaded {st:?}"))?;
+            check(st.recent.iter().any(|p| p.ends_with("ui-test.ora")), "the saved file isn't in Recent")?;
+            app.command("open", h);
+            shot(app, r);
+            let rr = app.back.as_ref().and_then(|b| b.hit_rect("recent:0")).ok_or("Recent not shown on the Open page")?;
+            ev(app, h, r, Event::MouseDown { x: rr.cx(), y: rr.cy(), button: Button::Left, clicks: 1 });
+            ev(app, h, r, Event::MouseUp { x: rr.cx(), y: rr.cy(), button: Button::Left });
+            if app.dialog.is_some() {
+                // unsaved changes: don't save
+                app.dialog = None;
+            }
+            check(app.back.is_none() || app.path.as_ref().map(|p| p.ends_with("ui-test.ora")).unwrap_or(false), "Recent didn't open")
+        });
         step!("dark theme", |app: &mut DrawApp, _h: &mut dyn Host, r: &mut Res| {
             app.theme = folio_kit::theme::Theme::new(true, crate::app::MAROON, crate::app::ACCENT);
             let pm = shot(app, r);

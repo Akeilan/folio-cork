@@ -1,0 +1,82 @@
+//! What Draw remembers between runs, as plain `key=value` lines in its settings folder.
+
+use std::path::{Path, PathBuf};
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Settings {
+    pub size: f32,
+    pub c1: [u8; 4],
+    pub c2: [u8; 4],
+    pub rulers: bool,
+    pub grid: bool,
+    pub layers: bool,
+    pub recent: Vec<String>,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Settings { size: 3.0, c1: [0, 0, 0, 255], c2: [255, 255, 255, 255], rulers: false, grid: false, layers: false, recent: vec![] }
+    }
+}
+
+fn file() -> PathBuf {
+    folio_kit::platform::config_dir("folio-draw").join("settings.txt")
+}
+
+fn color(v: &str) -> Option<[u8; 4]> {
+    let v = v.trim().trim_start_matches('#');
+    if v.len() != 8 {
+        return None;
+    }
+    let n = u32::from_str_radix(v, 16).ok()?;
+    Some([(n >> 24) as u8, (n >> 16) as u8, (n >> 8) as u8, n as u8])
+}
+
+impl Settings {
+    pub fn load() -> Settings {
+        let mut s = Settings::default();
+        let Ok(text) = std::fs::read_to_string(file()) else { return s };
+        for line in text.lines() {
+            let Some((k, v)) = line.split_once('=') else { continue };
+            match k.trim() {
+                "size" => s.size = v.trim().parse().unwrap_or(s.size),
+                "color1" => s.c1 = color(v).unwrap_or(s.c1),
+                "color2" => s.c2 = color(v).unwrap_or(s.c2),
+                "rulers" => s.rulers = v.trim() == "1",
+                "grid" => s.grid = v.trim() == "1",
+                "layers" => s.layers = v.trim() == "1",
+                "recent" => s.recent.push(v.to_string()),
+                _ => {}
+            }
+        }
+        s
+    }
+
+    pub fn save(&self) {
+        let c = |c: [u8; 4]| format!("#{:02X}{:02X}{:02X}{:02X}", c[0], c[1], c[2], c[3]);
+        let mut out = format!(
+            "size={}\ncolor1={}\ncolor2={}\nrulers={}\ngrid={}\nlayers={}\n",
+            self.size,
+            c(self.c1),
+            c(self.c2),
+            self.rulers as u8,
+            self.grid as u8,
+            self.layers as u8
+        );
+        for r in &self.recent {
+            out += &format!("recent={r}\n");
+        }
+        let f = file();
+        if let Some(d) = f.parent() {
+            let _ = std::fs::create_dir_all(d);
+        }
+        let _ = folio_kit::platform::atomic_write(&f, out.as_bytes());
+    }
+
+    pub fn add_recent(&mut self, p: &Path) {
+        let p = std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf()).to_string_lossy().to_string();
+        self.recent.retain(|x| *x != p);
+        self.recent.insert(0, p);
+        self.recent.truncate(12);
+    }
+}

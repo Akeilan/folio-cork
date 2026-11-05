@@ -103,6 +103,12 @@ pub struct Back {
     hits: Vec<(String, Rect)>,
 }
 
+impl Back {
+    pub fn hit_rect(&self, id: &str) -> Option<Rect> {
+        self.hits.iter().find(|(i, _)| i == id).map(|(_, r)| *r)
+    }
+}
+
 pub enum After {
     New,
     Open(PathBuf),
@@ -158,6 +164,7 @@ pub struct DrawApp {
     pm: Option<sk::Pixmap>,
     fitted: bool,
     pub test: Option<crate::uitest::UiTest>,
+    pub settings: crate::settings::Settings,
 }
 
 impl DrawApp {
@@ -167,6 +174,7 @@ impl DrawApp {
         let mut doc = doc;
         doc.mark_all();
         let saved = doc.changes;
+        let settings = crate::settings::Settings::load();
         DrawApp {
             doc,
             path,
@@ -211,7 +219,34 @@ impl DrawApp {
             pm: None,
             fitted: false,
             test: None,
+            settings,
         }
+        .with_settings()
+    }
+
+    fn with_settings(mut self) -> DrawApp {
+        let st = self.settings.clone();
+        self.size = st.size;
+        self.c1 = st.c1;
+        self.c2 = st.c2;
+        self.rulers = st.rulers;
+        self.gridlines = st.grid;
+        self.show_layers = st.layers;
+        if let Some(p) = self.path.clone() {
+            self.settings.add_recent(&p);
+        }
+        self
+    }
+
+    /// Keep the current choices for next time.
+    pub fn remember(&mut self) {
+        self.settings.size = self.size;
+        self.settings.c1 = self.c1;
+        self.settings.c2 = self.c2;
+        self.settings.rulers = self.rulers;
+        self.settings.grid = self.gridlines;
+        self.settings.layers = self.show_layers;
+        self.settings.save();
     }
 
     pub fn dirty(&self) -> bool {
@@ -1220,6 +1255,7 @@ impl DrawApp {
         match folio_kit::platform::atomic_write(p, &bytes) {
             Ok(()) => {
                 self.path = Some(p.to_path_buf());
+                self.settings.add_recent(p);
                 self.saved_changes = self.doc.changes;
                 self.flash(&format!("Saved {}", p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()));
                 true
@@ -1255,12 +1291,15 @@ impl DrawApp {
         let Some(a) = self.after.take() else { return };
         match a {
             After::Close => {
+                self.remember();
                 host.close();
                 self.exit = true;
             }
             After::New => self.replace(Doc::new(1152, 648, [255, 255, 255, 255]), None),
             After::Open(p) => match Self::load(&p) {
                 Ok(d) => {
+                    self.settings.add_recent(&p);
+                    self.settings.save();
                     self.replace(d, Some(p));
                     self.back = None;
                     self.layout();
@@ -1335,6 +1374,13 @@ impl DrawApp {
                         self.layout();
                         self.request(After::Close);
                         return;
+                    }
+                    id if id.starts_with("recent:") => {
+                        if let Some(p) = id[7..].parse::<usize>().ok().and_then(|i| self.settings.recent.get(i).cloned()) {
+                            self.layout();
+                            self.request(After::Open(PathBuf::from(p)));
+                            return;
+                        }
                     }
                     _ => {}
                 }
@@ -1702,7 +1748,27 @@ impl DrawApp {
         gfx::fill_rect(cx.pm, main, theme.window);
         let heading = if b.page == BackPage::Open { "Open" } else { "Save As" };
         cx.label(heading, Rect::new(main.x + 32.0 * s, top + 16.0 * s, 400.0 * s, 40.0 * s), 26.0, theme.text, false, Align::Left);
-        b.files.paint(&mut cx, Rect::new(main.x + 32.0 * s, top + 70.0 * s, main.w - 64.0 * s, main.h - 90.0 * s));
+        let mut fx = main.x + 32.0 * s;
+        if b.page == BackPage::Open && !self.settings.recent.is_empty() {
+            let rw = 320.0 * s;
+            cx.label("Recent", Rect::new(fx, top + 70.0 * s, rw, 24.0 * s), 14.0, theme.text, true, Align::Left);
+            let mut y = top + 100.0 * s;
+            for (i, path) in self.settings.recent.iter().enumerate() {
+                if y > self.h - 60.0 * s {
+                    break;
+                }
+                let p = Path::new(path);
+                let name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+                let dir = p.parent().map(|d| d.to_string_lossy().to_string()).unwrap_or_default();
+                let rr = Rect::new(fx, y, rw - 16.0 * s, 44.0 * s);
+                cx.label(&name, Rect::new(rr.x + 6.0 * s, y + 2.0 * s, rr.w, 22.0 * s), 13.0, theme.text, false, Align::Left);
+                cx.label(&dir, Rect::new(rr.x + 6.0 * s, y + 21.0 * s, rr.w, 18.0 * s), 11.0, theme.muted, false, Align::Left);
+                b.hits.push((format!("recent:{i}"), rr));
+                y += 46.0 * s;
+            }
+            fx += rw;
+        }
+        b.files.paint(&mut cx, Rect::new(fx, top + 70.0 * s, main.right() - fx - 32.0 * s, main.h - 90.0 * s));
     }
 }
 

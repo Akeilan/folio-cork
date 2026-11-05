@@ -4,6 +4,7 @@
 mod app;
 mod icons;
 mod ribbon_defs;
+mod settings;
 mod uitest;
 
 use folio_kit::platform::{run, Image, WindowSpec};
@@ -73,6 +74,11 @@ fn main() {
     }
     if let Some(d) = ui_test {
         folio_kit::platform::set_setting("FOLIO_UI_DIR", &d);
+        // tests never touch the user's settings
+        if folio_kit::platform::setting("FOLIO_CONFIG_DIR").is_none() {
+            folio_kit::platform::set_setting("FOLIO_CONFIG_DIR", &d.join("config"));
+        }
+        a.settings = settings::Settings::default();
         a.test = Some(uitest::UiTest::new(d));
     }
     if headless {
