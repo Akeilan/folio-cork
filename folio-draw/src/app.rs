@@ -27,6 +27,7 @@ pub const PALETTE: [u32; 20] = [
     0x7092BE, 0xC8BFE7,
 ];
 pub const SIZES: [f32; 6] = [1.0, 3.0, 5.0, 8.0, 12.0, 20.0];
+pub const TEXT_SIZES: [u32; 8] = [12, 18, 24, 36, 48, 72, 96, 144];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tool {
@@ -41,6 +42,7 @@ pub enum Tool {
     Select,
     FreeSelect,
     Wand,
+    Text,
 }
 
 impl Tool {
@@ -57,6 +59,7 @@ impl Tool {
             Tool::Select => "select",
             Tool::FreeSelect => "freeselect",
             Tool::Wand => "wand",
+            Tool::Text => "text",
         }
     }
     pub fn from_id(s: &str) -> Option<Tool> {
@@ -72,6 +75,7 @@ impl Tool {
             "select" => Tool::Select,
             "freeselect" => Tool::FreeSelect,
             "wand" => Tool::Wand,
+            "text" => Tool::Text,
             _ => return None,
         })
     }
@@ -129,6 +133,8 @@ pub struct DrawApp {
     pub c2: [u8; 4],
     pub shape_fill: bool,
     pub brush: u8,
+    text_at: Option<Pt>,
+    pub text_size: usize,
     pub zoom: f32,
     pub scroll: (f32, f32),
     pub canvas: Rect,
@@ -178,6 +184,8 @@ impl DrawApp {
             c2: [255, 255, 255, 255],
             shape_fill: false,
             brush: doc::TOOL_BRUSH,
+            text_at: None,
+            text_size: 2,
             zoom: 1.0,
             scroll: (0.0, 0.0),
             canvas: Rect::default(),
@@ -356,7 +364,7 @@ impl DrawApp {
         if let Some(d) = self.dialog.as_mut() {
             if let DialogResult::Button(b) = d.event(ev, host, &mut r.text, self.s) {
                 let d = self.dialog.take().unwrap();
-                self.dialog_done(d, &b, host);
+                self.dialog_done(d, &b, host, r);
             }
             return;
         }
@@ -441,6 +449,7 @@ impl DrawApp {
         }
         match self.tool {
             Tool::Select | Tool::FreeSelect | Tool::Wand if self.in_selection(self.to_doc(x, y)) => Cursor::Move,
+            Tool::Text => Cursor::Text,
             _ => Cursor::Crosshair,
         }
     }
@@ -512,6 +521,7 @@ impl DrawApp {
                     'r' => Some(Tool::Rect),
                     'o' => Some(Tool::Ellipse),
                     's' => Some(Tool::Select),
+                    't' => Some(Tool::Text),
                     _ => None,
                 };
                 if let Some(t) = t {
@@ -578,6 +588,19 @@ impl DrawApp {
                 self.doc.commit_float();
                 self.doc.op_begin();
                 self.drag = Some(Drag::Shape { tool: self.tool, a: p, color: fg });
+            }
+            Tool::Text => {
+                self.doc.commit_float();
+                self.text_at = Some(p);
+                self.dialog = Some(
+                    Dialog::new("text", "Text")
+                        .text("text", "Text", "")
+                        .choice("size", "Size", &TEXT_SIZES.iter().map(|s| s.to_string()).collect::<Vec<_>>().iter().map(|s| s.as_str()).collect::<Vec<_>>(), self.text_size)
+                        .check("bold", "Bold", false)
+                        .check("italic", "Italic", false)
+                        .button("ok", "OK")
+                        .button("cancel", "Cancel"),
+                );
             }
             Tool::Wand => {
                 self.doc.commit_float();
@@ -874,6 +897,31 @@ impl DrawApp {
         }
     }
 
+    /// Typed text drawn onto the active layer in colour 1, its top left at `at`.
+    pub fn put_text(&mut self, t: &str, at: Pt, size: f32, bold: bool, italic: bool, r: &mut Res) {
+        let st = folio_kit::text::TextStyle {
+            family: String::new(),
+            size,
+            bold,
+            italic,
+            underline: false,
+            color: Color::rgba(self.c1[0], self.c1[1], self.c1[2], self.c1[3]),
+            align: Align::Left,
+            line: 1.2,
+        };
+        let lay = r.text.layout(t, &st, None);
+        let (w, h) = ((lay.width.ceil() as u32 + 4).max(1), (lay.height.ceil() as u32 + 4).max(1));
+        let Some(mut pm) = sk::Pixmap::new(w, h) else { return };
+        r.text.draw(&mut pm, t, &st, 2.0, 2.0, None);
+        // the engine takes premultiplied BGRA
+        let mut data = pm.take();
+        for p in data.chunks_exact_mut(4) {
+            p.swap(0, 2);
+        }
+        self.doc.blit_premul(at.0 as i64, at.1 as i64, w as usize, h as usize, &data, w as usize * 4);
+        self.doc.label_last("Text");
+    }
+
     pub fn paste_rgba(&mut self, w: usize, h: usize, px: Vec<u8>) {
         if w == 0 || h == 0 || px.len() < w * h * 4 {
             return;
@@ -955,8 +1003,15 @@ impl DrawApp {
         self.command(id, &mut h);
     }
 
-    fn dialog_done(&mut self, d: Dialog, button: &str, host: &mut dyn Host) {
+    fn dialog_done(&mut self, d: Dialog, button: &str, host: &mut dyn Host, r: &mut Res) {
         match (d.id.as_str(), button) {
+            ("text", "ok") => {
+                let t = d.value("text");
+                self.text_size = d.choice_index("size");
+                if let (Some(at), false) = (self.text_at.take(), t.trim().is_empty()) {
+                    self.put_text(&t, at, TEXT_SIZES[self.text_size.min(TEXT_SIZES.len() - 1)] as f32, d.checked("bold"), d.checked("italic"), r);
+                }
+            }
             ("resize", "ok") => {
                 let w: usize = d.value("w").trim().parse().unwrap_or(0);
                 let mut h: usize = d.value("h").trim().parse().unwrap_or(0);

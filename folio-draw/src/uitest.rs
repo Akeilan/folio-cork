@@ -204,6 +204,26 @@ impl UiTest {
             }
             Ok(())
         });
+        step!("the Text tool types onto the picture", |app: &mut DrawApp, h: &mut dyn Host, r: &mut Res| {
+            app.c1 = [0, 0, 0, 255];
+            key(app, h, r, Key::Char('t'), Mods::NONE);
+            check(app.tool == Tool::Text, "T didn't choose the Text tool")?;
+            let before = app.doc.flatten_rgba();
+            click_on(app, h, r, 900.0, 500.0, Button::Left);
+            check(app.dialog.is_some(), "no Text box")?;
+            shot(app, r);
+            ev(app, h, r, Event::Text("Hello".into()));
+            key(app, h, r, Key::Enter, Mods::NONE);
+            check(app.dialog.is_none(), "Text box still open")?;
+            let after = app.doc.flatten_rgba();
+            let w = app.doc.w;
+            let dark = (500..540).flat_map(|y| (900..1000).map(move |x| (x, y))).filter(|&(x, y)| {
+                let o = (y * w + x) * 4;
+                after[o] < 100 && before[o] > 200
+            }).count();
+            check(dark > 40, &format!("{dark} dark pixels where the text should be"))?;
+            check(app.doc.history().0.last().map(|l| *l == "Text").unwrap_or(false), "undo step not named Text")
+        });
         step!("copy and paste", |app: &mut DrawApp, h: &mut dyn Host, r: &mut Res| {
             app.doc.sel_rect(300, 350, 200, 150);
             key(app, h, r, Key::Char('c'), ctrl());

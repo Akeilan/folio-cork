@@ -32,6 +32,7 @@ const ICONS: &[(&str, &str)] = &[
     ("layers", "<path d='M12 4l8 4-8 4-8-4z'/><path d='M4 12l8 4 8-4M4 16l8 4 8-4'/>"),
     ("merge", "<path d='M12 4l8 4-8 4-8-4z'/><path d='M12 14v7M9 18l3 3 3-3'/>"),
     ("flatten", "<path d='M4 10h16M4 14h16'/><path d='M12 3v5M9 5l3 3 3-3M12 21v-5M9 19l3-3 3 3'/>"),
+    ("text", "<path d='M5 6V4h14v2M12 4v16M9 20h6'/>"),
     ("invert", "<circle cx='12' cy='12' r='8'/><path d='M12 4a8 8 0 0 1 0 16z' fill='currentColor'/>"),
 ];
 

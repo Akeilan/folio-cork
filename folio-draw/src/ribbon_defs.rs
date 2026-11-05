@@ -30,7 +30,7 @@ pub fn tabs() -> Vec<Tab> {
                     "Tools",
                     vec![
                         vec![I::icon("tool.pencil", "Pencil", "pencil").key("P"), I::icon("tool.fill", "Fill with colour", "fill").key("F")],
-                        vec![I::icon("tool.eraser", "Eraser", "eraser").key("E"), I::icon("tool.picker", "Colour picker", "picker").key("I")],
+                        vec![I::icon("tool.eraser", "Eraser", "eraser").key("E"), I::icon("tool.picker", "Colour picker", "picker").key("I"), I::icon("tool.text", "Text", "text").key("T")],
                     ],
                 ),
                 Group::new("Brushes", vec![I::large("tool.brush", "Brushes", "brush").split().key("B").desc("Paint with soft edges, a calligraphy nib, an airbrush or a marker.")]),
