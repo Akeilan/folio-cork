@@ -683,6 +683,49 @@ impl UiTest {
             check(back.emb == app.doc.emb, &format!("the .ora lost the settings: {:?} vs {:?}", back.emb, app.doc.emb))?;
             check(crate::emb::layer_spec(&back, back.layers.len() - 1).is_some(), "the .ora lost the shapes")
         });
+        step!("lettering from a font, and an envelope that bends it", |app: &mut DrawApp, h: &mut dyn Host, r: &mut Res| {
+            app.saved_for_test();
+            app.command("emb.new:1", h);
+            ev(app, h, r, Event::MouseMove { x: 1.0, y: 1.0 });
+            let layers = app.doc.layers.len();
+            app.command("emb.letter", h);
+            shot(app, r);
+            let d = app.dialog.as_mut().ok_or("the Lettering box didn't open")?;
+            let font = app.fonts.iter().position(|f| f == "Carlito Bold").ok_or("Carlito Bold isn't among the fonts")?;
+            d.set_choice("font", font);
+            ev(app, h, r, Event::Text("FOLIO".into()));
+            key(app, h, r, Key::Enter, Mods::NONE);
+            check(app.dialog.is_none(), "the box stayed open")?;
+            check(app.doc.layers.len() == layers + 1, &format!("no lettering layer: {} layers", app.doc.layers.len()))?;
+            let li = app.doc.layers.len() - 1;
+            let sp = crate::emb::layer_spec(&app.doc, li).ok_or("the lettering layer has no shapes")?;
+            let o = sp["objects"][0].clone();
+            check(o["kind"] == "lettering" && o["text"] == "FOLIO", &format!("object {o}"))?;
+            let glyphs = o["glyphs"].as_array().map(|g| g.len()).unwrap_or(0);
+            check(glyphs == 5, &format!("{glyphs} letters drawn, not 5"))?;
+            let (x0, y0, x1, y1) = crate::emb::object_bounds(&o);
+            check((y1 - y0 - 10.0).abs() < 1.0 && x1 - x0 > 20.0, &format!("letters {:.1} x {:.1} mm", x1 - x0, y1 - y0))?;
+            // the letters are actually painted on the layer, in the thread colour
+            let (cx, cy) = crate::emb::mm_to_px(&crate::emb::settings(&app.doc).unwrap(), (x0 + x1) / 2.0, (y0 + y1) / 2.0);
+            let around = (-30..30).any(|dx| (-30..30).any(|dy| px(app, (cx as i32 + dx) as usize, (cy as i32 + dy) as usize)[3] > 0));
+            check(around, "nothing was drawn where the letters are")?;
+            // an envelope bends them: the arch makes the word taller
+            app.emb_sel = Some((li, o["id"].as_i64().unwrap_or(1)));
+            app.command("emb.envelope", h);
+            shot(app, r);
+            let d = app.dialog.as_mut().ok_or("the Envelope box didn't open")?;
+            d.set_choice("kind", 1);
+            key(app, h, r, Key::Enter, Mods::NONE);
+            let sp = crate::emb::layer_spec(&app.doc, li).ok_or("the layer lost its shapes")?;
+            let o2 = sp["objects"][0].clone();
+            let (_, ny0, _, ny1) = crate::emb::object_bounds(&o2);
+            check(ny1 - ny0 > (y1 - y0) * 1.2, &format!("the arch didn't make it taller: {:.1} vs {:.1}", ny1 - ny0, y1 - y0))?;
+            check(crate::emb::make_plan(&app.doc).is_some(), "the lettering can't be planned into stitches")?;
+            key(app, h, r, Key::Char('z'), ctrl());
+            let o3 = crate::emb::layer_spec(&app.doc, li).ok_or("gone after undo")?["objects"][0].clone();
+            let (_, uy0, _, uy1) = crate::emb::object_bounds(&o3);
+            check((uy1 - uy0 - (y1 - y0)).abs() < 0.5, &format!("undo left it bent: {:.1}", uy1 - uy0))
+        });
         step!("changing the hoop is one undo step, the old hoop and all", |app: &mut DrawApp, h: &mut dyn Host, r: &mut Res| {
             app.saved_for_test();
             app.command("emb.new:0", h);

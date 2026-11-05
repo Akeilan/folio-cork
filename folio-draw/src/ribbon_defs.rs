@@ -128,8 +128,10 @@ pub fn tabs() -> Vec<Tab> {
                         I::large("tool.emb", "Select shapes", "select").desc("Click a shape to select it; drag to move it; Delete takes it away."),
                         I::large("emb.recolour", "Thread colour", "color").menu(),
                         I::large("emb.stitch", "Stitch properties", "stitches").desc("Stitch type, angle, density and underlay of the selected shape."),
+                        I::small("emb.envelope", "Envelope", "envelope").desc("Bend the selected shapes or lettering: arch, bulge, pinch, wave or slant."),
                     ],
                 ),
+                Group::new("Lettering", vec![I::large("emb.letter", "Lettering", "lettering").desc("Letters from a font, straight or on an arc, as shapes that can be stitched.")]),
                 Group::new(
                     "Stitches",
                     vec![

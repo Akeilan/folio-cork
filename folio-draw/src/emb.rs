@@ -269,6 +269,33 @@ pub fn render_layer(spec: &Value, s: &Value) -> Vec<u8> {
     px
 }
 
+/// Add an object to a shape layer, or to a new layer of its own, and give it the next free id.
+/// Returns the layer it went on.
+pub fn add_object(doc: &mut Doc, layer: Option<usize>, name: &str, mut o: Value) -> usize {
+    match layer.and_then(|i| layer_spec(doc, i).map(|sp| (i, sp))) {
+        Some((i, mut spec)) => {
+            let id = spec["next_id"].as_i64().unwrap_or(1);
+            o["id"] = json!(id);
+            spec["next_id"] = json!(id + 1);
+            if let Some(objs) = spec["objects"].as_array_mut() {
+                objs.push(o);
+            }
+            spec["edited"] = json!(true);
+            store_layer(doc, i, &spec);
+            i
+        }
+        None => {
+            o["id"] = json!(1);
+            add_shape_layer(doc, name, &json!({"objects": [o], "next_id": 2, "lettering": name == "Lettering"}))
+        }
+    }
+}
+
+/// The topmost layer holding lettering, if there is one.
+pub fn lettering_layer(doc: &Doc) -> Option<usize> {
+    (0..doc.layers.len()).rev().find(|i| layer_spec(doc, *i).map(|sp| sp["lettering"] == json!(true)).unwrap_or(false))
+}
+
 /// Add a shape layer to an embroidery document.
 pub fn add_shape_layer(doc: &mut Doc, name: &str, spec: &Value) -> usize {
     let Some(s) = settings(doc) else { return doc.active };
@@ -529,7 +556,15 @@ pub fn move_object(o: &mut Value, dx: f32, dy: f32) {
                 shift(g);
             }
         }
+        // the centre moves with them, so working the letters out again keeps them where they are
+        o["x"] = json!(o["x"].as_f64().unwrap_or(0.0) + dx as f64);
+        o["y"] = json!(o["y"].as_f64().unwrap_or(0.0) + dy as f64);
     } else {
         shift(&mut o["rings"]);
+        if o.get("rings_plain").is_some() {
+            let mut plain = o["rings_plain"].take();
+            shift(&mut plain);
+            o["rings_plain"] = plain;
+        }
     }
 }

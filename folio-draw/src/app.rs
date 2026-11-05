@@ -212,6 +212,9 @@ pub struct DrawApp {
     pub transparent_sel: bool,
     pub wand_tol: f32,
     pub stab: [[u8; 3]; 3],
+    /// Font names for lettering, filled on the first paint (it needs the text engine).
+    pub fonts: Vec<String>,
+    pub letter_font: String,
     stab_run: Option<crate::stabilizer::Stabilizer>,
     pub wand_contiguous: bool,
     pub rulers: bool,
@@ -280,6 +283,8 @@ impl DrawApp {
             transparent_sel: false,
             wand_tol: 32.0,
             stab: [[0; 3]; 3],
+            fonts: vec![],
+            letter_font: "Carlito Bold".into(),
             stab_run: None,
             wand_contiguous: true,
             rulers: false,
@@ -1524,6 +1529,40 @@ impl DrawApp {
                         .button("cancel", "Cancel"),
                 );
             }
+            "emb.letter" => {
+                if crate::emb::settings(&self.doc).is_none() {
+                    self.flash("Start an embroidery design first (New embroidery).");
+                    return;
+                }
+                let fonts: Vec<&str> = self.fonts.iter().map(|s| s.as_str()).collect();
+                let at = self.fonts.iter().position(|f| *f == self.letter_font).unwrap_or(0);
+                self.dialog = Some(
+                    Dialog::new("emb.letter", "Lettering")
+                        .text("text", "Words", "")
+                        .choice("font", "Font", &fonts, at)
+                        .text("cap", "Letter height (mm, a capital)", "10")
+                        .text("spacing", "Extra space between letters (mm)", "0")
+                        .choice("arc", "Set on", &["A straight line", "An arc, letters outwards", "An arc, letters inwards"], 0)
+                        .text("radius", "Arc radius (mm)", "40")
+                        .button("ok", "OK")
+                        .button("cancel", "Cancel"),
+                );
+            }
+            "emb.envelope" => {
+                if self.emb_sel.is_none() {
+                    self.flash("Select shapes or lettering first.");
+                    return;
+                }
+                let kinds: Vec<&str> = crate::letters::ENVELOPES.iter().map(|e| e.1).collect();
+                self.dialog = Some(
+                    Dialog::new("emb.envelope", "Envelope")
+                        .note("Bends the selected shapes. None puts lettering back as it was typed.")
+                        .choice("kind", "Shape", &kinds, 0)
+                        .text("amount", "Amount (per cent)", "30")
+                        .button("ok", "OK")
+                        .button("cancel", "Cancel"),
+                );
+            }
             "emb.place" => {
                 if crate::emb::settings(&self.doc).is_none() {
                     self.flash("Start an embroidery design first (New embroidery).");
@@ -1896,6 +1935,52 @@ impl DrawApp {
                     st["pull"] = serde_json::json!(pl);
                     st["underlay"] = serde_json::json!(ul);
                     o["stitch"] = st;
+                });
+            }
+            ("emb.letter", "ok") => {
+                let words = d.value("text");
+                if !words.trim().is_empty() && crate::emb::settings(&self.doc).is_some() {
+                    let num = |id: &str, dflt: f32| d.value(id).trim().replace(',', ".").parse::<f32>().unwrap_or(dflt);
+                    let cap = num("cap", 10.0).clamp(1.0, 200.0);
+                    let font = self.fonts.get(d.choice_index("font")).cloned().unwrap_or_else(|| self.letter_font.clone());
+                    self.letter_font = font.clone();
+                    let arc = ["none", "top", "bottom"][d.choice_index("arc").min(2)];
+                    let c = self.c1;
+                    let mut o = serde_json::json!({
+                        "kind": "lettering", "text": words, "font": font, "cap": cap,
+                        "spacing": num("spacing", 0.0).clamp(-cap, cap * 4.0), "arc": arc,
+                        "radius": num("radius", 40.0).max(1.0), "x": 0.0, "y": 0.0,
+                        "thread": {"rgb": [c[0], c[1], c[2]]},
+                        "stitch": {"type": crate::letters::default_type(cap)},
+                    });
+                    crate::letters::regen(&mut r.text, &mut o);
+                    if o["glyphs"].as_array().map(|g| g.is_empty()).unwrap_or(true) {
+                        self.flash("Those letters aren't in that font.");
+                    } else {
+                        self.doc.commit_float();
+                        let layer = crate::emb::lettering_layer(&self.doc);
+                        let li = crate::emb::add_object(&mut self.doc, layer, "Lettering", o);
+                        self.doc.label_last("Lettering");
+                        self.doc.active = li;
+                    }
+                }
+            }
+            ("emb.envelope", "ok") => {
+                let kind = crate::letters::ENVELOPES[d.choice_index("kind").min(crate::letters::ENVELOPES.len() - 1)].0;
+                let amount = d.value("amount").trim().replace(',', ".").parse::<f32>().unwrap_or(30.0).clamp(0.0, 100.0);
+                let env = serde_json::json!({"kind": kind, "amount": amount});
+                let text = &mut r.text;
+                self.edit_emb_object("Envelope", |o| {
+                    o["envelope"] = env.clone();
+                    if o["kind"] == "lettering" {
+                        crate::letters::regen(text, o);
+                    } else if let Some(rings) = o["rings"].as_array().cloned() {
+                        if o.get("rings_plain").is_none() {
+                            o["rings_plain"] = serde_json::json!(rings);
+                        }
+                        let plain = o["rings_plain"].clone();
+                        o["rings"] = crate::letters::warp_json(&plain, &env);
+                    }
                 });
             }
             ("emb.hoop", "ok") => {
@@ -2345,6 +2430,9 @@ impl DrawApp {
     }
 
     pub fn paint(&mut self, pm: &mut sk::Pixmap, r: &mut Res) {
+        if self.fonts.is_empty() {
+            self.fonts = crate::letters::fonts(&mut r.text);
+        }
         self.w = pm.width() as f32;
         self.h = pm.height() as f32;
         self.layout();
