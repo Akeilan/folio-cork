@@ -222,6 +222,9 @@ pub struct DrawApp {
     /// The selected embroidery object: (layer, object id).
     pub emb_sel: Option<(usize, i64)>,
     pub text_size: usize,
+    pub text_font: usize,
+    pub text_underline: bool,
+    pub text_opaque: bool,
     pub zoom: f32,
     pub scroll: (f32, f32),
     pub canvas: Rect,
@@ -302,6 +305,9 @@ impl DrawApp {
             export_ext: "pes".into(),
             emb_sel: None,
             text_size: 2,
+            text_font: 0,
+            text_underline: false,
+            text_opaque: false,
             zoom: 1.0,
             scroll: (0.0, 0.0),
             canvas: Rect::default(),
@@ -933,25 +939,37 @@ impl DrawApp {
             Tool::Text => {
                 self.doc.commit_float();
                 let (mut txt, mut bold, mut italic, mut at) = (String::new(), false, false, p);
+                let (mut under, mut opaque) = (self.text_underline, self.text_opaque);
                 self.text_edit = None;
                 if let Some((i, spec)) = self.text_layer_at(p) {
                     // a text layer: type it again
                     txt = spec["text"].as_str().unwrap_or("").to_string();
                     bold = spec["bold"].as_bool().unwrap_or(false);
                     italic = spec["italic"].as_bool().unwrap_or(false);
+                    under = spec["underline"].as_bool().unwrap_or(false);
+                    opaque = spec["text_opaque"].as_bool().unwrap_or(false);
                     at = (spec["x"].as_f64().unwrap_or(0.0) as f32, spec["y"].as_f64().unwrap_or(0.0) as f32);
                     let size = spec["font_size"].as_f64().unwrap_or(24.0) as u32;
                     self.text_size = TEXT_SIZES.iter().position(|&s| s >= size).unwrap_or(TEXT_SIZES.len() - 1);
+                    let fam = spec["font_family"].as_str().unwrap_or("");
+                    if let Some(k) = self.text_fonts().iter().position(|f| f == fam) {
+                        self.text_font = k;
+                    }
                     self.text_edit = Some(i);
                     self.doc.set_active(i);
                 }
                 self.text_at = Some(at);
+                let fonts = self.text_fonts();
+                let names: Vec<&str> = fonts.iter().map(|f| if f.is_empty() { "The app's font" } else { f.as_str() }).collect();
                 self.dialog = Some(
                     Dialog::new("text", "Text")
                         .text("text", "Text", &txt)
+                        .choice("font", "Font", &names, self.text_font.min(names.len().saturating_sub(1)))
                         .choice("size", "Size", &TEXT_SIZES.iter().map(|s| s.to_string()).collect::<Vec<_>>().iter().map(|s| s.as_str()).collect::<Vec<_>>(), self.text_size)
                         .check("bold", "Bold", bold)
                         .check("italic", "Italic", italic)
+                        .check("underline", "Underline", under)
+                        .check("opaque", "Fill the box behind with colour 2", opaque)
                         .button("ok", "OK")
                         .button("cancel", "Cancel"),
                 );
@@ -1242,6 +1260,17 @@ impl DrawApp {
     }
 
     /// Change the selected embroidery object and store its layer again (one undo step).
+    /// The fonts the Text tool offers: the app's own first, then what is installed.
+    pub fn text_fonts(&self) -> Vec<String> {
+        let mut out = vec![String::new()];
+        for f in &self.fonts {
+            if !f.ends_with(" Bold") && !out.contains(f) {
+                out.push(f.clone());
+            }
+        }
+        out
+    }
+
     /// Every command the ribbon offers, as (id, label), for the search box.
     pub fn all_commands(&self) -> Vec<(String, String)> {
         let mut out: Vec<(String, String)> = vec![];
@@ -1921,12 +1950,13 @@ impl DrawApp {
 
     /// Typed text drawn onto the active layer in colour 1, its top left at `at`.
     pub fn put_text(&mut self, t: &str, at: Pt, size: f32, bold: bool, italic: bool, r: &mut Res) {
+        let family = self.text_fonts().get(self.text_font).cloned().unwrap_or_default();
         let st = folio_kit::text::TextStyle {
-            family: String::new(),
+            family: family.clone(),
             size,
             bold,
             italic,
-            underline: false,
+            underline: self.text_underline,
             color: Color::rgba(self.c1[0], self.c1[1], self.c1[2], self.c1[3]),
             align: Align::Left,
             line: 1.2,
@@ -1934,6 +1964,9 @@ impl DrawApp {
         let lay = r.text.layout(t, &st, None);
         let (w, h) = ((lay.width.ceil() as u32 + 4).max(1), (lay.height.ceil() as u32 + 4).max(1));
         let Some(mut pm) = sk::Pixmap::new(w, h) else { return };
+        if self.text_opaque {
+            pm.fill(Color::rgba(self.c2[0], self.c2[1], self.c2[2], self.c2[3]).to_sk());
+        }
         r.text.draw(&mut pm, t, &st, 2.0, 2.0, None);
         // the engine takes premultiplied BGRA
         let mut data = pm.take();
@@ -1945,8 +1978,8 @@ impl DrawApp {
         let spec = serde_json::json!({
             "text": t, "x": x, "y": y, "w": w, "h": h,
             "color1": self.c1, "color2": self.c2,
-            "font_family": "", "font_size": size, "bold": bold, "italic": italic,
-            "underline": false, "strike": false, "text_opaque": false,
+            "font_family": family, "font_size": size, "bold": bold, "italic": italic,
+            "underline": self.text_underline, "strike": false, "text_opaque": self.text_opaque,
         })
         .to_string();
         match self.text_edit.take() {
@@ -2386,6 +2419,9 @@ impl DrawApp {
             ("text", "ok") => {
                 let t = d.value("text");
                 self.text_size = d.choice_index("size");
+                self.text_font = d.choice_index("font");
+                self.text_underline = d.checked("underline");
+                self.text_opaque = d.checked("opaque");
                 if let (Some(at), false) = (self.text_at.take(), t.trim().is_empty()) {
                     self.put_text(&t, at, TEXT_SIZES[self.text_size.min(TEXT_SIZES.len() - 1)] as f32, d.checked("bold"), d.checked("italic"), r);
                 }

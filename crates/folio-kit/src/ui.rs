@@ -699,6 +699,17 @@ impl Dialog {
     pub fn checked(&self, id: &str) -> bool {
         self.value(id) == "true"
     }
+    /// Tick or clear a check field without clicking it (used by the window tests).
+    pub fn set_check_for_test(&mut self, id: &str, on: bool) {
+        for f in self.fields.iter_mut() {
+            if f.id == id {
+                if let FieldKind::Check(v) = &mut f.kind {
+                    *v = on;
+                }
+            }
+        }
+    }
+
     /// Pick a choice field's option without clicking it (used by the window tests).
     pub fn set_choice(&mut self, id: &str, sel: usize) {
         for f in self.fields.iter_mut() {
