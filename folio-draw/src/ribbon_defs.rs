@@ -83,6 +83,15 @@ pub fn tabs() -> Vec<Tab> {
                     ],
                 ),
                 Group::new(
+                    "Frames",
+                    vec![
+                        I::large("frames", "Frames view", "frames").desc("Show one layer at a time, as the frames of an animated GIF or WebP."),
+                        I::small("frame.prev", "Previous frame", "frame-prev").key(","),
+                        I::small("frame.next", "Next frame", "frame-next").key("."),
+                        I::small("frame.play", "Play", "frame-play"),
+                    ],
+                ),
+                Group::new(
                     "Adjust",
                     vec![
                         I::large("adjust", "Adjustments", "adjust").menu().desc("Brightness and contrast, hue and saturation, greyscale, sepia, blur and sharpen; on the selection when there is one."),

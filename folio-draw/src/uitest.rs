@@ -533,6 +533,47 @@ impl UiTest {
             app.command("zoom.fit", h);
             Ok(())
         });
+        let d4 = dir.clone();
+        step!("an animated GIF opens as frames that step and play", move |app: &mut DrawApp, h: &mut dyn Host, r: &mut Res| {
+            // four frames, each a different colour
+            let cols = [[255u8, 0, 0, 255], [0, 255, 0, 255], [0, 0, 255, 255], [255, 255, 0, 255]];
+            let frames: Vec<Vec<u8>> = cols.iter().map(|c| c.repeat(32 * 32)).collect();
+            let refs: Vec<(&[u8], u32)> = frames.iter().map(|f| (f.as_slice(), 50)).collect();
+            let gif = folio_draw_engine::gif::encode_animation(32, 32, &refs, Some(0));
+            let p = d4.join("frames.gif");
+            std::fs::write(&p, gif).map_err(|e| e.to_string())?;
+            app.dialog = None;
+            app.after = Some(crate::app::After::Open(p));
+            app.saved_for_test();
+            ev(app, h, r, Event::MouseMove { x: 1.0, y: 1.0 });
+            check(app.doc.layers.len() == 4, &format!("{} layers", app.doc.layers.len()))?;
+            check(app.doc.solo, "the frames view isn't on")?;
+            let a = app.doc.active;
+            key(app, h, r, Key::Char('.'), Mods::NONE);
+            check(app.doc.active == (a + 1) % 4, "'.' didn't step to the next frame")?;
+            key(app, h, r, Key::Char(','), Mods::NONE);
+            check(app.doc.active == a, "',' didn't step back")?;
+            app.doc.set_active(3);
+            app.command("frame.next", h);
+            check(app.doc.active == 0, "next frame didn't wrap to the first")?;
+            ribbon_click(app, h, r, "view", "frame.play")?;
+            check(app.playing.is_some(), "play didn't start")?;
+            app.ribbon.select_tab("home");
+            Ok(())
+        });
+        step!("playback moves through the frames, a click stops it", |app: &mut DrawApp, h: &mut dyn Host, r: &mut Res| {
+            // the test ticks every 60 ms of the virtual clock and frames last 50 ms
+            let a = app.doc.active;
+            let seen = app.doc.active != a || app.playing.is_some();
+            check(seen, "not playing")?;
+            for _ in 0..3 {
+                app.playing = Some(std::time::Duration::ZERO);
+                ev(app, h, r, Event::Tick);
+            }
+            check(app.doc.active != a, "frames didn't advance")?;
+            click_on(app, h, r, 10.0, 10.0, Button::Left);
+            check(app.playing.is_none(), "a click didn't stop playback")
+        });
         step!("dark theme", |app: &mut DrawApp, _h: &mut dyn Host, r: &mut Res| {
             app.theme = folio_kit::theme::Theme::new(true, crate::app::MAROON, crate::app::ACCENT);
             let pm = shot(app, r);

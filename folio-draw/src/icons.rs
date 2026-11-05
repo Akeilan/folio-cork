@@ -38,6 +38,10 @@ const ICONS: &[(&str, &str)] = &[
     ("grid", "<rect x='4' y='4' width='16' height='16'/><path d='M4 9.3h16M4 14.6h16M9.3 4v16M14.6 4v16'/>"),
     ("curve", "<path d='M4 18C8 4 14 22 20 6'/>"),
     ("polygon", "<path d='M12 4l8 6-3 9H7l-3-9z'/>"),
+    ("frames", "<rect x='3' y='6' width='12' height='12'/><path d='M18 6v12M21 8v8'/>"),
+    ("frame-prev", "<path d='M15 6l-6 6 6 6'/>"),
+    ("frame-next", "<path d='M9 6l6 6-6 6'/>"),
+    ("frame-play", "<path d='M8 5l11 7-11 7z'/>"),
     ("invert", "<circle cx='12' cy='12' r='8'/><path d='M12 4a8 8 0 0 1 0 16z' fill='currentColor'/>"),
 ];
 
