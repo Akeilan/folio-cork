@@ -109,6 +109,7 @@ pub fn tabs() -> Vec<Tab> {
                     "Design",
                     vec![
                         I::large("emb.new", "New embroidery", "hoop").menu().desc("A new design the size of a hoop."),
+                        I::small("emb.hoop", "Hoop and machine", "hoop").desc("The hoop size, machine and trims of this design."),
                         I::large("emb.import", "Import stitches", "emb-import").desc("Open a machine file (PES, DST, JEF, EXP, VP3, XXX, PEC) as a stitch object."),
                     ],
                 ),
@@ -124,6 +125,7 @@ pub fn tabs() -> Vec<Tab> {
                     vec![
                         I::large("tool.emb", "Select shapes", "select").desc("Click a shape to select it; drag to move it; Delete takes it away."),
                         I::large("emb.recolour", "Thread colour", "color").menu(),
+                        I::large("emb.stitch", "Stitch properties", "stitches").desc("Stitch type, angle, density and underlay of the selected shape."),
                     ],
                 ),
                 Group::new(

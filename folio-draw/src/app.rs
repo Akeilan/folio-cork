@@ -27,6 +27,14 @@ pub const PALETTE: [u32; 20] = [
     0x7092BE, 0xC8BFE7,
 ];
 pub const SIZES: [f32; 6] = [1.0, 3.0, 5.0, 8.0, 12.0, 20.0];
+pub const STITCH_TYPES: [(&str, &str); 6] = [
+    ("auto", "Automatic (by width)"),
+    ("fill", "Fill (tatami)"),
+    ("satin", "Satin"),
+    ("run", "Running stitch"),
+    ("applique", "Appliqué (placement, tack-down, satin cover)"),
+    ("knockdown", "Knockdown (light net under the design)"),
+];
 pub const BLENDS: [&str; 8] = ["Normal", "Multiply", "Screen", "Overlay", "Darken", "Lighten", "Difference", "Add"];
 pub const TEXT_SIZES: [u32; 8] = [12, 18, 24, 36, 48, 72, 96, 144];
 
@@ -1404,6 +1412,44 @@ impl DrawApp {
                 }
             }
             "emb.import" => self.open_back(BackPage::ImportStitches),
+            "emb.stitch" => {
+                let Some((li, id)) = self.emb_sel else {
+                    self.flash("Select a shape first.");
+                    return;
+                };
+                let o = crate::emb::layer_spec(&self.doc, li).and_then(|sp| sp["objects"].as_array().and_then(|a| a.iter().find(|o| o["id"].as_i64() == Some(id)).cloned())).unwrap_or_default();
+                let st = &o["stitch"];
+                let t = st["type"].as_str().unwrap_or("auto");
+                let ti = STITCH_TYPES.iter().position(|(k, _)| *k == t).unwrap_or(0);
+                let ang = st["angle"].as_f64().map(|a| format!("{a}")).unwrap_or_default();
+                self.dialog = Some(
+                    Dialog::new("emb.stitch", "Stitch properties")
+                        .choice("type", "Stitch type", &STITCH_TYPES.iter().map(|(_, l)| *l).collect::<Vec<_>>(), ti)
+                        .text("angle", "Fill angle (degrees; empty = automatic)", &ang)
+                        .text("spacing", "Row spacing (mm)", &format!("{}", st["spacing"].as_f64().unwrap_or(0.35)))
+                        .text("length", "Stitch length (mm)", &format!("{}", st["length"].as_f64().unwrap_or(3.5)))
+                        .text("pull", "Pull compensation (mm)", &format!("{}", st["pull"].as_f64().unwrap_or(0.2)))
+                        .check("underlay", "Underlay", st["underlay"].as_bool().unwrap_or(true))
+                        .button("ok", "OK")
+                        .button("cancel", "Cancel"),
+                );
+            }
+            "emb.hoop" => {
+                let Some(stt) = crate::emb::settings(&self.doc) else {
+                    self.flash("This picture isn't an embroidery design.");
+                    return;
+                };
+                let cur = crate::emb::HOOPS.iter().position(|h| stt["hoop"].as_str() == Some(h.0)).unwrap_or(0);
+                self.dialog = Some(
+                    Dialog::new("emb.hoop", "Hoop and machine")
+                        .choice("hoop", "Hoop", &crate::emb::HOOPS.iter().map(|h| h.0).collect::<Vec<_>>(), cur)
+                        .text("machine", "Machine", stt["machine"].as_str().unwrap_or(""))
+                        .text("trim", "Trim jumps longer than (mm)", &format!("{}", stt["trim"].as_f64().unwrap_or(2.0)))
+                        .check("ties", "Tie in and tie off", stt["ties"].as_bool().unwrap_or(true))
+                        .button("ok", "OK")
+                        .button("cancel", "Cancel"),
+                );
+            }
             "emb.place" => {
                 if crate::emb::settings(&self.doc).is_none() {
                     self.flash("Start an embroidery design first (New embroidery).");
@@ -1735,6 +1781,48 @@ impl DrawApp {
                     }
                 } else {
                     self.flash("Type a colour as #RRGGBB.");
+                }
+            }
+            ("emb.stitch", "ok") => {
+                let num = |id: &str, lo: f64, hi: f64, def: f64| d.value(id).trim().replace(',', ".").parse::<f64>().map(|v| v.clamp(lo, hi)).unwrap_or(def);
+                let ty = STITCH_TYPES[d.choice_index("type").min(STITCH_TYPES.len() - 1)].0;
+                let angle = d.value("angle").trim().replace(',', ".").parse::<f64>().ok().map(|a| a.rem_euclid(360.0));
+                let (sp, ln, pl, ul) = (num("spacing", 0.2, 2.0, 0.35), num("length", 1.0, 7.0, 3.5), num("pull", 0.0, 1.0, 0.2), d.checked("underlay"));
+                self.edit_emb_object("Stitch properties", |o| {
+                    let mut st = if o["stitch"].is_object() { o["stitch"].clone() } else { serde_json::json!({}) };
+                    st["type"] = serde_json::json!(ty);
+                    st["angle"] = angle.map(|a| serde_json::json!(a)).unwrap_or(serde_json::Value::Null);
+                    st["spacing"] = serde_json::json!(sp);
+                    st["length"] = serde_json::json!(ln);
+                    st["pull"] = serde_json::json!(pl);
+                    st["underlay"] = serde_json::json!(ul);
+                    o["stitch"] = st;
+                });
+            }
+            ("emb.hoop", "ok") => {
+                if let Some(mut stt) = crate::emb::settings(&self.doc) {
+                    let (name, w, h) = crate::emb::HOOPS[d.choice_index("hoop").min(crate::emb::HOOPS.len() - 1)];
+                    let old = crate::emb::canvas_px(&stt);
+                    stt["hoop"] = serde_json::json!(name);
+                    stt["hoop_mm"] = serde_json::json!([w, h]);
+                    stt["machine"] = serde_json::json!(d.value("machine").trim());
+                    stt["trim"] = serde_json::json!(d.value("trim").trim().replace(',', ".").parse::<f64>().unwrap_or(2.0).clamp(0.5, 20.0));
+                    stt["ties"] = serde_json::json!(d.checked("ties"));
+                    let new = crate::emb::canvas_px(&stt);
+                    self.doc.commit_float();
+                    let mark = self.doc.undo_mark();
+                    // shapes are kept in mm from the hoop's centre: they come through a new hoop as they are
+                    let specs: Vec<(usize, serde_json::Value)> = (0..self.doc.layers.len()).filter_map(|i| crate::emb::layer_spec(&self.doc, i).map(|sp| (i, sp))).collect();
+                    if new != old {
+                        // the hoop's centre stays the design's centre
+                        self.doc.canvas_size(new.0, new.1, 0.5, 0.5);
+                    }
+                    self.doc.emb = stt.to_string();
+                    for (i, sp) in &specs {
+                        crate::emb::store_layer(&mut self.doc, *i, sp);
+                    }
+                    self.doc.group_since(mark, "Hoop");
+                    self.fit();
                 }
             }
             ("layer.props", "ok") => {
@@ -2536,7 +2624,8 @@ impl CommandState for St {
             "redo" => self.can_redo,
             "crop" => self.has_sel,
             "emb.view" | "emb.info" | "emb.export" | "emb.place" | "emb.trace" | "tool.emb" => self.emb,
-            "emb.recolour" => self.emb_sel,
+            "emb.recolour" | "emb.stitch" => self.emb_sel,
+            "emb.hoop" => self.emb,
             _ => true,
         }
     }

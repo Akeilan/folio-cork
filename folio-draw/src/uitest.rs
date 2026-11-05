@@ -644,14 +644,44 @@ impl UiTest {
             app.menu_pick_for_test("emb.recolour", "color:#22B14C");
             let c2 = px(app, below.0 as usize, below.1 as usize);
             check(c2[1] > 150 && c2[2] < 120, &format!("not recoloured: {c2:?}"))?;
+            // satin with a fixed angle changes the planned stitches
+            let before_st = crate::emb::make_plan(&app.doc).map(|p| p.stitch_count()).unwrap_or(0);
+            app.command("emb.stitch", h);
+            shot(app, r);
+            // the type list comes first; the angle field is the first text field
+            ev(app, h, r, Event::Text("45".into()));
+            key(app, h, r, Key::Enter, Mods::NONE);
+            check(app.doc.history().0.last().map(|l| *l == "Stitch properties").unwrap_or(false), "stitch properties not applied")?;
+            let after_st = crate::emb::make_plan(&app.doc).map(|p| p.stitch_count()).unwrap_or(0);
+            check(after_st != before_st, &format!("a 45° fill planned the same {after_st} stitches"))?;
             key(app, h, r, Key::Delete, Mods::NONE);
             check(app.emb_sel.is_none() && px(app, below.0 as usize, below.1 as usize)[1] < 150, "Delete left the shape")?;
             key(app, h, r, Key::Char('z'), ctrl());
             check(px(app, below.0 as usize, below.1 as usize)[1] > 150, "undo didn't bring it back")?;
+            // a bigger hoop keeps the design in the middle
+            let mid = px(app, 508, 508);
+            app.command("emb.hoop", h);
+            app.dialog = app.dialog.take().map(|mut dl| {
+                for f in dl.fields.iter_mut() {
+                    if f.id == "hoop" {
+                        if let folio_kit::ui::FieldKind::Choice(_, i) = &mut f.kind {
+                            *i = 1;
+                        }
+                    }
+                }
+                dl
+            });
+            shot(app, r);
+            // OK is the first button: Enter from a text field presses it
+            key(app, h, r, Key::Tab, Mods::NONE);
+            key(app, h, r, Key::Enter, Mods::NONE);
+            check(app.doc.w == 1270 && app.doc.h == 1778, &format!("5 × 7 hoop canvas {}x{}", app.doc.w, app.doc.h))?;
+            check(px(app, 635, 889) == mid, "the design didn't stay in the middle")?;
             let ora = d5.join("design.ora");
             check(app.save_to(&ora), "not saved")?;
             let back = DrawApp::load(&ora)?;
-            check(back.emb == app.doc.emb && crate::emb::layer_spec(&back, back.layers.len() - 1).is_some(), "the .ora lost the embroidery")
+            check(back.emb == app.doc.emb, &format!("the .ora lost the settings: {:?} vs {:?}", back.emb, app.doc.emb))?;
+            check(crate::emb::layer_spec(&back, back.layers.len() - 1).is_some(), "the .ora lost the shapes")
         });
         step!("dark theme", |app: &mut DrawApp, _h: &mut dyn Host, r: &mut Res| {
             app.theme = folio_kit::theme::Theme::new(true, crate::app::MAROON, crate::app::ACCENT);
