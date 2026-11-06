@@ -106,6 +106,53 @@ pub fn tabs() -> Vec<Tab> {
             )],
         ),
         Tab::new(
+            "references",
+            "References",
+            "S",
+            vec![
+                Group::new(
+                    "Table of Contents",
+                    vec![I::large("toc", "Table of Contents", "toc").desc("A contents list made from the headings."),
+                         I::small("update-fields", "Update", "update-fields").desc("Work the fields out again.")],
+                ),
+                Group::new(
+                    "Footnotes",
+                    vec![
+                        I::large("footnote", "Insert Footnote", "footnote").key("Alt+Ctrl+F"),
+                        I::small("endnote", "Insert Endnote", "endnote"),
+                    ],
+                ),
+            ],
+        ),
+        Tab::new(
+            "review",
+            "Review",
+            "R",
+            vec![
+                Group::new(
+                    "Comments",
+                    vec![
+                        I::large("comment", "New Comment", "comment"),
+                        I::small("comment-next", "Next", "comment-next"),
+                        I::small("comment-delete", "Delete", "comment-delete"),
+                    ],
+                ),
+                Group::new(
+                    "Tracking",
+                    vec![I::large("track", "Track Changes", "track").desc("Record what is changed from now on.")],
+                ),
+                Group::new(
+                    "Changes",
+                    vec![
+                        I::small("accept", "Accept", "accept"),
+                        I::small("reject", "Reject", "reject"),
+                        I::small("accept-all", "Accept All", "accept-all"),
+                        I::small("reject-all", "Reject All", "reject-all"),
+                    ],
+                ),
+            ],
+        ),
+        Tab::new(
             "view",
             "View",
             "W",

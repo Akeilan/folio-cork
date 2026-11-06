@@ -194,6 +194,34 @@ impl UiTest {
             app.command("orient:portrait", h);
             Ok(())
         });
+        step!("a footnote goes under the page", |app: &mut PageApp, h: &mut dyn Host, r: &mut Res| {
+            let before = page_ink(app, r);
+            ribbon_click(app, h, r, "references", "footnote")?;
+            typed(app, h, "A note at the foot");
+            let after = page_ink(app, r);
+            check(after > before, "the note wasn't drawn")?;
+            key(app, h, Key::Char('z'), ctrl());
+            key(app, h, Key::Char('z'), ctrl());
+            Ok(())
+        });
+        step!("track changes records what is typed, and it can be rejected", |app: &mut PageApp, h: &mut dyn Host, r: &mut Res| {
+            let before = app.ed.text_of_document();
+            ribbon_click(app, h, r, "review", "track")?;
+            check(app.ed.tracking(), "tracking didn't come on")?;
+            typed(app, h, " tracked words");
+            check(app.ed.text_of_document().contains("tracked words"), "the words aren't there")?;
+            ribbon_click(app, h, r, "review", "reject-all")?;
+            check(app.ed.text_of_document().trim() == before.trim(), "rejecting left the words behind")?;
+            ribbon_click(app, h, r, "review", "track")?;
+            check(!app.ed.tracking(), "tracking didn't go off")
+        });
+        step!("a comment is left on the selected words", |app: &mut PageApp, h: &mut dyn Host, r: &mut Res| {
+            key(app, h, Key::Char('a'), ctrl());
+            ribbon_click(app, h, r, "review", "comment")?;
+            check(!app.ed.comments().is_empty(), "no comment was left")?;
+            ribbon_click(app, h, r, "review", "comment-delete")?;
+            check(app.ed.comments().is_empty(), "the comment stayed")
+        });
         step!("the document saves and opens again", move |app: &mut PageApp, _h: &mut dyn Host, _r: &mut Res| {
             let p = d_save.join("typed.docx");
             app.save(&p);
