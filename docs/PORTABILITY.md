@@ -29,7 +29,7 @@ Every Folio app written in Rust follows these rules. `tools/check-portability.sh
 ## 4. File formats are defined to the byte
 
 - Little-endian, UTF-8, documented in `docs/FORMATS.md`. JSON numbers are written in the shortest form that reads back exactly.
-- A file must not carry anything about the machine that wrote it. A .vsdx is a zip, and the zip library stamps each entry with the host system it is running on: Cork sets that field itself, so a drawing saved on Linux, Windows or a Pi is the same file byte for byte (found by building for Windows on 6 November).
+- A file must not carry anything about the machine that wrote it. A .vsdx is a zip, and the zip library stamps each entry with the host system it is running on: Cork sets that field itself, so a drawing saved on Linux, Windows or a Pi is the same file byte for byte (found on 6 November).
 - A format change bumps its `format` number, and readers keep reading every older number.
 
 ## 5. What a release is tested on
@@ -37,8 +37,9 @@ Every Folio app written in Rust follows these rules. `tools/check-portability.sh
 A release must pass on Linux: Ubuntu 22.04 and 24.04, X11 and Wayland. That is the bar for every
 app, and it is all `tools/release.sh` runs by default. The rules above keep other processors and
 operating systems reachable, but their checks run only when asked for: `PORTS=1 tools/release.sh`
-adds the AVX2/FMA build, the Windows cross-build with every test and both window tests under wine,
-the ARM64 run under qemu and the Pi budgets. The suite is developed and
+adds the AVX2/FMA build, the ARM64 run under qemu and the Pi budgets. Windows is not tested per
+release and no release run touches wine (Product Owner, 2026-11-06): the build was proven once, by
+hand, and the command is in docs/PLATFORM.md for whoever repeats it. The suite is developed and
 used on Zorin OS (Product Owner, 2026-11-05), so Linux is what releases are held to while the apps
 are still growing.
 
