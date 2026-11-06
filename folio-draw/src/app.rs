@@ -240,6 +240,9 @@ pub struct DrawApp {
     pub emb_nodes: bool,
     /// A line being drawn across the selected shape to cut it in two.
     pub emb_cut: Option<Vec<(f32, f32)>>,
+    /// Traced letters waiting to be replaced by real lettering: the layer, their ids, where they
+    /// sit and how far they span.
+    reset_letters: Option<(usize, Vec<i64>, (f32, f32), f32)>,
     /// The node under the pointer's last press: (ring, vertex) or ("stitch", block, point).
     pub sel_node: Option<(usize, usize)>,
     pub sel_stitch: Option<(usize, usize)>,
@@ -334,6 +337,7 @@ impl DrawApp {
             emb_sel: None,
             emb_nodes: false,
             emb_cut: None,
+            reset_letters: None,
             sel_node: None,
             sel_stitch: None,
             node_mark: 0,
@@ -1394,6 +1398,77 @@ impl DrawApp {
         (line as u32) | ((fill as u32) << 1)
     }
 
+    /// Where traced letters sit: the arc or line, its centre, the radius of the letters' middle,
+    /// their cap height and how far they span.
+    pub fn lettering_geometry(objs: &[serde_json::Value]) -> Option<(&'static str, f32, f32, f32, f32, f32)> {
+        use folio_kit::math::Det;
+        // each letter: its middle, and the points of its outline
+        let mut pieces: Vec<((f32, f32), Vec<(f32, f32)>)> = vec![];
+        for o in objs {
+            let pts: Vec<(f32, f32)> = crate::emb::rings_of(o).into_iter().take(1).flatten().collect();
+            if pts.len() < 3 {
+                continue;
+            }
+            let (mut x0, mut y0, mut x1, mut y1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+            for p in &pts {
+                x0 = x0.min(p.0);
+                y0 = y0.min(p.1);
+                x1 = x1.max(p.0);
+                y1 = y1.max(p.1);
+            }
+            pieces.push((((x0 + x1) / 2.0, (y0 + y1) / 2.0), pts));
+        }
+        if pieces.is_empty() {
+            return None;
+        }
+        let middles: Vec<(f32, f32)> = pieces.iter().map(|p| p.0).collect();
+        if pieces.len() >= 4 {
+            if let Some((fx, fy, fr, rms)) = crate::letters::fit_circle(&middles) {
+                let angs: Vec<f32> = middles.iter().map(|c| (c.0 - fx).datan2(-(c.1 - fy))).collect();
+                let spread = angs.iter().cloned().fold(f32::MIN, f32::max) - angs.iter().cloned().fold(f32::MAX, f32::min);
+                if rms < 0.08 * fr && fr < 150.0 && spread > 25.0 * std::f32::consts::PI / 180.0 {
+                    // how far each letter reaches in and out from the circle: its cap height
+                    let mut ext: Vec<f32> = pieces
+                        .iter()
+                        .map(|(_, pts)| {
+                            let rs: Vec<f32> = pts
+                                .iter()
+                                .map(|p| {
+                                    let (dx, dy) = (p.0 - fx, p.1 - fy);
+                                    (dx * dx + dy * dy).sqrt()
+                                })
+                                .collect();
+                            rs.iter().cloned().fold(f32::MIN, f32::max) - rs.iter().cloned().fold(f32::MAX, f32::min)
+                        })
+                        .collect();
+                    ext.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+                    let cap = if ext.len() < 4 { ext[ext.len() / 2] } else { ext[(ext.len() as f32 * 0.7) as usize] };
+                    let top = pieces.iter().filter(|(c, _)| c.1 < fy).count() * 2 >= pieces.len();
+                    return Some((if top { "top" } else { "bottom" }, fx, fy, fr, cap, spread * fr));
+                }
+            }
+        }
+        let (mut x0, mut y0, mut x1, mut y1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+        for (_, pts) in &pieces {
+            for p in pts {
+                x0 = x0.min(p.0);
+                y0 = y0.min(p.1);
+                x1 = x1.max(p.0);
+                y1 = y1.max(p.1);
+            }
+        }
+        let mut hs: Vec<f32> = pieces
+            .iter()
+            .map(|(_, pts)| {
+                let ys: Vec<f32> = pts.iter().map(|p| p.1).collect();
+                ys.iter().cloned().fold(f32::MIN, f32::max) - ys.iter().cloned().fold(f32::MAX, f32::min)
+            })
+            .collect();
+        hs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let cap = if hs.len() >= 4 { hs[(hs.len() as f32 * 0.7) as usize] } else { hs[hs.len() - 1] };
+        Some(("none", (x0 + x1) / 2.0, (y0 + y1) / 2.0, 0.0, cap, x1 - x0))
+    }
+
     /// Put the parts of a split shape in place of it, keeping everything else about it.
     fn replace_with_parts(&mut self, li: usize, id: i64, parts: &[Vec<Vec<(f32, f32)>>], label: &str) {
         let Some(mut spec) = crate::emb::layer_spec(&self.doc, li) else { return };
@@ -2401,6 +2476,52 @@ impl DrawApp {
                         .button("cancel", "Cancel"),
                 );
             }
+            "emb.reset-letter" => {
+                let Some((li, id)) = self.emb_sel else {
+                    self.flash("Select one of the traced letters first.");
+                    return;
+                };
+                let Some(spec) = crate::emb::layer_spec(&self.doc, li) else { return };
+                let objs: Vec<serde_json::Value> = spec["objects"].as_array().cloned().unwrap_or_default();
+                let sel = objs.iter().find(|o| o["id"].as_i64() == Some(id)).cloned().unwrap_or_default();
+                // the traced letters are the shapes of that colour on that layer
+                let letters: Vec<serde_json::Value> = objs
+                    .iter()
+                    .filter(|o| o["kind"] != "lettering" && !o["rings"].as_array().map(|a| a.is_empty()).unwrap_or(true) && o["thread"] == sel["thread"])
+                    .cloned()
+                    .collect();
+                let Some((kind, gx, gy, gr, cap, span)) = Self::lettering_geometry(&letters) else {
+                    self.flash("These shapes aren't a row of letters.");
+                    return;
+                };
+                let cap = (cap * 2.0).round().max(4.0) / 2.0;
+                self.reset_letters = Some((li, letters.iter().filter_map(|o| o["id"].as_i64()).collect(), (gx, gy), span));
+                let fonts = self.text_fonts();
+                let _ = fonts;
+                let names: Vec<&str> = self.fonts.iter().map(|f| f.as_str()).collect();
+                let at = self.fonts.iter().position(|f| *f == self.letter_font).unwrap_or(0);
+                self.dialog = Some(
+                    Dialog::new("emb.letter", "Re-set as lettering")
+                        .note("Traced letters stitch as blobs. Type the words and they are set in a font, at the size and on the arc the traced ones sit on.")
+                        .text("text", "Words", "")
+                        .choice("font", "Font", &names, at)
+                        .text("cap", "Letter height (mm, a capital)", &format!("{cap}"))
+                        .text("spacing", "Extra space between letters (mm)", "0")
+                        .choice(
+                            "arc",
+                            "Set on",
+                            &["A straight line", "An arc, letters outwards", "An arc, letters inwards"],
+                            match kind {
+                                "top" => 1,
+                                "bottom" => 2,
+                                _ => 0,
+                            },
+                        )
+                        .text("radius", "Arc radius (mm)", &format!("{:.1}", (gr - cap / 2.0).max(5.0)))
+                        .button("ok", "OK")
+                        .button("cancel", "Cancel"),
+                );
+            }
             "emb.letter" => {
                 if crate::emb::settings(&self.doc).is_none() {
                     self.flash("Start an embroidery design first (New embroidery).");
@@ -2981,6 +3102,7 @@ impl DrawApp {
                 }
             }
             ("emb.letter", "ok") => {
+                let reset = self.reset_letters.take();
                 let words = d.value("text");
                 if !words.trim().is_empty() && crate::emb::settings(&self.doc).is_some() {
                     let num = |id: &str, dflt: f32| d.value(id).trim().replace(',', ".").parse::<f32>().unwrap_or(dflt);
@@ -2989,21 +3111,67 @@ impl DrawApp {
                     self.letter_font = font.clone();
                     let arc = ["none", "top", "bottom"][d.choice_index("arc").min(2)];
                     let c = self.c1;
+                    // replacing traced letters: in their place, their colour, and their span
+                    let (at, thread) = match &reset {
+                        Some((li, ids, centre, _)) => {
+                            let t = crate::emb::layer_spec(&self.doc, *li)
+                                .and_then(|sp| sp["objects"].as_array().and_then(|a| a.iter().find(|o| ids.first() == o["id"].as_i64().as_ref()).cloned()))
+                                .map(|o| o["thread"].clone())
+                                .unwrap_or_else(|| serde_json::json!({"rgb": [c[0], c[1], c[2]]}));
+                            (*centre, t)
+                        }
+                        None => ((0.0, 0.0), serde_json::json!({"rgb": [c[0], c[1], c[2]]})),
+                    };
                     let mut o = serde_json::json!({
                         "kind": "lettering", "text": words, "font": font, "cap": cap,
                         "spacing": num("spacing", 0.0).clamp(-cap, cap * 4.0), "arc": arc,
-                        "radius": num("radius", 40.0).max(1.0), "x": 0.0, "y": 0.0,
-                        "thread": {"rgb": [c[0], c[1], c[2]]},
+                        "radius": num("radius", 40.0).max(1.0), "x": at.0, "y": at.1,
+                        "thread": thread,
                         "stitch": {"type": crate::letters::default_type(cap)},
                     });
+                    // the new words are spaced out to span what the traced ones spanned
+                    if let Some((_, _, _, span)) = &reset {
+                        let n = words.chars().count();
+                        if n > 1 && num("spacing", 0.0).abs() < 1e-6 {
+                            let mut probe = o.clone();
+                            probe["spacing"] = serde_json::json!(0.0);
+                            let shapes = crate::letters::lettering_shapes(&mut r.text, &probe);
+                            let cur = crate::letters::span_of(&shapes, &probe);
+                            if cur > 0.1 {
+                                let extra = ((span - cur) / (n - 1) as f32).clamp(-1.0, 10.0);
+                                o["spacing"] = serde_json::json!((extra * 100.0).round() / 100.0);
+                            }
+                        }
+                    }
                     crate::letters::regen(&mut r.text, &mut o);
                     if o["glyphs"].as_array().map(|g| g.is_empty()).unwrap_or(true) {
                         self.flash("Those letters aren't in that font.");
                     } else {
                         self.doc.commit_float();
+                        let mark = self.doc.undo_mark();
+                        // the traced letters go, and the lettering takes their place in one step
+                        if let Some((li, ids, _, _)) = &reset {
+                            if let Some(mut spec) = crate::emb::layer_spec(&self.doc, *li) {
+                                if let Some(list) = spec["objects"].as_array_mut() {
+                                    list.retain(|o| !ids.contains(&o["id"].as_i64().unwrap_or(-1)));
+                                }
+                                spec["edited"] = serde_json::json!(true);
+                                crate::emb::store_layer(&mut self.doc, *li, &spec);
+                            }
+                            self.emb_sel = None;
+                        }
                         let layer = crate::emb::lettering_layer(&self.doc);
                         let li = crate::emb::add_object(&mut self.doc, layer, "Lettering", o);
-                        self.doc.label_last("Lettering");
+                        if reset.is_some() {
+                            self.doc.group_since(mark, "Re-set as lettering");
+                            if cap < 4.0 {
+                                self.flash("Lettering under 4 mm can't stitch cleanly with 0.4 mm thread; 5 mm or more reads well.");
+                            } else {
+                                self.flash("The traced letters are now lettering from a font.");
+                            }
+                        } else {
+                            self.doc.label_last("Lettering");
+                        }
                         self.doc.active = li;
                     }
                 }
@@ -4021,8 +4189,8 @@ impl CommandState for St {
             "undo" => self.can_undo,
             "redo" => self.can_redo,
             "crop" => self.has_sel,
-            "emb.nodes" | "emb.holes" | "emb.merge" | "emb.split" if !self.emb_sel => false,
-            "emb.holes" | "emb.merge" | "emb.split" => self.emb,
+            "emb.nodes" | "emb.holes" | "emb.merge" | "emb.split" | "emb.reset-letter" if !self.emb_sel => false,
+            "emb.holes" | "emb.merge" | "emb.split" | "emb.reset-letter" => self.emb,
             "emb.view" | "emb.density" | "emb.stitchout" | "emb.info" | "emb.export" | "emb.place" | "emb.trace" | "tool.emb" => self.emb,
             "emb.recolour" | "emb.stitch" => self.emb_sel,
             "emb.hoop" => self.emb,
