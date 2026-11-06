@@ -1023,6 +1023,66 @@ impl PageApp {
                         .button("close", "Close"),
                 );
             }
+            "toc" => {
+                let ok = self.ed.insert_table_field("TOC \\o \"1-3\" \\h \\z \\u", None, Some("default"), None, None, 1);
+                if !ok {
+                    self.flash("A contents list goes in the body of the document, not in a table");
+                }
+                self.cache.clear();
+            }
+            "update-fields" => {
+                let n = self.ed.update_fields(true);
+                self.flash(&format!("{n} fields brought up to date"));
+                self.cache.clear();
+            }
+            "footnote" | "endnote" => {
+                if self.ed.insert_note(head == "endnote") {
+                    self.show_caret();
+                } else {
+                    self.flash("A note goes in the body of the document");
+                }
+            }
+            "comment" => {
+                let who = folio_kit::platform::user_name();
+                if self.ed.insert_comment("", &who).is_none() {
+                    self.flash("Select the words the comment is about");
+                }
+            }
+            "comment-next" => {
+                if !self.ed.goto_comment(true) {
+                    self.flash("No comments");
+                } else {
+                    self.show_caret();
+                }
+            }
+            "comment-delete" => {
+                let here: Vec<String> = self.ed.comment_at_caret().into_iter().collect();
+                let n = if here.is_empty() {
+                    self.flash("The caret isn't in a comment");
+                    0
+                } else {
+                    self.ed.delete_comments(&here)
+                };
+                let _ = n;
+                self.cache.clear();
+            }
+            "track" => {
+                let on = !self.ed.tracking();
+                self.ed.set_track_changes(on);
+                self.flash(if on { "Changes are being recorded" } else { "Changes are no longer recorded" });
+            }
+            "accept" | "reject" => {
+                let n = self.ed.accept_reject(head == "accept");
+                if n == 0 {
+                    self.flash("No change there");
+                }
+                self.cache.clear();
+            }
+            "accept-all" | "reject-all" => {
+                let n = self.ed.accept_reject_all(head == "accept-all", None);
+                self.flash(&format!("{n} changes {}", if head == "accept-all" { "accepted" } else { "rejected" }));
+                self.cache.clear();
+            }
             "marks" => {
                 self.marks = !self.marks;
                 self.cache.clear();
@@ -1061,6 +1121,7 @@ impl PageApp {
             italic: self.ed.toggle_state("w:i"),
             underline: self.ed.toggle_state("w:u"),
             marks: self.marks,
+            track: self.ed.tracking(),
             zoom: format!("{}%", (self.zoom * 100.0).round() as i32),
             font: self.ed.current_font().unwrap_or_default(),
             size: self.ed.current_size().map(|v| format!("{v}")).unwrap_or_default(),
@@ -1076,6 +1137,7 @@ pub struct State {
     pub italic: bool,
     pub underline: bool,
     pub marks: bool,
+    pub track: bool,
     pub zoom: String,
     pub font: String,
     pub size: String,
@@ -1097,6 +1159,7 @@ impl CommandState for State {
             "italic" => self.italic,
             "underline" => self.underline,
             "marks" => self.marks,
+            "track" => self.track,
             "align-left" => self.align == "left",
             "align-center" => self.align == "center",
             "align-right" => self.align == "right",
