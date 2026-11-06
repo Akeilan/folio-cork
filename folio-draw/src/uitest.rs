@@ -945,6 +945,59 @@ impl UiTest {
             app.ribbon.collapsed = false;
             Ok(())
         });
+        step!("Fill holes, Merge and Split", |app: &mut DrawApp, h: &mut dyn Host, r: &mut Res| {
+            app.saved_for_test();
+            app.command("emb.new:1", h);
+            ev(app, h, r, Event::MouseMove { x: 1.0, y: 1.0 });
+            let thread = serde_json::json!({"rgb": [200, 20, 30], "pec": 5, "name": "Red"});
+            // a square with a hole, and two squares that touch
+            let ring = |x: f32, y: f32, w: f32| serde_json::json!([[x, y], [x + w, y], [x + w, y + w], [x, y + w]]);
+            let hole = serde_json::json!([[-5.0, -5.0], [-5.0, 5.0], [5.0, 5.0], [5.0, -5.0]]);
+            let spec = serde_json::json!({"objects": [
+                {"id": 1, "kind": "shape", "rings": [ring(-15.0, -15.0, 30.0), hole], "thread": thread, "group": "g"},
+                {"id": 2, "kind": "shape", "rings": [ring(20.0, -10.0, 20.0)], "thread": thread, "group": "g"},
+                {"id": 3, "kind": "shape", "rings": [ring(38.0, -10.0, 20.0)], "thread": thread, "group": "g"}],
+                "next_id": 4});
+            let li = crate::emb::add_shape_layer(&mut app.doc, "Shapes", &spec);
+            let count = |app: &DrawApp| crate::emb::layer_spec(&app.doc, li).map(|sp| sp["objects"].as_array().map(|a| a.len()).unwrap_or(0)).unwrap_or(0);
+            let rings_of = |app: &DrawApp, id: i64| -> usize {
+                crate::emb::layer_spec(&app.doc, li)
+                    .and_then(|sp| sp["objects"].as_array().and_then(|a| a.iter().find(|o| o["id"].as_i64() == Some(id)).cloned()))
+                    .map(|o| o["rings"].as_array().map(|x| x.len()).unwrap_or(0))
+                    .unwrap_or(0)
+            };
+            // Fill holes makes the first shape solid
+            app.emb_sel = Some((li, 1));
+            check(rings_of(app, 1) == 2, "the square has no hole to start with")?;
+            app.command("emb.holes", h);
+            check(rings_of(app, 1) == 1, &format!("{} rings after filling", rings_of(app, 1)))?;
+            check(app.flash_text().contains("hole"), &format!("it said {:?}", app.flash_text()))?;
+            key(app, h, r, Key::Char('z'), ctrl());
+            check(rings_of(app, 1) == 2, "undo didn't bring the hole back")?;
+            // Merge: the two that touch become one, the one apart stays
+            let before = count(app);
+            app.emb_sel = Some((li, 2));
+            app.command("emb.merge", h);
+            let after = count(app);
+            check(after == before - 1, &format!("{after} shapes, was {before}"))?;
+            check(app.doc.history().0.last().map(|l| *l == "Merge shapes").unwrap_or(false), &format!("labelled {:?}", app.doc.history().0.last()))?;
+            key(app, h, r, Key::Char('z'), ctrl());
+            check(count(app) == before, "undo didn't bring them back")?;
+            // Split: one piece asks for a line, and a line across it cuts it in two
+            app.set_tool(Tool::EmbSelect);
+            app.emb_sel = Some((li, 2));
+            app.command("emb.split", h);
+            check(app.emb_cut.is_some(), "it didn't ask for a line")?;
+            let st = crate::emb::settings(&app.doc).ok_or("no settings")?;
+            let a = crate::emb::mm_to_px(&st, 30.0, -15.0);
+            let b = crate::emb::mm_to_px(&st, 30.0, 15.0);
+            drag_on(app, h, r, (a.0, a.1), (b.0, b.1), Button::Left);
+            check(app.emb_cut.is_none(), "the line is still being drawn")?;
+            check(count(app) == before + 1, &format!("{} shapes after the cut, was {before}", count(app)))?;
+            check(crate::emb::make_plan(&app.doc).is_some(), "the cut shapes can't be planned")?;
+            key(app, h, r, Key::Char('z'), ctrl());
+            check(count(app) == before, "undo didn't put the shape back together")
+        });
         step!("Edit Nodes moves, adds and deletes a shape's nodes", |app: &mut DrawApp, h: &mut dyn Host, r: &mut Res| {
             app.saved_for_test();
             app.command("emb.new:0", h);

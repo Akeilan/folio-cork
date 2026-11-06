@@ -116,6 +116,8 @@ enum Drag {
     PendMove { start: Pt, orig: Pending },
     PendResize { handle: usize, orig: Pending },
     EmbMove { start: (f32, f32), last: (f32, f32) },
+    /// A line being dragged across a shape to cut it.
+    Cut,
     /// A node of the selected shape being dragged (ring, vertex).
     NodeMove { ring: usize, vi: usize },
     /// A needle point of the selected stitch object being dragged (block, point).
@@ -236,6 +238,8 @@ pub struct DrawApp {
     pub emb_sel: Option<(usize, i64)>,
     /// Editing the selected shape's nodes rather than moving it whole.
     pub emb_nodes: bool,
+    /// A line being drawn across the selected shape to cut it in two.
+    pub emb_cut: Option<Vec<(f32, f32)>>,
     /// The node under the pointer's last press: (ring, vertex) or ("stitch", block, point).
     pub sel_node: Option<(usize, usize)>,
     pub sel_stitch: Option<(usize, usize)>,
@@ -329,6 +333,7 @@ impl DrawApp {
             export_ext: "pes".into(),
             emb_sel: None,
             emb_nodes: false,
+            emb_cut: None,
             sel_node: None,
             sel_stitch: None,
             node_mark: 0,
@@ -759,6 +764,10 @@ impl DrawApp {
             self.node_delete();
             return;
         }
+        if self.emb_cut.is_some() && matches!(key, Key::Escape) {
+            self.emb_cut = None;
+            return;
+        }
         if self.emb_nodes && matches!(key, Key::Escape) {
             // out of node editing, with the shape still selected
             self.emb_nodes = false;
@@ -971,6 +980,11 @@ impl DrawApp {
             Tool::EmbSelect => {
                 if let Some(st) = crate::emb::settings(&self.doc) {
                     let mm = crate::emb::px_to_mm(&st, p.0, p.1);
+                    if self.emb_cut.is_some() {
+                        self.emb_cut = Some(vec![mm, mm]);
+                        self.drag = Some(Drag::Cut);
+                        return;
+                    }
                     if self.emb_nodes && self.node_press(mm, clicks) {
                         return;
                     }
@@ -1135,6 +1149,14 @@ impl DrawApp {
                     self.drag = Some(Drag::EmbMove { start, last: mm });
                 }
             }
+            Some(Drag::Cut) => {
+                if let (Some(st), Some(line)) = (crate::emb::settings(&self.doc), self.emb_cut.as_mut()) {
+                    let mm = crate::emb::px_to_mm(&st, p.0, p.1);
+                    if line.len() >= 2 {
+                        line[1] = mm;
+                    }
+                }
+            }
             Some(Drag::NodeMove { ring, vi }) => {
                 if let Some(st) = crate::emb::settings(&self.doc) {
                     let mm = crate::emb::px_to_mm(&st, p.0, p.1);
@@ -1195,6 +1217,18 @@ impl DrawApp {
                 self.pending = Some(Pending { tool, a, b, color });
             }
             Drag::PendMove { .. } | Drag::PendResize { .. } => {}
+            Drag::Cut => {
+                let line = self.emb_cut.take().unwrap_or_default();
+                if let (Some((li, id)), Some(o)) = (self.emb_sel, self.emb_object()) {
+                    let rings = crate::emb::rings_of(&o);
+                    let parts = folio_draw_engine::emb::shapes::split(&rings, &line);
+                    if parts.len() < 2 {
+                        self.flash("The line has to cross the shape from one side to the other.");
+                    } else {
+                        self.replace_with_parts(li, id, &parts, "Split shape");
+                    }
+                }
+            }
             Drag::NodeMove { .. } => {
                 let mark = self.node_mark;
                 self.doc.group_since(mark, "Move node");
@@ -1358,6 +1392,37 @@ impl DrawApp {
         let fill = self.shape_fill && closed;
         let line = self.shape_outline || !fill;
         (line as u32) | ((fill as u32) << 1)
+    }
+
+    /// Put the parts of a split shape in place of it, keeping everything else about it.
+    fn replace_with_parts(&mut self, li: usize, id: i64, parts: &[Vec<Vec<(f32, f32)>>], label: &str) {
+        let Some(mut spec) = crate::emb::layer_spec(&self.doc, li) else { return };
+        let objs: Vec<serde_json::Value> = spec["objects"].as_array().cloned().unwrap_or_default();
+        let Some(sel) = objs.iter().find(|o| o["id"].as_i64() == Some(id)).cloned() else { return };
+        let mut next = spec["next_id"].as_i64().unwrap_or(1);
+        let mut list = vec![];
+        for o in objs {
+            if o["id"].as_i64() == Some(id) {
+                for (k, part) in parts.iter().enumerate() {
+                    let mut n = sel.clone();
+                    if k > 0 {
+                        n["id"] = serde_json::json!(next);
+                        next += 1;
+                    }
+                    n["rings"] = crate::emb::rings_json(part);
+                    list.push(n);
+                }
+            } else {
+                list.push(o);
+            }
+        }
+        spec["objects"] = serde_json::json!(list);
+        spec["next_id"] = serde_json::json!(next);
+        spec["edited"] = serde_json::json!(true);
+        crate::emb::store_layer(&mut self.doc, li, &spec);
+        self.doc.label_last(label);
+        self.emb_sel = Some((li, id));
+        self.flash(&format!("{} parts.", parts.len()));
     }
 
     /// The selected object, if there is one.
@@ -2194,6 +2259,109 @@ impl DrawApp {
                     self.set_tool(Tool::EmbSelect);
                     self.flash("Drag a node to move it, Delete takes one out, double-click an edge to add one.");
                 }
+            }
+            "emb.holes" => {
+                let Some(o) = self.emb_object() else {
+                    self.flash("Select a shape first.");
+                    return;
+                };
+                let n = o["rings"].as_array().map(|a| a.len()).unwrap_or(0);
+                if n < 2 {
+                    self.flash("The selected shape has no holes.");
+                    return;
+                }
+                // the picked hole alone, or all of them
+                let one = self.sel_node.map(|(ri, _)| ri).filter(|ri| *ri > 0 && *ri < n);
+                self.edit_emb_object("Fill holes", |o| {
+                    if let Some(rings) = o["rings"].as_array_mut() {
+                        match one {
+                            Some(ri) => {
+                                rings.remove(ri);
+                            }
+                            None => rings.truncate(1),
+                        }
+                    }
+                });
+                self.sel_node = None;
+                let filled = one.map(|_| 1).unwrap_or(n - 1);
+                self.flash(&format!(
+                    "{filled} hole{} filled. Shapes on the layers above still cover it, so it isn't stitched twice.",
+                    if filled == 1 { "" } else { "s" }
+                ));
+            }
+            "emb.merge" => {
+                let Some((li, id)) = self.emb_sel else {
+                    self.flash("Select a shape first.");
+                    return;
+                };
+                let Some(mut spec) = crate::emb::layer_spec(&self.doc, li) else { return };
+                let objs: Vec<serde_json::Value> = spec["objects"].as_array().cloned().unwrap_or_default();
+                // every shape on the layer in the same group as the selected one, as the GTK
+                // version merges what is selected together
+                let sel = objs.iter().find(|o| o["id"].as_i64() == Some(id)).cloned().unwrap_or_default();
+                let group = sel["group"].clone();
+                let mine: Vec<&serde_json::Value> = objs
+                    .iter()
+                    .filter(|o| !o["rings"].as_array().map(|a| a.is_empty()).unwrap_or(true) && o["group"] == group && o["thread"] == sel["thread"])
+                    .collect();
+                if mine.len() < 2 {
+                    self.flash("There is nothing on this layer to merge it with.");
+                    return;
+                }
+                let sets: Vec<Vec<Vec<(f32, f32)>>> = mine.iter().map(|o| crate::emb::rings_of(o)).collect();
+                let out = folio_draw_engine::emb::shapes::union(&sets);
+                if out.is_empty() {
+                    self.flash("The shapes wouldn't merge.");
+                    return;
+                }
+                let ids: Vec<i64> = mine.iter().filter_map(|o| o["id"].as_i64()).collect();
+                let mut keep = sel.clone();
+                keep["rings"] = crate::emb::rings_json(&out[0]);
+                let mut next = spec["next_id"].as_i64().unwrap_or(1).max(ids.iter().copied().max().unwrap_or(0) + 1);
+                let mut extra = vec![];
+                for part in &out[1..] {
+                    let mut o = keep.clone();
+                    o["id"] = serde_json::json!(next);
+                    o["rings"] = crate::emb::rings_json(part);
+                    next += 1;
+                    extra.push(o);
+                }
+                let mut list: Vec<serde_json::Value> = vec![];
+                for o in objs {
+                    let oid = o["id"].as_i64().unwrap_or(0);
+                    if oid == id {
+                        list.push(keep.clone());
+                        list.extend(extra.clone());
+                    } else if !ids.contains(&oid) {
+                        list.push(o);
+                    }
+                }
+                spec["objects"] = serde_json::json!(list);
+                spec["next_id"] = serde_json::json!(next);
+                spec["edited"] = serde_json::json!(true);
+                crate::emb::store_layer(&mut self.doc, li, &spec);
+                self.doc.label_last("Merge shapes");
+                self.emb_sel = Some((li, id));
+                self.flash(&format!("{} shapes merged into {}.", ids.len(), out.len()));
+            }
+            "emb.split" => {
+                let Some((li, id)) = self.emb_sel else {
+                    self.flash("Select a shape first.");
+                    return;
+                };
+                let Some(o) = self.emb_object() else { return };
+                let rings = crate::emb::rings_of(&o);
+                if rings.is_empty() {
+                    self.flash("This object has no outline to split.");
+                    return;
+                }
+                let out = folio_draw_engine::emb::shapes::parts(&rings);
+                if out.len() < 2 {
+                    self.flash("This shape is in one piece. Draw a line across it to cut it.");
+                    self.emb_cut = Some(vec![]);
+                    return;
+                }
+                self.replace_with_parts(li, id, &out, "Split shape");
             }
             "emb.stitch" => {
                 let Some((li, id)) = self.emb_sel else {
@@ -3498,6 +3666,19 @@ impl DrawApp {
                 gfx::stroke_round(&mut cv, r, 0.0, ACCENT, 1.0);
             }
         }
+        if let Some(line) = self.emb_cut.as_ref().filter(|l| l.len() >= 2) {
+            if let Some(st) = crate::emb::settings(&self.doc) {
+                let a = to(crate::emb::mm_to_px(&st, line[0].0, line[0].1));
+                let b = to(crate::emb::mm_to_px(&st, line[1].0, line[1].1));
+                let mut pb = sk::PathBuilder::new();
+                pb.move_to(a.0, a.1);
+                pb.line_to(b.0, b.1);
+                if let Some(path) = pb.finish() {
+                    let stroke = sk::Stroke { width: 1.5, dash: sk::StrokeDash::new(vec![5.0, 4.0], 0.0), ..Default::default() };
+                    cv.stroke_path(&path, &gfx::paint(Color::rgb(204, 26, 26)), &stroke, sk::Transform::identity(), None);
+                }
+            }
+        }
         if let Some((Tool::PolySelect, pts, _, _)) = &self.multi {
             let mut pb = sk::PathBuilder::new();
             for (i, q) in pts.iter().map(|p| to(*p)).enumerate() {
@@ -3840,7 +4021,8 @@ impl CommandState for St {
             "undo" => self.can_undo,
             "redo" => self.can_redo,
             "crop" => self.has_sel,
-            "emb.nodes" if !self.emb_sel => false,
+            "emb.nodes" | "emb.holes" | "emb.merge" | "emb.split" if !self.emb_sel => false,
+            "emb.holes" | "emb.merge" | "emb.split" => self.emb,
             "emb.view" | "emb.density" | "emb.stitchout" | "emb.info" | "emb.export" | "emb.place" | "emb.trace" | "tool.emb" => self.emb,
             "emb.recolour" | "emb.stitch" => self.emb_sel,
             "emb.hoop" => self.emb,
