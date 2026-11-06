@@ -91,11 +91,11 @@ impl Host for WinHost {
         self.fullscreen || self.window.fullscreen().is_some()
     }
     fn clipboard_images(&self) -> bool {
-        // arboard reaches the X11 clipboard; under Wayland only words go through (the compositor's
-        // own clipboard), so a picture can't be copied there yet
+        // arboard reaches the X11 clipboard. Under Wayland the compositor's own clipboard carries
+        // words; a picture goes through the wl-clipboard helpers when they are installed (X4-04).
         #[cfg(all(unix, not(target_os = "macos")))]
         if self.wl_clip.is_some() {
-            return false;
+            return wl_clipboard_helpers();
         }
         true
     }
@@ -142,8 +142,101 @@ impl Host for WinHost {
             });
         }
     }
+    fn clipboard_png(&mut self) -> Option<Vec<u8>> {
+        #[cfg(all(unix, not(target_os = "macos")))]
+        if self.wl_clip.is_some() {
+            return wl_paste_png();
+        }
+        None
+    }
+    fn set_clipboard_png(&mut self, _png: &[u8]) -> bool {
+        #[cfg(all(unix, not(target_os = "macos")))]
+        if self.wl_clip.is_some() {
+            return wl_copy_png(_png);
+        }
+        false
+    }
     fn now(&self) -> Duration {
         self.start.elapsed()
+    }
+}
+
+// ---------------------------------------------------------------- pictures on Wayland (X4-04)
+/// Wayland hands whole files between programs, and the compositor's own clipboard here carries
+/// only words. wl-copy and wl-paste are the standard helpers for the rest; when they are
+/// installed, a picture travels as a PNG the way every other Wayland program expects.
+#[cfg(all(unix, not(target_os = "macos")))]
+fn wl_clipboard_helpers() -> bool {
+    use std::sync::OnceLock;
+    static OK: OnceLock<bool> = OnceLock::new();
+    *OK.get_or_init(|| which("wl-copy").is_some() && which("wl-paste").is_some())
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn which(name: &str) -> Option<std::path::PathBuf> {
+    std::env::var_os("PATH").and_then(|path| {
+        std::env::split_paths(&path).map(|d| d.join(name)).find(|p| p.is_file())
+    })
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn wl_copy_png(png: &[u8]) -> bool {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    if !wl_clipboard_helpers() || png.is_empty() {
+        return false;
+    }
+    // wl-copy stays alive to serve the clipboard, as the protocol asks: don't wait for it.
+    let child = Command::new("wl-copy")
+        .arg("--type")
+        .arg("image/png")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn();
+    let mut child = match child {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+    let wrote = child.stdin.take().map(|mut s| s.write_all(png).is_ok()).unwrap_or(false);
+    // wl-copy puts a server of its own in the background and the command returns once it has the
+    // clipboard. Its server still has to answer the first question, so wait until the picture is
+    // really being offered: a paste right afterwards would otherwise find nothing.
+    let _ = child.wait();
+    for _ in 0..40 {
+        if wl_offers_picture() {
+            return wrote;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+    wrote
+}
+
+/// Whether the clipboard is offering a picture at all.
+#[cfg(all(unix, not(target_os = "macos")))]
+fn wl_offers_picture() -> bool {
+    wl_types().map(|t| t.contains("image/")).unwrap_or(false)
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn wl_types() -> Option<String> {
+    let out = std::process::Command::new("wl-paste").arg("--list-types").output().ok()?;
+    Some(String::from_utf8_lossy(&out.stdout).to_lowercase())
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn wl_paste_png() -> Option<Vec<u8>> {
+    use std::process::Command;
+    if !wl_clipboard_helpers() {
+        return None;
+    }
+    let types = wl_types()?;
+    let want = ["image/png", "image/bmp", "image/jpeg"].into_iter().find(|t| types.contains(t))?;
+    let out = Command::new("wl-paste").arg("--no-newline").arg("--type").arg(want).output().ok()?;
+    if out.stdout.is_empty() {
+        None
+    } else {
+        Some(out.stdout)
     }
 }
 

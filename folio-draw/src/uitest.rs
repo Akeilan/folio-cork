@@ -308,10 +308,11 @@ impl UiTest {
             app.doc.sel_rect(300, 350, 200, 150);
             key(app, h, r, Key::Char('c'), ctrl());
             if h.clipboard_images() {
-                let img = h.clipboard_image().ok_or("nothing on the clipboard")?;
+                // X11 hands back raw pixels; Wayland a PNG through the wl-clipboard helpers (X4-04)
+                let img = app.picture_from_clipboard(h).ok_or("nothing on the clipboard")?;
                 check(img.w == 200 && img.h == 150, &format!("clipboard {}x{}", img.w, img.h))?;
             } else {
-                // Wayland takes only words on its clipboard; the picture stays with the app
+                // a desktop that takes no pictures at all: the picture stays with the app
                 check(app.doc.clip_w == 200 && app.doc.clip_h == 150, &format!("kept {}x{}", app.doc.clip_w, app.doc.clip_h))?;
             }
             key(app, h, r, Key::Char('v'), ctrl());

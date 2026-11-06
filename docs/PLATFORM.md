@@ -38,7 +38,10 @@
   - start a window move or edge resize (for the drawn title bar and borders);
   - minimise, maximise toggle, close;
   - the system's dark preference;
-  - the clipboard: text and RGBA images, system-wide;
+  - the clipboard: text and RGBA images, system-wide. A Wayland session passes whole files
+    between programs rather than raw pixels, so a picture travels as a PNG there through the
+    standard wl-clipboard helpers (`clipboard_png` / `set_clipboard_png`, X4-04); without those
+    helpers installed `clipboard_images()` says so and the app keeps its own copy;
   - a monotonic clock.
 - **Headless:** `run_headless(app, w, h, scale, ticks, frame)` and `Headless` give the same contract with no display, on a virtual clock. The pixel tests and `--ui-test --headless` use them.
 

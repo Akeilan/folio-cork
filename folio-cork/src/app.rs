@@ -1203,7 +1203,11 @@ impl CorkApp {
         if let Some(img) = export::shapes_image(&self.ed.doc, &shapes, &imgs, &mut r.text, &mut r.images, 2.0) {
             let rgba = gfx::rgba_from_pixmap(&img);
             let im = folio_kit::platform::Image { w: img.width(), h: img.height(), rgba };
-            host.set_clipboard_image(&im);
+            // Wayland hands whole files between programs: the picture goes as a PNG there (X4-04)
+            let png = gfx::encode_png(&img);
+            if !host.set_clipboard_png(&png) {
+                host.set_clipboard_image(&im);
+            }
             crate::settings::store_clip(&shapes, &imgs, &im);
             let mut d = Document { pages: vec![], images: self.ed.doc.images.clone(), next_id: self.ed.doc.next_id };
             for (k, v) in &imgs {
@@ -1223,7 +1227,8 @@ impl CorkApp {
     }
 
     fn paste_in(&mut self, host: &mut dyn Host, r: &mut Res, at: Option<(f32, f32)>) {
-        if let Some(img) = host.clipboard_image() {
+        // (the picture comes back as a file on Wayland, as raw pixels on X11: clipboard_picture)
+        if let Some(img) = clipboard_picture(host) {
             if let Some((shapes, imgs)) = crate::settings::match_clip(&img) {
                 self.ed.paste_shapes(&shapes, &imgs, at, "Paste");
                 return;
@@ -3528,4 +3533,19 @@ impl folio_kit::platform::App for CorkApp {
     fn exit_code(&self) -> i32 {
         self.code
     }
+}
+
+/// A picture from the desktop's clipboard: a file where the desktop works that way (Wayland),
+/// else raw pixels (X11) — X4-04.
+fn clipboard_picture(host: &mut dyn Host) -> Option<folio_kit::platform::Image> {
+    if let Some(bytes) = host.clipboard_png() {
+        if let Some(pm) = gfx::decode_image(&bytes) {
+            return Some(folio_kit::platform::Image {
+                w: pm.width(),
+                h: pm.height(),
+                rgba: gfx::rgba_from_pixmap(&pm),
+            });
+        }
+    }
+    host.clipboard_image()
 }

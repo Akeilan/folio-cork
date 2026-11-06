@@ -1946,9 +1946,8 @@ impl DrawApp {
                 let had_sel = self.doc.sel.is_some();
                 if self.doc.clip_extract() {
                     let img = Image { w: self.doc.clip_w as u32, h: self.doc.clip_h as u32, rgba: self.doc.clip.clone() };
-                    host.set_clipboard_image(&img);
-                    if !host.clipboard_images() {
-                        self.flash("This desktop doesn't take pictures on the clipboard yet, so it is only kept here.");
+                    if !self.copy_picture_out(&img, host) {
+                        self.flash("Pictures on this desktop's clipboard need the wl-clipboard package; this one is kept here instead.");
                     }
                     if id == "cut" && had_sel && self.doc.sel_delete() {
                         self.doc.label_last("Cut");
@@ -1956,7 +1955,7 @@ impl DrawApp {
                 }
             }
             "paste" => {
-                if let Some(img) = host.clipboard_image() {
+                if let Some(img) = self.picture_from_clipboard(host) {
                     self.paste_rgba(img.w as usize, img.h as usize, img.rgba);
                 } else if let Some(t) = host.clipboard_text().filter(|t| std::path::Path::new(t.trim()).is_file()) {
                     // a file name on the clipboard: the picture it names
@@ -2151,8 +2150,8 @@ impl DrawApp {
             "paste-layer" => {
                 // the desktop's clipboard, or the picture this app copied when the desktop
                 // wouldn't take one (Wayland)
-                let img = host.clipboard_image().or_else(|| {
-                    (!host.clipboard_images() && self.doc.clip_w > 0 && !self.doc.clip.is_empty()).then(|| Image {
+                let img = self.picture_from_clipboard(host).or_else(|| {
+                    (self.doc.clip_w > 0 && !self.doc.clip.is_empty()).then(|| Image {
                         w: self.doc.clip_w as u32,
                         h: self.doc.clip_h as u32,
                         rgba: self.doc.clip.clone(),
@@ -2739,6 +2738,33 @@ impl DrawApp {
             }
         }
         None
+    }
+
+    /// Put a picture on the desktop's clipboard. Wayland hands whole files between programs, so
+    /// the picture goes as a PNG there; X11 takes raw pixels (X4-04). False: neither worked, and
+    /// the picture is only kept in this app.
+    pub fn copy_picture_out(&mut self, img: &Image, host: &mut dyn Host) -> bool {
+        if !host.clipboard_images() {
+            host.set_clipboard_image(img);       // harmless, and keeps the app's own copy honest
+            return false;
+        }
+        let png = folio_draw_engine::png::encode(img.w as usize, img.h as usize, &img.rgba, 6);
+        if !png.is_empty() && host.set_clipboard_png(&png) {
+            return true;
+        }
+        host.set_clipboard_image(img);
+        true
+    }
+
+    /// A picture from the desktop's clipboard: a PNG (or other picture file) where the desktop
+    /// works that way, else raw pixels.
+    pub fn picture_from_clipboard(&mut self, host: &mut dyn Host) -> Option<Image> {
+        if let Some(bytes) = host.clipboard_png() {
+            if let Ok((w, h, px)) = files::decode(&bytes) {
+                return Some(Image { w: w as u32, h: h as u32, rgba: px });
+            }
+        }
+        host.clipboard_image()
     }
 
     pub fn paste_rgba(&mut self, w: usize, h: usize, px: Vec<u8>) {

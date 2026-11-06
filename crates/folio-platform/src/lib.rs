@@ -141,8 +141,9 @@ pub trait Host {
     /// Fill the screen, hiding the desktop's panels; `false` goes back to a window.
     fn set_fullscreen(&mut self, on: bool);
     fn is_fullscreen(&self) -> bool;
-    /// Whether a picture can go on this desktop's clipboard. False on Wayland, where Folio can
-    /// still copy and paste words but not pictures.
+    /// Whether a picture can go on this desktop's clipboard. On Wayland that needs the
+    /// wl-clipboard helpers (see `clipboard_png`); without them Folio can still copy and paste
+    /// words, but not pictures.
     fn clipboard_images(&self) -> bool {
         true
     }
@@ -153,6 +154,15 @@ pub trait Host {
     fn set_clipboard_text(&mut self, text: &str);
     fn clipboard_image(&mut self) -> Option<Image>;
     fn set_clipboard_image(&mut self, img: &Image);
+    /// A picture on the clipboard as PNG bytes, where the desktop works in whole files rather
+    /// than raw pixels (Wayland). None means "ask `clipboard_image` instead" (X4-04).
+    fn clipboard_png(&mut self) -> Option<Vec<u8>> {
+        None
+    }
+    /// Put a picture on the clipboard as PNG bytes. False means it couldn't be done this way.
+    fn set_clipboard_png(&mut self, _png: &[u8]) -> bool {
+        false
+    }
     /// Time since the app started (tests may run on a virtual clock).
     fn now(&self) -> Duration;
 }
