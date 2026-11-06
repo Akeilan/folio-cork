@@ -1462,6 +1462,9 @@ impl folio_kit::platform::App for PageApp {
                 self.exit_code = t.code();
                 self.exit = true;
                 host.close();
+            } else {
+                // the next step runs on the next frame
+                host.redraw();
             }
             self.test = Some(t);
         }
