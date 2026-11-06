@@ -30,7 +30,7 @@ for m in ${MACHINES:-/srv/jammy /srv/nolo /srv/noble}; do
   echo "== installed in $m"
   cp /home/claude/out/folio-draw_${V}_amd64.deb /home/claude/out/folio-fonts_${FV}_all.deb $m/tmp/
   cp $PIC $m/tmp/bands.png
-  flock /home/claude/.dpkg.lock chroot $m bash -c "DEBIAN_FRONTEND=noninteractive apt-get install -y -q /tmp/folio-fonts_${FV}_all.deb /tmp/folio-draw_${V}_amd64.deb >/tmp/draw-install.log 2>&1 || tail -5 /tmp/draw-install.log; dpkg -l folio-fonts folio-draw | tail -2 | awk '{print \$1, \$2, \$3}'; folio-draw --version"
+  flock /home/claude/.dpkg.lock chroot $m bash -c "DEBIAN_FRONTEND=noninteractive apt-get install -y -q --allow-downgrades /tmp/folio-fonts_${FV}_all.deb /tmp/folio-draw_${V}_amd64.deb >/tmp/draw-install.log 2>&1 || tail -5 /tmp/draw-install.log; dpkg -l folio-fonts folio-draw | tail -2 | awk '{print \$1, \$2, \$3}'; folio-draw --version"
   chroot $m bash -c "rm -rf /tmp/draw-ui; DISPLAY=:$XD WAYLAND_DISPLAY= timeout 300 folio-draw --ui-test /tmp/draw-ui 2>&1 | grep -E '^FAIL|passed'; rm -rf /tmp/draw-hl; DISPLAY= WAYLAND_DISPLAY= timeout 300 folio-draw --ui-test /tmp/draw-hl --headless | grep -E '^FAIL|passed' | sed 's/^/no display: /'; folio-draw --embroider /tmp/bands.png -o /tmp/draw-cli.pes --size 4x4 --colours 4 | tail -1; ls /usr/share/folio/fonts/Carlito-Regular.ttf >/dev/null && echo 'bundled fonts installed'; ls /usr/share/icons/hicolor/48x48/apps/folio-draw.png >/dev/null && echo 'icons installed'"
 done
 echo "== Wayland (Weston) on 24.04"
