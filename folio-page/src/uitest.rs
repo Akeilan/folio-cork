@@ -157,6 +157,43 @@ impl UiTest {
             ribbon_click(app, h, r, "view", "marks")?;
             Ok(())
         });
+        step!("a page break starts a second page", |app: &mut PageApp, h: &mut dyn Host, r: &mut Res| {
+            let before = app.ed.page_count();
+            ribbon_click(app, h, r, "insert", "break-page")?;
+            typed(app, h, "Over the page");
+            check(app.ed.page_count() > before, &format!("still {} pages", app.ed.page_count()))?;
+            key(app, h, Key::Char('z'), ctrl());
+            key(app, h, Key::Char('z'), ctrl());
+            check(app.ed.page_count() == before, "undo didn't take the break back")
+        });
+        step!("a table goes in where the caret is", |app: &mut PageApp, h: &mut dyn Host, r: &mut Res| {
+            let before = page_ink(app, r);
+            ribbon_click(app, h, r, "insert", "table")?;
+            let after = page_ink(app, r);
+            check(after > before, "no table was drawn")?;
+            key(app, h, Key::Char('z'), ctrl());
+            Ok(())
+        });
+        step!("Find and Replace changes the words", |app: &mut PageApp, h: &mut dyn Host, r: &mut Res| {
+            ribbon_click(app, h, r, "home", "find")?;
+            let d = app.dialog.as_mut().ok_or("the dialog didn't open")?;
+            d.set_text_for_test("what", "Folio");
+            d.set_text_for_test("with", "Folio Page");
+            app.press_dialog_button("all", h);
+            check(app.ed.text_of_document().contains("Folio Page"), "the words weren't replaced")?;
+            app.press_dialog_button("close", h);
+            check(app.dialog.is_none(), "the dialog stayed open")?;
+            key(app, h, Key::Char('z'), ctrl());
+            Ok(())
+        });
+        step!("Landscape turns the page on its side", |app: &mut PageApp, h: &mut dyn Host, _r: &mut Res| {
+            let (w0, h0) = app.ed.page_size(0);
+            app.command("orient:landscape", h);
+            let (w1, h1) = app.ed.page_size(0);
+            check(w1 > h1 && w1 > w0 && h1 < h0, &format!("page is {w1} by {h1}, was {w0} by {h0}"))?;
+            app.command("orient:portrait", h);
+            Ok(())
+        });
         step!("the document saves and opens again", move |app: &mut PageApp, _h: &mut dyn Host, _r: &mut Res| {
             let p = d_save.join("typed.docx");
             app.save(&p);

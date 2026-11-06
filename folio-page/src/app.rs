@@ -451,8 +451,9 @@ impl PageApp {
             };
             match res {
                 DialogResult::None => return,
-                DialogResult::Button(_) => {
-                    self.dialog = None;
+                DialogResult::Button(id) => {
+                    let d = self.dialog.take();
+                    self.dialog_button(&id, d, host);
                     return;
                 }
             }
@@ -583,12 +584,14 @@ impl PageApp {
                 Key::Char('i') => Some("italic"),
                 Key::Char('u') => Some("underline"),
                 Key::Char('a') => Some("select-all"),
+                Key::Char('f') => Some("find"),
                 Key::Char('c') => Some("copy"),
                 Key::Char('x') => Some("cut"),
                 Key::Char('v') => Some("paste"),
                 Key::Char('=') | Key::Char('+') => Some("zoom-in"),
                 Key::Char('-') => Some("zoom-out"),
                 Key::Char('0') => Some("zoom-100"),
+                Key::Enter => Some("break-page"),
                 _ => None,
             };
             if let Some(id) = id {
@@ -669,6 +672,16 @@ impl PageApp {
         }
         if let Some((page, p)) = chosen {
             match page.as_str() {
+                "picture" => match std::fs::read(&p) {
+                    Ok(bytes) => {
+                        let name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+                        if !self.ed.insert_picture(&bytes, &name) {
+                            self.say("Can't use that picture", "Folio Page knows PNG, JPEG, GIF, BMP and WebP pictures.");
+                        }
+                        self.cache.clear();
+                    }
+                    Err(e) => self.say("Can't read the picture", &e.to_string()),
+                },
                 "open" => self.open_path(&p),
                 "save" | "saveas" => self.save(&p),
                 "pdf" => self.export_pdf(&p),
@@ -747,6 +760,55 @@ impl PageApp {
         FilePane::new(&dir, &[ext], save, &format!("{name}.{ext}"))
     }
 
+    /// A dialog button pressed, for the window tests.
+    pub fn press_dialog_button(&mut self, id: &str, host: &mut dyn Host) {
+        let d = self.dialog.take();
+        self.dialog_button(id, d, host);
+    }
+
+    /// A button in a dialog: Find and Replace does its work and stays open.
+    fn dialog_button(&mut self, id: &str, d: Option<Dialog>, host: &mut dyn Host) {
+        let Some(d) = d else { return };
+        if d.id != "find" || id == "close" {
+            host.redraw();
+            return;
+        }
+        let what = d.value("what");
+        let with = d.value("with");
+        let opts = folio_page_editor::search::FindOpts {
+            match_case: d.checked("case"),
+            whole_word: d.checked("word"),
+            ..Default::default()
+        };
+        if !what.is_empty() {
+            match id {
+                "next" => match self.ed.find(&what, &opts, true, true) {
+                    Ok(Some(_)) => self.show_caret(),
+                    Ok(None) => self.flash(&format!("{what} isn't in the document")),
+                    Err(e) => self.flash(&e),
+                },
+                "replace" => {
+                    if self.ed.replace_one(&what, &with, &opts).unwrap_or(false) {
+                        self.show_caret();
+                    }
+                }
+                "all" => match self.ed.replace_all(&what, &with, &opts) {
+                    Ok(n) => self.flash(&format!("{n} replaced")),
+                    Err(e) => self.flash(&e),
+                },
+                _ => {}
+            }
+            self.cache.clear();
+        }
+        self.dialog = Some(d);
+        host.redraw();
+    }
+
+    /// The page the caret is on.
+    fn caret_page(&self) -> usize {
+        self.ed.caret_rect(self.ed.caret).map(|(p, _, _, _)| p).unwrap_or(0)
+    }
+
     fn open_menu(&mut self, id: &str, r: Rect) {
         let mut items: Vec<MenuItem> = Vec::new();
         match id {
@@ -769,6 +831,22 @@ impl PageApp {
             "font" => {
                 for f in self.ed.families().into_iter().take(80) {
                     items.push(MenuItem::new(&format!("font:{f}"), &f));
+                }
+            }
+            "margins" => {
+                for (name, twips) in [("Normal (1\")", 1440), ("Narrow (0.5\")", 720), ("Moderate (0.75\")", 1080),
+                                      ("Wide (1.5\")", 2160)] {
+                    items.push(MenuItem::new(&format!("margin:{twips}"), name));
+                }
+            }
+            "orientation" => {
+                items.push(MenuItem::new("orient:portrait", "Portrait"));
+                items.push(MenuItem::new("orient:landscape", "Landscape"));
+            }
+            "paper" => {
+                for (name, w, h) in [("Letter", 12240, 15840), ("Legal", 12240, 20160), ("A4", 11906, 16838),
+                                     ("A5", 8391, 11906)] {
+                    items.push(MenuItem::new(&format!("paper-size:{w}x{h}"), name));
                 }
             }
             "styles" => {
@@ -873,6 +951,77 @@ impl PageApp {
                 if let Some(s) = arg {
                     self.ed.apply_style_named(&s);
                 }
+            }
+            "break-page" => {
+                self.ed.insert_break("page");
+                self.show_caret();
+            }
+            "break-column" => {
+                self.ed.insert_break("column");
+                self.show_caret();
+            }
+            "table" => {
+                self.ed.insert_table(3, 3);
+                self.show_caret();
+            }
+            "picture" => {
+                self.pane = Pane::Backstage(Back { page: "picture".into(), files: Some(self.file_pane_named(false, "png")) });
+            }
+            "header" => self.ed.edit_header_footer(Some(self.caret_page()), false),
+            "footer" => self.ed.edit_header_footer(Some(self.caret_page()), true),
+            "body" => self.ed.edit_header_footer(None, false),
+            "page-number" => {
+                self.ed.insert_field("PAGE", "");
+                self.show_caret();
+            }
+            "margins" | "orientation" | "paper" => {}
+            "margin" => {
+                if let Some(v) = arg.and_then(|a| a.parse::<i32>().ok()) {
+                    let t = v.to_string();
+                    let sec = self.ed.current_section();
+                    self.ed.section_attr(sec, "w:pgMar", "w:top", Some(&t), "Margins");
+                    self.ed.section_attr(sec, "w:pgMar", "w:bottom", Some(&t), "Margins");
+                    self.ed.section_attr(sec, "w:pgMar", "w:left", Some(&t), "Margins");
+                    self.ed.section_attr(sec, "w:pgMar", "w:right", Some(&t), "Margins");
+                    self.ed.relayout();
+                    self.cache.clear();
+                }
+            }
+            "orient" => {
+                let land = arg.as_deref() == Some("landscape");
+                let sec = self.ed.current_section();
+                let (w, h) = self.ed.page_size(self.caret_page());
+                let (long, short) = (w.max(h), w.min(h));
+                let (pw, ph) = if land { (long, short) } else { (short, long) };
+                let tw = format!("{}", (pw * 20.0).round() as i64);
+                let th = format!("{}", (ph * 20.0).round() as i64);
+                self.ed.section_attr(sec, "w:pgSz", "w:w", Some(&tw), "Orientation");
+                self.ed.section_attr(sec, "w:pgSz", "w:h", Some(&th), "Orientation");
+                self.ed.section_attr(sec, "w:pgSz", "w:orient", Some(if land { "landscape" } else { "portrait" }), "Orientation");
+                self.ed.relayout();
+                self.cache.clear();
+            }
+            "paper-size" => {
+                if let Some((w, h)) = arg.as_deref().and_then(|a| a.split_once('x')) {
+                    let sec = self.ed.current_section();
+                    self.ed.section_attr(sec, "w:pgSz", "w:w", Some(w), "Paper size");
+                    self.ed.section_attr(sec, "w:pgSz", "w:h", Some(h), "Paper size");
+                    self.ed.relayout();
+                    self.cache.clear();
+                }
+            }
+            "find" => {
+                self.dialog = Some(
+                    Dialog::new("find", "Find and Replace")
+                        .text("what", "Find what", "")
+                        .text("with", "Replace with", "")
+                        .check("case", "Match case", false)
+                        .check("word", "Whole words only", false)
+                        .button("next", "Find Next")
+                        .button("replace", "Replace")
+                        .button("all", "Replace All")
+                        .button("close", "Close"),
+                );
             }
             "marks" => {
                 self.marks = !self.marks;
