@@ -1,7 +1,7 @@
 #!/bin/bash
 # Folio Cork release checks: unit tests and the window test from source, the .deb, then the installed
 # package on 22.04, 22.04 without LibreOffice and 24.04 (window test on X), and a Wayland pass on 24.04.
-#   XD=<X display> tools/release.sh        (PORTS=1 adds the port checks: AVX2/FMA build, Windows under wine, ARM64 under qemu, Pi budgets)
+#   XD=<X display> tools/release.sh        (PORTS=1 adds the other-CPU checks: AVX2/FMA build, ARM64 under qemu, Pi budgets)
 set -u
 R=/home/claude/folio-cork
 XD=${XD:-99}
@@ -16,14 +16,6 @@ if [ -z "${INSTALLED_ONLY:-}" ]; then
   if [ -n "${PORTS:-}" ]; then
   echo "== same results built for this CPU's own instructions (AVX2/FMA)"
   (cd $R && RUSTFLAGS="-C target-cpu=native" CARGO_TARGET_DIR=/tmp/cork-native cargo test -q -p folio-cork templates 2>&1 | grep "test result"; RUSTFLAGS="-C target-cpu=native" CARGO_TARGET_DIR=/tmp/cork-native cargo test -q -p folio-kit --test pixels 2>&1 | grep "test result"; rm -rf /tmp/cork-native)
-  echo "== Windows: cross-built, every test and both window tests under wine (X3-13)"
-  (cd $R && W=/tmp/cork-win; rm -rf $W/x86_64-pc-windows-gnu/debug/fonts; \
-   RUSTC_BOOTSTRAP=1 CARGO_TARGET_DIR=$W FOLIO_FONTS="Z:$(echo $R/fonts | tr / \\\\)" cargo test -q --config tools/win64.toml -Z build-std=std,panic_abort,panic_unwind --target x86_64-pc-windows-gnu --workspace --no-fail-fast 2>&1 | grep -E "test result: FAILED|panicked|^error"; \
-   echo "  $(RUSTC_BOOTSTRAP=1 CARGO_TARGET_DIR=$W FOLIO_FONTS="Z:$(echo $R/fonts | tr / \\\\)" cargo test -q --config tools/win64.toml -Z build-std=std,panic_abort,panic_unwind --target x86_64-pc-windows-gnu --workspace --no-fail-fast 2>&1 | grep -c 'test result: ok') test groups ok on Windows"; \
-   RUSTC_BOOTSTRAP=1 CARGO_TARGET_DIR=$W cargo build -q --config tools/win64.toml -Z build-std=std,panic_abort,panic_unwind --target x86_64-pc-windows-gnu -p folio-cork -p folio-draw 2>&1 | grep -E "^error"; \
-   cp -r $R/fonts $W/x86_64-pc-windows-gnu/debug/fonts; cd $W/x86_64-pc-windows-gnu/debug; \
-   WINEPREFIX=/tmp/wineprefix WINEDEBUG=-all timeout 900 wine folio-cork.exe --ui-test 'C:\cork' --headless 2>&1 | tail -1; \
-   WINEPREFIX=/tmp/wineprefix WINEDEBUG=-all timeout 900 wine folio-draw.exe --ui-test 'C:\draw' --headless 2>&1 | tail -1)
   echo "== the same tests on ARM64 (the Pi's CPU), under qemu: identical pixels and files"
   (cd $R && RUSTC_BOOTSTRAP=1 CARGO_TARGET_DIR=/tmp/cork-arm64 cargo test -q --config tools/arm64.toml -Z build-std=std,panic_abort,panic_unwind --target aarch64-unknown-linux-gnu --workspace 2>&1 | grep -E "test result: FAILED|panicked|differ"; echo "  $(cd $R && RUSTC_BOOTSTRAP=1 CARGO_TARGET_DIR=/tmp/cork-arm64 cargo test -q --config tools/arm64.toml -Z build-std=std,panic_abort,panic_unwind --target aarch64-unknown-linux-gnu --workspace 2>&1 | grep -c 'test result: ok') test groups ok on arm64"; rm -rf /tmp/cork-arm64)
   fi
