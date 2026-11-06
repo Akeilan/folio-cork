@@ -38,6 +38,8 @@ const ICONS: &[(&str, &str)] = &[
     ("lettering", "<path d='M4 19l5.5-14h2L17 19M6.6 14h7.8'/><path d='M3 22h18' stroke-dasharray='2.5 2'/>"),
     ("envelope", "<path d='M3 9C7 4 17 4 21 9'/><rect x='5' y='12' width='14' height='7' rx='1'/>"),
     ("density", "<rect x='3' y='5' width='18' height='14' rx='1.5'/><path d='M6 16c2-5 4-8 6-8s4 3 6 8' /><path d='M9 19v-3M12 19v-6M15 19v-3'/>"),
+    ("wallpaper", "<rect x='3' y='5' width='18' height='12' rx='1.5'/><path d='M9 21h6M12 17v4'/><path d='M6 14l3-3 2 2 3-4 4 5'/>"),
+    ("email", "<rect x='3' y='6' width='18' height='12' rx='1.5'/><path d='M3.5 7l8.5 6 8.5-6'/>"),
     ("print", "<path d='M7 9V4h10v5'/><rect x='4' y='9' width='16' height='7' rx='1'/><path d='M7 16v4h10v-4'/>"),
     ("page", "<rect x='5' y='3' width='14' height='18' rx='1'/><path d='M8 7h8M8 11h8M8 15h5'/>"),
     ("search", "<circle cx='11' cy='11' r='6.5'/><path d='M20 20l-4.5-4.5'/>"),

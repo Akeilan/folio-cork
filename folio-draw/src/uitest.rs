@@ -941,6 +941,34 @@ impl UiTest {
             app.ribbon.collapsed = false;
             Ok(())
         });
+        step!("the picture can go to the desktop's background or into an email", |app: &mut DrawApp, h: &mut dyn Host, r: &mut Res| {
+            app.saved_for_test();
+            app.command("new", h);
+            ev(app, h, r, Event::MouseMove { x: 1.0, y: 1.0 });
+            app.set_tool(Tool::Pencil);
+            drag_on(app, h, r, (30.0, 30.0), (160.0, 30.0), Button::Left);
+            // a file another program can take: a PNG, and the layers as OpenRaster
+            let png = app.file_for_sending("png").map_err(|e| e.to_string())?;
+            check(png.exists() && std::fs::metadata(&png).map(|m| m.len() > 100).unwrap_or(false), "no PNG written")?;
+            let bytes = std::fs::read(&png).map_err(|e| e.to_string())?;
+            check(&bytes[1..4] == b"PNG", "that isn't a PNG")?;
+            let ora = app.file_for_sending("ora").map_err(|e| e.to_string())?;
+            check(ora.extension().map(|e| e == "ora").unwrap_or(false) && ora.exists(), "no OpenRaster written")?;
+            // a saved file in the same format is handed over as it is
+            let dir = PathBuf::from(folio_kit::platform::setting("FOLIO_UI_DIR").unwrap_or_else(|| "/tmp".into()));
+            let saved = dir.join("send.png");
+            check(app.save_to(&saved), "couldn't save")?;
+            check(app.file_for_sending("png").map_err(|e| e.to_string())? == saved, "it made a copy of a file it could send")?;
+            // both commands say what happened rather than failing silently
+            app.command("wallpaper", h);
+            let msg = app.flash_text();
+            check(!msg.is_empty(), "Set as background said nothing")?;
+            app.command("email", h);
+            check(!app.flash_text().is_empty(), "Send in email said nothing")?;
+            let m = app.menu_for_test("email");
+            check(m.len() == 2, &format!("the email menu has {} choices", m.len()))?;
+            Ok(())
+        });
         step!("a transparent new picture, polygon selection, properties and the History pane", |app: &mut DrawApp, h: &mut dyn Host, r: &mut Res| {
             app.saved_for_test();
             app.command("new-transparent", h);

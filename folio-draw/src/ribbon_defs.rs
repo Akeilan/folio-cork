@@ -24,6 +24,8 @@ pub fn tabs() -> Vec<Tab> {
                         I::small("crop", "Crop", "crop").key("Ctrl+Shift+X").desc("Trim the picture to the selection."),
                         I::small("resize", "Resize", "resize").key("Ctrl+W"),
                         I::small("rotate", "Rotate", "rotate").menu(),
+                        I::small("wallpaper", "Set as background", "wallpaper").desc("Make this picture the desktop's background."),
+                        I::small("email", "Send in email", "email").menu().desc("A new message with the picture attached."),
                         I::small("properties", "Properties", "page").key("Ctrl+E").desc("The picture's size, its layers and the file it came from."),
                         I::small("remove-bg", "Remove background", "nobg").desc("Cut the subject out of its background, leaving it transparent. With a selection, only the selected part is cut out."),
                     ],
