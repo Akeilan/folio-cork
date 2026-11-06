@@ -138,6 +138,68 @@ pub fn convert_with_office(path: &Path, to: &str) -> Result<PathBuf, String> {
     Ok(file)
 }
 
+/// Open a file or a folder in whatever the desktop uses for it (xdg-open on Linux).
+pub fn open_path(path: &Path) -> Result<(), String> {
+    use std::process::Command;
+    if !path.exists() {
+        return Err("That file isn't there.".into());
+    }
+    Command::new("xdg-open").arg(path).spawn().map(|_| ()).map_err(|_| "Nothing on this computer is set up to open it.".to_string())
+}
+
+/// A new message in the desktop's mail program with `path` attached.
+pub fn mail_file(path: &Path, subject: &str) -> Result<(), String> {
+    use std::process::Command;
+    if !path.exists() {
+        return Err("That file isn't there.".into());
+    }
+    let r = Command::new("xdg-email").args(["--subject", subject, "--attach"]).arg(path).spawn();
+    if r.is_ok() {
+        return Ok(());
+    }
+    // no xdg-email: open an empty message and leave the file for the person to attach
+    Command::new("xdg-open")
+        .arg(format!("mailto:?subject={}", subject.replace(' ', "%20")))
+        .spawn()
+        .map(|_| ())
+        .map_err(|_| "No mail program is set up on this computer.".to_string())
+}
+
+/// Make a picture the desktop's background. Linux: GNOME and the desktops built on it (Zorin,
+/// Cinnamon, MATE) through their own settings; others say so rather than guessing.
+pub fn set_wallpaper(path: &Path) -> Result<(), String> {
+    use std::process::Command;
+    let path = std::fs::canonicalize(path).map_err(|e| e.to_string())?;
+    let uri = format!("file://{}", path.display());
+    let schemes: [(&str, &[&str]); 3] = [
+        ("org.gnome.desktop.background", &["picture-uri", "picture-uri-dark"]),
+        ("org.cinnamon.desktop.background", &["picture-uri"]),
+        ("org.mate.background", &["picture-filename"]),
+    ];
+    let mut tried = false;
+    for (scheme, keys) in schemes {
+        let known = Command::new("gsettings").args(["writable", scheme, keys[0]]).output();
+        let Ok(o) = known else { continue };
+        if !o.status.success() || !String::from_utf8_lossy(&o.stdout).trim().eq("true") {
+            continue;
+        }
+        tried = true;
+        for key in keys {
+            let value = if *key == "picture-filename" { path.display().to_string() } else { uri.clone() };
+            let r = Command::new("gsettings").args([&"set", &scheme, key, value.as_str()]).status();
+            if r.map(|st| !st.success()).unwrap_or(true) {
+                return Err("The desktop wouldn't take the picture as its background.".into());
+            }
+        }
+        return Ok(());
+    }
+    Err(if tried {
+        "The desktop wouldn't take the picture as its background.".into()
+    } else {
+        "This desktop doesn't offer a way to set the background from a program.".to_string()
+    })
+}
+
 /// Sockets: plain TCP and the address other computers on the network reach this one by.
 pub mod net {
     pub use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream};

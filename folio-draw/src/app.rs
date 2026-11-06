@@ -1775,6 +1775,28 @@ impl DrawApp {
                 self.dialog = Some(Dialog::new("properties", "Picture properties").note(&note).button("ok", "Close"));
             }
             "pane.history" => self.show_history = !self.show_history,
+            "wallpaper" => {
+                match self.file_for_sending("png") {
+                    Ok(f) => match folio_kit::platform::set_wallpaper(&f) {
+                        Ok(()) => self.flash("The picture is now the desktop's background."),
+                        Err(e) => self.flash(&e),
+                    },
+                    Err(e) => self.flash(&e),
+                }
+            }
+            "email" | "email-ora" => {
+                let ext = if id == "email-ora" { "ora" } else { "png" };
+                match self.file_for_sending(ext) {
+                    Ok(f) => {
+                        let name = self.doc_name();
+                        match folio_kit::platform::mail_file(&f, &name) {
+                            Ok(()) => self.flash("A new message is open with the picture attached."),
+                            Err(e) => self.flash(&e),
+                        }
+                    }
+                    Err(e) => self.flash(&e),
+                }
+            }
             "page-setup" => {
                 let papers: Vec<&str> = crate::page::PAPERS.iter().map(|p| p.0).collect();
                 let pg = self.page.clone();
@@ -2151,6 +2173,11 @@ impl DrawApp {
                     MenuItem::new("remove-bg", "Remove background"),
                 ],
             ),
+            "email" => Menu::new(
+                "email",
+                rect,
+                vec![MenuItem::new("email", "As a picture (PNG)"), MenuItem::new("email-ora", "With its layers (OpenRaster)")],
+            ),
             "paste" => Menu::new("paste", rect, vec![MenuItem::new("paste", "Paste").key("Ctrl+V"), MenuItem::new("paste-layer", "Paste as new layer"), MenuItem::new("paste-file", "Paste from file...")]),
             "emb.new" => Menu::new("emb.new", rect, crate::emb::HOOPS.iter().enumerate().map(|(i, h)| MenuItem::new(&format!("emb.new:{i}"), h.0)).collect()),
             "emb.recolour" => Menu::new("emb.recolour", rect, vec![]).with_palette(PALETTE.iter().map(|&c| Color::hex(c)).collect(), 10),
@@ -2522,11 +2549,41 @@ impl DrawApp {
         let _ = host;
     }
 
+    /// What the status line is saying, for the window tests.
+    pub fn flash_text(&self) -> String {
+        self.flash.as_ref().map(|f| f.0.clone()).unwrap_or_default()
+    }
+
+    /// A menu's items, for the window tests.
+    pub fn menu_for_test(&mut self, id: &str) -> Vec<String> {
+        self.open_menu(id, Rect::new(0.0, 0.0, 10.0, 10.0));
+        let items = self.menu.as_ref().map(|m| m.items.iter().map(|i| i.id.clone()).collect()).unwrap_or_default();
+        self.menu = None;
+        items
+    }
+
     pub fn flash(&mut self, msg: &str) {
         self.flash = Some((msg.to_string(), self.now + Duration::from_secs(3)));
     }
 
     // ---------------- files ----------------
+
+    /// The picture written out as a file another program can take: the saved file when it is
+    /// already in that format, otherwise a copy among this run's temporary files.
+    pub fn file_for_sending(&mut self, ext: &str) -> Result<std::path::PathBuf, String> {
+        self.doc.commit_float();
+        if let Some(p) = self.path.clone() {
+            if p.extension().map(|e| e.eq_ignore_ascii_case(ext)).unwrap_or(false) && !self.dirty() {
+                return Ok(p);
+            }
+        }
+        let fmt = Format::from_name(&format!("x.{ext}"));
+        let bytes = files::save(&mut self.doc, fmt, [255, 255, 255]);
+        let stem = format!("folio-draw-{}", self.doc_name().replace(['/', ' '], "-"));
+        let out = folio_kit::platform::temp_file(&stem, ext);
+        std::fs::write(&out, &bytes).map_err(|e| e.to_string())?;
+        Ok(out)
+    }
 
     pub fn save(&mut self) -> bool {
         let Some(p) = self.path.clone() else {
