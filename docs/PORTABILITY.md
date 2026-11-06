@@ -37,9 +37,10 @@ Every Folio app written in Rust follows these rules. `tools/check-portability.sh
 A release must pass on Linux: Ubuntu 22.04 and 24.04, X11 and Wayland. That is the bar for every
 app, and it is all `tools/release.sh` runs by default. The rules above keep other processors and
 operating systems reachable, but their checks run only when asked for: `PORTS=1 tools/release.sh`
-adds the AVX2/FMA build, the ARM64 run under qemu and the Pi budgets. Windows is not tested per
-release and no release run touches wine (Product Owner, 2026-11-06): the build was proven once, by
-hand, and the command is in docs/PLATFORM.md for whoever repeats it. The suite is developed and
+adds the AVX2/FMA build, the ARM64 run under qemu and the Pi budgets. Windows and macOS are not tested at all
+(Product Owner, 2026-11-06): no release run touches wine, Windows was proven once by hand with the
+command recorded in docs/PLATFORM.md, and macOS is left alone. Build so they stay reachable; spend
+the time on Zorin. The suite is developed and
 used on Zorin OS (Product Owner, 2026-11-05), so Linux is what releases are held to while the apps
 are still growing.
 
