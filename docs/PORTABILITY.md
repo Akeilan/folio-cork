@@ -39,10 +39,10 @@ app, and it is all `tools/release.sh` runs by default. The rules above keep othe
 operating systems reachable, but their checks run only when asked for: `PORTS=1 tools/release.sh`
 adds the AVX2/FMA build, the ARM64 run under qemu and the Pi budgets. Windows and macOS are not tested at all
 (Product Owner, 2026-11-06): no release run touches wine, Windows was proven once by hand with the
-command recorded in docs/PLATFORM.md, and macOS is left alone. Build so they stay reachable; spend
-the time on Zorin. The suite is developed and
-used on Zorin OS (Product Owner, 2026-11-05), so Linux is what releases are held to while the apps
-are still growing.
+command recorded in docs/PLATFORM.md, and macOS is left alone. Any port beyond Zorin OS and Linux
+Mint is a bridge crossed when we get there — build so the rules keep it possible, and spend the
+time on Zorin. The suite is developed and used on Zorin OS, and Linux Mint is the other system it
+is meant for; both are Ubuntu-based, so the 22.04 and 24.04 machines are what releases are held to.
 
 ## 6. The Raspberry Pi 4B is the floor
 
