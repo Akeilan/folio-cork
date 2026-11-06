@@ -81,6 +81,8 @@ pub struct PageApp {
     canvas: Rect,
     dragging: bool,
     marks: bool,
+    painter: bool,
+    view_mode: u8,
     pub test: Option<crate::uitest::UiTest>,
 }
 
@@ -123,6 +125,8 @@ impl PageApp {
             canvas: Rect::default(),
             dragging: false,
             marks: false,
+            painter: false,
+            view_mode: 0,
             test: None,
         }
     }
@@ -849,6 +853,22 @@ impl PageApp {
                     items.push(MenuItem::new(&format!("paper-size:{w}x{h}"), name));
                 }
             }
+            "case" => {
+                for (id, label) in [("upper", "UPPERCASE"), ("lower", "lowercase"), ("sentence", "Sentence case"),
+                                    ("title", "Capitalise Each Word"), ("toggle", "tOGGLE cASE")] {
+                    items.push(MenuItem::new(&format!("case-set:{id}"), label));
+                }
+            }
+            "line-spacing" => {
+                for v in ["1.0", "1.15", "1.5", "2.0"] {
+                    items.push(MenuItem::new(&format!("spacing:{v}"), v));
+                }
+            }
+            "borders" => {
+                items.push(MenuItem::new("border:all", "All borders"));
+                items.push(MenuItem::new("border:outside", "Outside borders"));
+                items.push(MenuItem::new("border:none", "No borders"));
+            }
             "styles" => {
                 for s in self.ed.style_names().into_iter().take(40) {
                     items.push(MenuItem::new(&format!("style:{s}"), &s));
@@ -969,7 +989,7 @@ impl PageApp {
             }
             "header" => self.ed.edit_header_footer(Some(self.caret_page()), false),
             "footer" => self.ed.edit_header_footer(Some(self.caret_page()), true),
-            "body" => self.ed.edit_header_footer(None, false),
+            "body" => self.ed.edit_notes(None),
             "page-number" => {
                 self.ed.insert_field("PAGE", "");
                 self.show_caret();
@@ -1083,6 +1103,102 @@ impl PageApp {
                 self.flash(&format!("{n} changes {}", if head == "accept-all" { "accepted" } else { "rejected" }));
                 self.cache.clear();
             }
+            "row-below" | "row-above" => {
+                if !self.ed.insert_rows(head == "row-below") {
+                    self.flash("The caret isn't in a table");
+                }
+                self.cache.clear();
+            }
+            "col-right" | "col-left" => {
+                if !self.ed.insert_cols(head == "col-right") {
+                    self.flash("The caret isn't in a table");
+                }
+                self.cache.clear();
+            }
+            "row-delete" => {
+                self.ed.delete_rows();
+                self.cache.clear();
+            }
+            "col-delete" => {
+                self.ed.delete_cols();
+                self.cache.clear();
+            }
+            "table-delete" => {
+                self.ed.delete_table();
+                self.cache.clear();
+            }
+            "merge" => {
+                if !self.ed.merge_cells() {
+                    self.flash("Select the cells to join first");
+                }
+                self.cache.clear();
+            }
+            "borders" => {}
+            "border" => {
+                let which = arg.unwrap_or_default();
+                let single = vec![("w:val".to_string(), "single".to_string()), ("w:sz".to_string(), "4".to_string())];
+                let sides: Vec<(String, Option<Vec<(String, String)>>)> = match which.as_str() {
+                    "all" => ["top", "left", "bottom", "right", "insideH", "insideV"]
+                        .iter()
+                        .map(|s| (format!("w:{s}"), Some(single.clone())))
+                        .collect(),
+                    "none" => ["top", "left", "bottom", "right", "insideH", "insideV"]
+                        .iter()
+                        .map(|s| (format!("w:{s}"), None))
+                        .collect(),
+                    "outside" => ["top", "left", "bottom", "right"]
+                        .iter()
+                        .map(|s| (format!("w:{s}"), Some(single.clone())))
+                        .collect(),
+                    _ => Vec::new(),
+                };
+                if !sides.is_empty() {
+                    self.ed.set_borders("table", &sides);
+                    self.cache.clear();
+                }
+            }
+            "case" => {}
+            "case-set" => {
+                if let Some(m) = arg {
+                    self.ed.change_case(&m);
+                    self.cache.clear();
+                }
+            }
+            "clear-format" => {
+                self.ed.clear_format();
+                self.cache.clear();
+            }
+            "painter" => {
+                if self.painter {
+                    self.ed.paste_format();
+                    self.painter = false;
+                } else {
+                    self.ed.copy_format();
+                    self.painter = true;
+                    self.flash("Now select the text to give that look to");
+                }
+                self.cache.clear();
+            }
+            "line-spacing" => {}
+            "spacing" => {
+                if let Some(v) = arg.and_then(|a| a.parse::<f64>().ok()) {
+                    let n = format!("{}", (v * 240.0).round() as i64);
+                    self.ed.format_paras_attrs("w:spacing", &[("w:line", Some(&n)), ("w:lineRule", Some("auto"))],
+                                               "Line spacing");
+                    self.cache.clear();
+                }
+            }
+            "view-print" | "view-draft" | "view-web" => {
+                let mode = match head {
+                    "view-draft" => 1,
+                    "view-web" => 2,
+                    _ => 0,
+                };
+                let width = (self.canvas.w / (self.zoom * self.s).max(0.1)) as f64 - 64.0;
+                self.ed.set_view_mode(mode, width.max(200.0));
+                self.view_mode = mode;
+                self.cache.clear();
+            }
             "marks" => {
                 self.marks = !self.marks;
                 self.cache.clear();
@@ -1122,6 +1238,8 @@ impl PageApp {
             underline: self.ed.toggle_state("w:u"),
             marks: self.marks,
             track: self.ed.tracking(),
+            painter: self.painter,
+            view_mode: self.view_mode,
             zoom: format!("{}%", (self.zoom * 100.0).round() as i32),
             font: self.ed.current_font().unwrap_or_default(),
             size: self.ed.current_size().map(|v| format!("{v}")).unwrap_or_default(),
@@ -1138,6 +1256,8 @@ pub struct State {
     pub underline: bool,
     pub marks: bool,
     pub track: bool,
+    pub painter: bool,
+    pub view_mode: u8,
     pub zoom: String,
     pub font: String,
     pub size: String,
@@ -1160,6 +1280,10 @@ impl CommandState for State {
             "underline" => self.underline,
             "marks" => self.marks,
             "track" => self.track,
+            "painter" => self.painter,
+            "view-print" => self.view_mode == 0,
+            "view-draft" => self.view_mode == 1,
+            "view-web" => self.view_mode == 2,
             "align-left" => self.align == "left",
             "align-center" => self.align == "center",
             "align-right" => self.align == "right",
@@ -1206,6 +1330,17 @@ impl PageApp {
     /// Where the pages are on screen right now.
     pub fn page_rects_now(&self) -> Vec<(usize, Rect)> {
         self.page_rects.clone()
+    }
+
+    /// What the window has open over the pages, for the tests.
+    pub fn open_things(&self) -> String {
+        format!(
+            "backstage={} dialog={} menu={} story={:?}",
+            matches!(self.pane, Pane::Backstage(_)),
+            self.dialog.is_some(),
+            self.menu.is_some(),
+            self.ed.story
+        )
     }
 
     /// The part of the window the pages are drawn in.
