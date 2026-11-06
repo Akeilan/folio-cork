@@ -84,5 +84,5 @@
 | System | State |
 |---|---|
 | Linux, X11 and Wayland | Done (winit + softbuffer + arboard, cpal for sound). |
-| Windows | Next. The same crates cover it. What remains: printing (currently "export to PDF"), and running the conformance suite on Windows. |
+| Windows | Builds and runs. `tools/release.sh` with `PORTS=1` cross-builds the workspace for `x86_64-pc-windows-gnu` and runs every test, Cork's window test and Draw's under wine: all pass, and the files written match the Linux ones byte for byte. What remains: printing (currently "export to PDF"), the conformance suite on a real Windows machine rather than wine, and an installer that puts the fonts beside the .exe. |
 | macOS | After Windows. The same crates cover it. Needs a real Mac for the conformance suite. |

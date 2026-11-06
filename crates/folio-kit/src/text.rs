@@ -154,6 +154,17 @@ pub const BUNDLED_SANS: &str = "Carlito";
 pub const BUNDLED_SERIF: &str = "Liberation Serif";
 pub const BUNDLED_MONO: &str = "Liberation Mono";
 
+/// Without a single font nothing can be drawn, and the text library's own error deep inside says
+/// only "no default font found". Say where fonts are looked for instead.
+fn no_fonts_check(n: usize) {
+    if n == 0 {
+        panic!(
+            "No fonts found. Folio looks in the folder named by FOLIO_FONTS, in \"fonts\" beside \
+             the program, and in ../share/folio/fonts, as well as the system's own fonts."
+        );
+    }
+}
+
 fn key_size(v: f32) -> u32 {
     (v * 64.0).round() as u32
 }
@@ -168,6 +179,7 @@ impl Text {
         for dir in folio_platform::font_dirs() {
             fonts.db_mut().load_fonts_dir(&dir);
         }
+        no_fonts_check(fonts.db().len());
         let have = |f: &FontSystem, name: &str| f.db().faces().any(|x| x.families.iter().any(|(n, _)| n == name));
         let ui_family = ["Ubuntu", "Segoe UI", "SF Pro Text", "Cantarell", "Noto Sans", "DejaVu Sans", "Liberation Sans", BUNDLED_SANS]
             .iter()
@@ -186,6 +198,7 @@ impl Text {
         for d in dirs.iter().filter(|d| d.is_dir()) {
             db.load_fonts_dir(d);
         }
+        no_fonts_check(db.len());
         db.set_sans_serif_family(BUNDLED_SANS);
         db.set_serif_family(BUNDLED_SERIF);
         db.set_monospace_family(BUNDLED_MONO);
