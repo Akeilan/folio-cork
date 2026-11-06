@@ -134,6 +134,9 @@ pub fn tabs() -> Vec<Tab> {
                     vec![
                         I::large("tool.emb", "Select shapes", "select").desc("Click a shape to select it; drag to move it; Delete takes it away."),
                         I::large("emb.recolour", "Thread colour", "color").menu(),
+                        I::small("emb.holes", "Fill holes", "shape-fill").desc("Make the selected shape solid: its holes are stitched too."),
+                        I::small("emb.merge", "Merge", "merge").desc("Make the shapes of this colour on this layer one shape where they touch."),
+                        I::small("emb.split", "Split", "cut").desc("Break the selected shape into its separate parts, or draw a line across it to cut it in two."),
                         I::small("emb.nodes", "Edit nodes", "nodes").desc("Move, add (double-click an edge) or delete (Delete) the nodes of the selected shape, or the needle points of a stitch design. Double-clicking a shape does this too."),
                         I::large("emb.stitch", "Stitch properties", "stitches").desc("Stitch type, angle, density and underlay of the selected shape."),
                         I::small("emb.envelope", "Envelope", "envelope").desc("Bend the selected shapes or lettering: arch, bulge, pinch, wave or slant."),

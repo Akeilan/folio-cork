@@ -10,6 +10,7 @@ pub mod geom;
 pub mod json;
 pub mod plan;
 pub mod raster;
+pub mod shapes;
 pub mod skeleton;
 pub mod stitch;
 pub mod trace;

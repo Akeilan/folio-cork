@@ -315,6 +315,30 @@ pub fn add_shape_layer(doc: &mut Doc, name: &str, spec: &Value) -> usize {
     doc.text_layer_add(name, &spec.to_string(), 0, 0, w, h, &block, w * 4)
 }
 
+/// An object's rings as the shape operations want them.
+pub fn rings_of(o: &Value) -> Vec<Vec<(f32, f32)>> {
+    o["rings"]
+        .as_array()
+        .map(|rs| {
+            rs.iter()
+                .map(|r| {
+                    r.as_array()
+                        .map(|pts| pts.iter().map(|p| (p[0].as_f64().unwrap_or(0.0) as f32, p[1].as_f64().unwrap_or(0.0) as f32)).collect())
+                        .unwrap_or_default()
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Rings back as JSON, rounded as the format asks.
+pub fn rings_json(rings: &[Vec<(f32, f32)>]) -> Value {
+    json!(rings
+        .iter()
+        .map(|r| r.iter().map(|p| json!([(p.0 as f64 * 10_000.0).round() / 10_000.0, (p.1 as f64 * 10_000.0).round() / 10_000.0])).collect::<Vec<_>>())
+        .collect::<Vec<_>>())
+}
+
 /// A hoop by name ("4x4", "100x100mm") or the first one. Returns its index and size in mm.
 pub fn hoop_from(size: &str) -> Option<(usize, f32, f32)> {
     let t = size.to_lowercase().replace('\u{d7}', "x").replace(' ', "");
