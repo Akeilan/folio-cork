@@ -58,17 +58,39 @@ fn ribbon_click(app: &mut PageApp, host: &mut dyn Host, r: &mut Res, tab: &str, 
     Ok(())
 }
 
-/// The ink on the page area: how much of the document is showing.
-fn page_ink(app: &mut PageApp, r: &mut Res) -> usize {
+/// The ink in a part of the first page, given as fractions of its height.
+fn ink_band(app: &mut PageApp, r: &mut Res, from: f32, to: f32) -> usize {
     let pm = shot(app, r);
-    let c = app.canvas_rect();
+    let Some((_, rect)) = app.page_rects_now().into_iter().next() else { return 0 };
+    let y0 = (rect.y + rect.h * from) as u32;
+    let y1 = ((rect.y + rect.h * to) as u32).min(pm.height());
     let mut n = 0;
-    for y in c.y as u32..(c.bottom() as u32).min(pm.height()) {
-        for x in c.x as u32..(c.right() as u32).min(pm.width()) {
+    for y in y0..y1 {
+        for x in (rect.x as u32 + 1)..(rect.right() as u32).min(pm.width()) {
             if let Some(p) = pm.pixel(x, y) {
                 let p = p.demultiply();
-                if p.red() < 120 && p.green() < 120 && p.blue() < 120 {
+                if p.red() < 170 && p.green() < 170 && p.blue() < 170 {
                     n += 1;
+                }
+            }
+        }
+    }
+    n
+}
+
+/// The ink on the pages themselves: how much of the document is showing.
+/// Only what is drawn on the paper counts, never the grey around it.
+fn page_ink(app: &mut PageApp, r: &mut Res) -> usize {
+    let pm = shot(app, r);
+    let mut n = 0;
+    for (_, rect) in app.page_rects_now() {
+        for y in (rect.y as u32 + 1)..(rect.bottom() as u32).min(pm.height()) {
+            for x in (rect.x as u32 + 1)..(rect.right() as u32).min(pm.width()) {
+                if let Some(p) = pm.pixel(x, y) {
+                    let p = p.demultiply();
+                    if p.red() < 170 && p.green() < 170 && p.blue() < 170 {
+                        n += 1;
+                    }
                 }
             }
         }
@@ -194,15 +216,53 @@ impl UiTest {
             app.command("orient:portrait", h);
             Ok(())
         });
+        step!("a table gains a row and loses one", |app: &mut PageApp, h: &mut dyn Host, r: &mut Res| {
+            ribbon_click(app, h, r, "insert", "table")?;
+            let rows = |a: &PageApp| a.ed.table_cells(0).len();
+            let before = rows(app);
+            check(before > 0, "no table to work on")?;
+            ribbon_click(app, h, r, "table", "row-below")?;
+            check(rows(app) > before, "no row was added")?;
+            ribbon_click(app, h, r, "table", "row-delete")?;
+            check(rows(app) == before, "the row didn't go")?;
+            ribbon_click(app, h, r, "table", "table-delete")?;
+            check(rows(app) == 0, "the table stayed")?;
+            // back to the end of the text, where a person would be
+            key(app, h, Key::End, ctrl());
+            check(app.ed.text_of_document().contains("Hello"), &format!("the text went: {:?}", app.ed.text_of_document()))
+        });
+        step!("UPPERCASE from the Home tab", |app: &mut PageApp, h: &mut dyn Host, _r: &mut Res| {
+            key(app, h, Key::Char('a'), ctrl());
+            app.command("case-set:upper", h);
+            check(app.ed.text_of_document().contains("HELLO"), "the words didn't go up")?;
+            key(app, h, Key::Char('z'), ctrl());
+            check(app.ed.text_of_document().contains("Hello"), &format!("after undo: {:?}", app.ed.text_of_document()))
+        });
+        step!("Draft view lays the text out without the paper", |app: &mut PageApp, h: &mut dyn Host, r: &mut Res| {
+            ribbon_click(app, h, r, "view", "view-draft")?;
+            check(app.ed.page_count() >= 1, "no pages in draft view")?;
+            ribbon_click(app, h, r, "view", "view-print")?;
+            check(app.ed.text_of_document().contains("Hello"), &format!("in draft view: {:?}", app.ed.text_of_document()))
+        });
         step!("a footnote goes under the page", |app: &mut PageApp, h: &mut dyn Host, r: &mut Res| {
-            let before = page_ink(app, r);
+            let before = ink_band(app, r, 0.75, 1.0);
             ribbon_click(app, h, r, "references", "footnote")?;
             typed(app, h, "A note at the foot");
-            let after = page_ink(app, r);
-            check(after > before, "the note wasn't drawn")?;
+            let notes: String = app.ed.layout.pages[0]
+                .note_lines
+                .iter()
+                .map(|l| app.ed.doc.para_text(app.ed.layout.paras[l.para].node))
+                .collect();
+            check(notes.contains("A note at the foot"), &format!("the note says {notes:?}"))?;
+            let after = ink_band(app, r, 0.75, 1.0);
+            check(after > before, &format!("nothing new at the foot of the page ({before} -> {after})"))?;
+            ribbon_click(app, h, r, "insert", "body")?;
+            check(format!("{:?}", app.ed.story) == "Body", "didn't come back to the text")?;
             key(app, h, Key::Char('z'), ctrl());
             key(app, h, Key::Char('z'), ctrl());
-            Ok(())
+            key(app, h, Key::End, ctrl());
+            check(app.ed.text_of_document().contains("Hello"), &format!("back in the text: {:?}",
+                                                                        app.ed.text_of_document()))
         });
         step!("track changes records what is typed, and it can be rejected", |app: &mut PageApp, h: &mut dyn Host, r: &mut Res| {
             let before = app.ed.text_of_document();

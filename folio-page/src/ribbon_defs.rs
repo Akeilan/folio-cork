@@ -15,6 +15,7 @@ pub fn tabs() -> Vec<Tab> {
                         I::large("paste", "Paste", "paste").key("Ctrl+V").desc("Paste what was cut or copied."),
                         I::small("cut", "Cut", "cut").key("Ctrl+X"),
                         I::small("copy", "Copy", "copy").key("Ctrl+C"),
+                        I::small("painter", "Format Painter", "painter").desc("Copy the look of the text, then select other text to give it that look."),
                     ],
                 ),
                 Group::rows(
@@ -31,6 +32,8 @@ pub fn tabs() -> Vec<Tab> {
                             I::icon("strike", "Strikethrough", "strike"),
                             I::icon("font-color", "Font colour", "font-color").menu(),
                             I::icon("highlight", "Highlight", "highlight").menu(),
+                            I::icon("case", "Change case", "case").menu(),
+                            I::icon("clear-format", "Clear formatting", "clear-format"),
                         ],
                     ],
                 ),
@@ -43,6 +46,7 @@ pub fn tabs() -> Vec<Tab> {
                             I::icon("outdent", "Decrease indent", "outdent"),
                             I::icon("indent", "Increase indent", "indent"),
                             I::icon("marks", "Show marks", "marks").desc("Show paragraph marks, spaces and tabs."),
+                            I::icon("line-spacing", "Line spacing", "line-spacing").menu(),
                         ],
                         vec![
                             I::icon("align-left", "Align left", "align-left"),
@@ -106,6 +110,29 @@ pub fn tabs() -> Vec<Tab> {
             )],
         ),
         Tab::new(
+            "table",
+            "Table",
+            "T",
+            vec![
+                Group::new(
+                    "Rows & Columns",
+                    vec![
+                        I::large("row-below", "Insert Below", "row-below"),
+                        I::small("row-above", "Insert Above", "row-above"),
+                        I::small("col-right", "Insert Right", "col-right"),
+                        I::small("col-left", "Insert Left", "col-left"),
+                        I::small("row-delete", "Delete Rows", "row-delete"),
+                        I::small("col-delete", "Delete Columns", "col-delete"),
+                    ],
+                ),
+                Group::new(
+                    "Merge",
+                    vec![I::large("merge", "Merge Cells", "merge"), I::small("table-delete", "Delete Table", "table-delete")],
+                ),
+                Group::new("Borders", vec![I::large("borders", "Borders", "borders").menu()]),
+            ],
+        ),
+        Tab::new(
             "references",
             "References",
             "S",
@@ -167,6 +194,14 @@ pub fn tabs() -> Vec<Tab> {
                     ],
                 ),
                 Group::new("Show", vec![I::large("marks", "Marks", "marks")]),
+                Group::new(
+                    "Views",
+                    vec![
+                        I::large("view-print", "Print Layout", "view-print"),
+                        I::small("view-draft", "Draft", "view-draft"),
+                        I::small("view-web", "Web Layout", "view-web"),
+                    ],
+                ),
             ],
         ),
         Tab::new(
