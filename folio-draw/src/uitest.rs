@@ -945,6 +945,44 @@ impl UiTest {
             app.ribbon.collapsed = false;
             Ok(())
         });
+        step!("threads come from the chart, by colour or by name", |app: &mut DrawApp, h: &mut dyn Host, r: &mut Res| {
+            use folio_draw_engine::emb::colour;
+            app.saved_for_test();
+            app.command("emb.new:0", h);
+            ev(app, h, r, Event::MouseMove { x: 1.0, y: 1.0 });
+            let spec = serde_json::json!({"objects": [{"id": 1, "kind": "shape", "rings": [[[-12, -12], [12, -12], [12, 12], [-12, 12]]],
+                "thread": {"rgb": [120, 120, 120]}}], "next_id": 2});
+            let li = crate::emb::add_shape_layer(&mut app.doc, "Square", &spec);
+            app.emb_sel = Some((li, 1));
+            // the Thread colour menu is the whole chart, with a way to pick one by name
+            let m = app.menu_for_test("emb.recolour");
+            check(m.iter().any(|i| i == "thread-pick"), "no way to choose a thread by name")?;
+            // picking a chart colour keeps its number and name
+            let want = colour::pec_rgb(5);
+            app.menu_pick_for_test("emb.recolour", &format!("color:#{:02X}{:02X}{:02X}", want[0], want[1], want[2]));
+            let o = crate::emb::layer_spec(&app.doc, li).ok_or("gone")?["objects"][0].clone();
+            check(o["thread"]["pec"] == 5, &format!("thread {}", o["thread"]))?;
+            check(o["thread"]["name"] == colour::pec_name(5), &format!("name {}", o["thread"]["name"]))?;
+            // by name: the box opens on the thread it has now
+            app.command("thread-pick", h);
+            shot(app, r);
+            let d = app.dialog.as_mut().ok_or("the Thread box didn't open")?;
+            check(d.choice_index("thread") == 4, &format!("opened on thread {}", d.choice_index("thread") + 1))?;
+            d.set_choice("thread", 29);
+            key(app, h, r, Key::Enter, Mods::NONE);
+            let o = crate::emb::layer_spec(&app.doc, li).ok_or("gone")?["objects"][0].clone();
+            check(o["thread"]["pec"] == 30 && o["thread"]["name"] == colour::pec_name(30), &format!("thread {}", o["thread"]))?;
+            // any other colour is kept, with the nearest chart thread beside it
+            app.command("thread-pick", h);
+            let d = app.dialog.as_mut().ok_or("it didn't reopen")?;
+            d.set_text_for_test("other", "#123456");
+            key(app, h, r, Key::Enter, Mods::NONE);
+            let o = crate::emb::layer_spec(&app.doc, li).ok_or("gone")?["objects"][0].clone();
+            check(o["thread"]["rgb"][0] == 0x12 && o["thread"]["rgb"][2] == 0x56, &format!("rgb {}", o["thread"]["rgb"]))?;
+            let near = o["thread"]["pec"].as_u64().unwrap_or(0) as usize;
+            check((1..=colour::CHART).contains(&near), &format!("no chart thread beside it: {near}"))?;
+            check(crate::emb::make_plan(&app.doc).is_some(), "it can't be planned")
+        });
         step!("Convert to shapes asks how many colours and what to do with the background", |app: &mut DrawApp, h: &mut dyn Host, r: &mut Res| {
             app.saved_for_test();
             app.command("emb.new:0", h);
