@@ -4,7 +4,8 @@
 set -e
 HERE="$(cd "$(dirname "$0")" && pwd)"
 VERSION="$(sed -n 's/^Version: //p' "$HERE/packaging/DEBIAN/control")"
-CARGOV="$(sed -n 's/^version = "\(.*\)"/\1/p' "$HERE/Cargo.toml" | head -1)"
+# the app crate's own version is what the binary reports, so that is the one to match
+CARGOV="$(sed -n 's/^version = "\(.*\)"/\1/p' "$HERE/folio-cork/Cargo.toml" | head -1)"
 [ "$VERSION" = "$CARGOV" ] || { echo "version mismatch: control $VERSION, Cargo $CARGOV"; exit 1; }
 OUT="${1:-$HERE}"
 J=/srv/jammy
