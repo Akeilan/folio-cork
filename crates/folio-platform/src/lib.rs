@@ -141,6 +141,11 @@ pub trait Host {
     /// Fill the screen, hiding the desktop's panels; `false` goes back to a window.
     fn set_fullscreen(&mut self, on: bool);
     fn is_fullscreen(&self) -> bool;
+    /// Whether a picture can go on this desktop's clipboard. False on Wayland, where Folio can
+    /// still copy and paste words but not pictures.
+    fn clipboard_images(&self) -> bool {
+        true
+    }
     fn close(&mut self);
     /// The system's light/dark preference, when it says.
     fn system_dark(&self) -> Option<bool>;

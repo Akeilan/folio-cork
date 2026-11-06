@@ -307,8 +307,13 @@ impl UiTest {
         step!("copy and paste", |app: &mut DrawApp, h: &mut dyn Host, r: &mut Res| {
             app.doc.sel_rect(300, 350, 200, 150);
             key(app, h, r, Key::Char('c'), ctrl());
-            let img = h.clipboard_image().ok_or("nothing on the clipboard")?;
-            check(img.w == 200 && img.h == 150, &format!("clipboard {}x{}", img.w, img.h))?;
+            if h.clipboard_images() {
+                let img = h.clipboard_image().ok_or("nothing on the clipboard")?;
+                check(img.w == 200 && img.h == 150, &format!("clipboard {}x{}", img.w, img.h))?;
+            } else {
+                // Wayland takes only words on its clipboard; the picture stays with the app
+                check(app.doc.clip_w == 200 && app.doc.clip_h == 150, &format!("kept {}x{}", app.doc.clip_w, app.doc.clip_h))?;
+            }
             key(app, h, r, Key::Char('v'), ctrl());
             check(app.doc.float.is_some(), "paste didn't float the picture")?;
             key(app, h, r, Key::Escape, Mods::NONE);
@@ -498,6 +503,12 @@ impl UiTest {
             // a picture on the clipboard, then Paste as new layer
             let img = folio_kit::platform::Image { w: 10, h: 10, rgba: [255u8, 0, 0, 255].repeat(100) };
             h.set_clipboard_image(&img);
+            if !h.clipboard_images() {
+                // Wayland: the app's own copy is what Paste as new layer will use
+                app.doc.clip_w = 10;
+                app.doc.clip_h = 10;
+                app.doc.clip = img.rgba.clone();
+            }
             let n = app.doc.layers.len();
             app.command("paste-layer", h);
             check(app.doc.layers.len() == n + 1, "no new layer for the paste")?;
