@@ -104,6 +104,43 @@ impl Matrix {
         }
     }
 
+    pub fn xx(&self) -> f64 {
+        self.xx
+    }
+
+    pub fn yx(&self) -> f64 {
+        self.yx
+    }
+
+    pub fn xy(&self) -> f64 {
+        self.xy
+    }
+
+    pub fn yy(&self) -> f64 {
+        self.yy
+    }
+
+    pub fn x0(&self) -> f64 {
+        self.x0
+    }
+
+    pub fn y0(&self) -> f64 {
+        self.y0
+    }
+
+    /// `a` then `b`.
+    pub fn multiply(a: &Matrix, b: &Matrix) -> Matrix {
+        a.then(b)
+    }
+
+    pub fn transform_point(&self, x: f64, y: f64) -> (f64, f64) {
+        self.apply(x, y)
+    }
+
+    pub fn transform_distance(&self, x: f64, y: f64) -> (f64, f64) {
+        self.apply_dist(x, y)
+    }
+
     pub fn apply(&self, x: f64, y: f64) -> (f64, f64) {
         (self.xx * x + self.xy * y + self.x0, self.yx * x + self.yy * y + self.y0)
     }
@@ -649,24 +686,31 @@ impl<'a> Cx<'a> {
     /// Glyphs the engine has already measured: `gid` with its place in user
     /// coordinates, drawn from the same font file that was measured.
     pub fn show_glyphs(&mut self, font: &glyphs::FontRef, size: f64, run: &[(u16, f64, f64)]) {
+        self.show_glyphs_x(font, size, 1.0, run);
+    }
+
+    /// The same, with the glyphs squeezed or stretched sideways about their own
+    /// origin (character scaling).
+    pub fn show_glyphs_x(&mut self, font: &glyphs::FontRef, size: f64, xscale: f64, run: &[(u16, f64, f64)]) {
         let mut cmds: Vec<Cmd> = Vec::new();
         for (gid, x, y) in run {
             let Some(p) = self.glyphs.outline(font, *gid) else { continue };
             let k = size / font.upem;
+            let kx = k * xscale;
             for c in &p.cmds {
                 cmds.push(match *c {
                     Cmd::Move(px, py) => {
-                        let q = self.st.xf.apply(x + px * k, y - py * k);
+                        let q = self.st.xf.apply(x + px * kx, y - py * k);
                         Cmd::Move(q.0, q.1)
                     }
                     Cmd::Line(px, py) => {
-                        let q = self.st.xf.apply(x + px * k, y - py * k);
+                        let q = self.st.xf.apply(x + px * kx, y - py * k);
                         Cmd::Line(q.0, q.1)
                     }
                     Cmd::Curve(ax, ay, bx, by, cx2, cy2) => {
-                        let a = self.st.xf.apply(x + ax * k, y - ay * k);
-                        let b = self.st.xf.apply(x + bx * k, y - by * k);
-                        let c = self.st.xf.apply(x + cx2 * k, y - cy2 * k);
+                        let a = self.st.xf.apply(x + ax * kx, y - ay * k);
+                        let b = self.st.xf.apply(x + bx * kx, y - by * k);
+                        let c = self.st.xf.apply(x + cx2 * kx, y - cy2 * k);
                         Cmd::Curve(a.0, a.1, b.0, b.1, c.0, c.1)
                     }
                     Cmd::Close => Cmd::Close,
@@ -686,31 +730,47 @@ impl<'a> Cx<'a> {
 
     /// The same glyphs as a path, for an outline or a shadow.
     pub fn glyph_path(&mut self, font: &glyphs::FontRef, size: f64, run: &[(u16, f64, f64)]) {
+        self.glyph_path_x(font, size, 1.0, run)
+    }
+
+    pub fn glyph_path_x(&mut self, font: &glyphs::FontRef, size: f64, xscale: f64, run: &[(u16, f64, f64)]) {
         for (gid, x, y) in run {
             let Some(p) = self.glyphs.outline(font, *gid) else { continue };
             let k = size / font.upem;
+            let kx = k * xscale;
             let mut first = true;
             for c in &p.cmds {
                 match *c {
                     Cmd::Move(px, py) => {
-                        self.move_to(x + px * k, y - py * k);
+                        self.move_to(x + px * kx, y - py * k);
                         first = false;
                     }
                     Cmd::Line(px, py) => {
                         if first {
-                            self.move_to(x + px * k, y - py * k);
+                            self.move_to(x + px * kx, y - py * k);
                             first = false;
                         } else {
-                            self.line_to(x + px * k, y - py * k)
+                            self.line_to(x + px * kx, y - py * k)
                         }
                     }
                     Cmd::Curve(ax, ay, bx, by, cx2, cy2) => {
-                        self.curve_to(x + ax * k, y - ay * k, x + bx * k, y - by * k, x + cx2 * k, y - cy2 * k)
+                        self.curve_to(x + ax * kx, y - ay * k, x + bx * kx, y - by * k, x + cx2 * kx, y - cy2 * k)
                     }
                     Cmd::Close => self.close_path(),
                 }
             }
         }
+    }
+
+    /// Fill a ready-made path, offset by (dx, dy) in user coordinates: text
+    /// laid out by the toolkit comes this way.
+    pub fn fill_sk_path(&mut self, p: &sk::Path, dx: f64, dy: f64) {
+        let m = Matrix::new(1.0, 0.0, 0.0, 1.0, dx, dy).then(&self.st.xf);
+        let t = sk::Transform::from_row(m.xx as f32, m.yx as f32, m.xy as f32, m.yy as f32, m.x0 as f32, m.y0 as f32);
+        let Some(tp) = p.clone().transform(t) else { return };
+        let src = self.st.src.clone();
+        let paint = paint_of(&src, 1.0);
+        self.pm.fill_path(&tp, &paint, sk::FillRule::Winding, sk::Transform::identity(), self.st.clip.as_deref());
     }
 
     /// A picture scaled once and kept, for a fill that repeats it.

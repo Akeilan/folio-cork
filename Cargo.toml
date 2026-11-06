@@ -1,7 +1,7 @@
 [workspace]
 resolver = "2"
 members = ["crates/folio-math", "crates/folio-platform", "crates/folio-kit", "crates/folio-draw-engine", "crates/folio-canvas",
-    "crates/folio-page-engine", "folio-cork", "folio-draw"]
+    "crates/folio-page-engine", "crates/folio-page-render", "folio-cork", "folio-draw"]
 
 [workspace.package]
 version = "0.3.0"
