@@ -279,7 +279,7 @@ impl Editor {
         let reach = 9.0 / self.view().zoom;
         let mut best: Option<((Id, usize), f32)> = None;
         for s in page.shapes.iter().rev() {
-            if s.is_connector() || s.is_group() || Some(s.id) == exclude || !page.visible(s) || matches!(s.kind.as_str(), "frame" | "ink") {
+            if s.is_connector() || s.is_group() || Some(s.id) == exclude || !page.visible(s) || matches!(s.kind.as_str(), "frame" | "lane" | "ink") {
                 continue;
             }
             for (i, q) in geom::conn_points(s).into_iter().enumerate() {
@@ -398,6 +398,17 @@ impl Editor {
                 s.text = "Frame".into();
                 s.tstyle.color = Color::hex(0x555555);
             }
+            "lane" => {
+                // a lane across the page, with its title band down the left (K4-01)
+                s.w = 900.0;
+                s.h = 180.0;
+                s.style.fill = Color::rgba(255, 255, 255, 255);
+                s.style.line = Color::hex(0x8AA4C8);
+                s.style.width = 1.0;
+                s.text = "Lane".into();
+                s.tstyle.color = Color::hex(0x24405E);
+                s.data.insert("lane".into(), "h".into());
+            }
             "swatch" => {
                 s.w = 110.0;
                 s.h = 130.0;
@@ -432,8 +443,8 @@ impl Editor {
     pub fn add_shape(&mut self, s: Shape, label: &str) -> Id {
         self.checkpoint(label, "");
         let id = s.id;
-        if s.kind == "frame" {
-            // Frames sit behind what they hold.
+        if s.kind == "frame" || s.kind == "lane" {
+            // Frames and lanes sit behind what they hold.
             self.pgm().shapes.insert(0, s);
         } else {
             self.pgm().shapes.push(s);
@@ -619,8 +630,13 @@ impl Editor {
     fn start_move(&mut self, p: (f32, f32)) {
         let mut ids = self.sel_deep();
         ids.retain(|id| self.editable(*id));
-        // Frames carry what lies inside them.
-        let frames: Vec<Shape> = ids.iter().filter_map(|id| self.pg().get(*id)).filter(|s| s.kind == "frame").cloned().collect();
+        // Frames and lanes carry what lies inside them.
+        let frames: Vec<Shape> = ids
+            .iter()
+            .filter_map(|id| self.pg().get(*id))
+            .filter(|s| s.kind == "frame" || s.kind == "lane")
+            .cloned()
+            .collect();
         for f in frames {
             for s in &self.pg().shapes {
                 if s.id == f.id || ids.contains(&s.id) || !self.editable(s.id) {

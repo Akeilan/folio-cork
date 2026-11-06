@@ -290,8 +290,9 @@ impl Editor {
             }
             _ => rest.extend(moving),
         }
-        // Frames stay behind everything.
-        let (frames, others): (Vec<Shape>, Vec<Shape>) = rest.into_iter().partition(|s| s.kind == "frame");
+        // Frames and lanes stay behind everything.
+        let (frames, others): (Vec<Shape>, Vec<Shape>) =
+            rest.into_iter().partition(|s| s.kind == "frame" || s.kind == "lane");
         page.shapes = frames;
         page.shapes.extend(others);
         self.changed();
@@ -496,7 +497,7 @@ impl Editor {
     #[allow(dead_code)]
     fn remember_style(&mut self) {
         if let Some(s) = self.first() {
-            if !s.is_connector() && !matches!(s.kind.as_str(), "sticky" | "text" | "frame" | "ink" | "image" | "swatch") {
+            if !s.is_connector() && !matches!(s.kind.as_str(), "sticky" | "text" | "frame" | "lane" | "ink" | "image" | "swatch") {
                 self.new_style = Some(s.style.clone());
             }
         }
@@ -983,4 +984,260 @@ fn union(a: (f32, f32, f32, f32), b: (f32, f32, f32, f32)) -> (f32, f32, f32, f3
     let x1 = (a.0 + a.2).max(b.0 + b.2);
     let y1 = (a.1 + a.3).max(b.1 + b.3);
     (x0, y0, x1 - x0, y1 - y0)
+}
+
+// ---------------------------------------------------------------- swimlanes (K4-01)
+impl Editor {
+    /// The lanes of the page, in the order they run (left to right, or top to bottom).
+    pub fn lanes(&self) -> Vec<Shape> {
+        let mut v: Vec<Shape> = self.pg().shapes.iter().filter(|s| s.is_lane()).cloned().collect();
+        let vertical = v.first().map(|s| s.lane_vertical()).unwrap_or(false);
+        if vertical {
+            v.sort_by(|a, b| a.x.partial_cmp(&b.x).unwrap_or(std::cmp::Ordering::Equal));
+        } else {
+            v.sort_by(|a, b| a.y.partial_cmp(&b.y).unwrap_or(std::cmp::Ordering::Equal));
+        }
+        v
+    }
+
+    /// Add a lane after the selected one, or after the last (K4-01). The first one starts a set.
+    pub fn add_lane(&mut self) -> Id {
+        let lanes = self.lanes();
+        let after = self
+            .selected()
+            .iter()
+            .find(|s| s.is_lane())
+            .map(|s| s.id)
+            .or_else(|| lanes.last().map(|s| s.id));
+        let base = after.and_then(|id| self.pg().get(id)).cloned();
+        let mut s = self.make_shape("lane", 0.0, 0.0);
+        if let Some(b) = &base {
+            s.w = b.w;
+            s.h = b.h;
+            s.style = b.style.clone();
+            s.tstyle = b.tstyle.clone();
+            s.data.insert("lane".into(), if b.lane_vertical() { "v".into() } else { "h".into() });
+            if b.lane_vertical() {
+                s.x = b.x + b.w;
+                s.y = b.y;
+            } else {
+                s.x = b.x;
+                s.y = b.y + b.h;
+            }
+        } else {
+            s.x = 120.0;
+            s.y = 120.0;
+        }
+        s.text = format!("Lane {}", lanes.len() + 1);
+        let id = s.id;
+        let vertical = s.lane_vertical();
+        let (nx, ny) = (s.x, s.y);
+        self.add_shape(s, "Add Lane");
+        // the lanes after it move along, so the set stays in one piece
+        if let Some(b) = base {
+            let ids: Vec<Id> = self
+                .pg()
+                .shapes
+                .iter()
+                .filter(|o| o.is_lane() && o.id != id && if vertical { o.x >= nx } else { o.y >= ny })
+                .map(|o| o.id)
+                .collect();
+            for oid in ids {
+                let (dx, dy) = if vertical { (b.w, 0.0) } else { (0.0, b.h) };
+                self.shift(oid, dx, dy);
+                for cid in self.inside_lane(oid) {
+                    self.shift(cid, dx, dy);
+                }
+            }
+        }
+        self.sel = vec![id];
+        self.changed();
+        id
+    }
+
+    /// The shapes lying in a lane's body (not the lane itself).
+    pub fn inside_lane(&self, id: Id) -> Vec<Id> {
+        let lane = match self.pg().get(id) {
+            Some(s) if s.is_lane() => s.clone(),
+            _ => return vec![],
+        };
+        let (lx, ly, lw, lh) = lane.lane_body();
+        self.pg()
+            .shapes
+            .iter()
+            .filter(|s| s.id != id && !s.is_lane() && !s.is_connector())
+            .filter(|s| {
+                let (x, y, w, h) = geom::bounds(s);
+                x >= lx && y >= ly && x + w <= lx + lw && y + h <= ly + lh
+            })
+            .map(|s| s.id)
+            .collect()
+    }
+
+    /// Delete the selected lanes, leaving what was in them (K4-01).
+    pub fn delete_lane(&mut self) -> usize {
+        let ids: Vec<Id> = self.selected().iter().filter(|s| s.is_lane()).map(|s| s.id).collect();
+        if ids.is_empty() {
+            return 0;
+        }
+        self.checkpoint("Delete Lane", "");
+        let gone: Vec<Shape> = ids.iter().filter_map(|id| self.pg().get(*id)).cloned().collect();
+        self.pgm().shapes.retain(|s| !ids.contains(&s.id));
+        // the lanes after each one close the gap
+        for g in &gone {
+            let vertical = g.lane_vertical();
+            let moving: Vec<Id> = self
+                .pg()
+                .shapes
+                .iter()
+                .filter(|o| o.is_lane() && if vertical { o.x > g.x } else { o.y > g.y })
+                .map(|o| o.id)
+                .collect();
+            for oid in moving {
+                let (dx, dy) = if vertical { (-g.w, 0.0) } else { (0.0, -g.h) };
+                for cid in self.inside_lane(oid) {
+                    self.shift(cid, dx, dy);
+                }
+                self.shift(oid, dx, dy);
+            }
+        }
+        self.sel.clear();
+        self.changed();
+        gone.len()
+    }
+
+    /// Turn the lanes: across the page, or down it (K4-01).
+    pub fn turn_lanes(&mut self) -> usize {
+        let lanes = self.lanes();
+        if lanes.is_empty() {
+            return 0;
+        }
+        self.checkpoint("Turn Lanes", "");
+        let vertical = !lanes[0].lane_vertical();
+        let (ox, oy) = (lanes[0].x, lanes[0].y);
+        // what sits in each lane travels with it, keeping its place in the lane
+        let held: Vec<(Id, Vec<(Id, f32, f32)>)> = lanes
+            .iter()
+            .map(|l| {
+                let (bx, by, _, _) = l.lane_body();
+                let (_, _, bw, bh) = l.lane_body();
+                let inside = self
+                    .inside_lane(l.id)
+                    .into_iter()
+                    .filter_map(|cid| {
+                        // where it sits in the lane, as a fraction, so it stays inside when turned
+                        self.pg().get(cid).map(|c| (cid, (c.x - bx) / bw.max(1.0), (c.y - by) / bh.max(1.0)))
+                    })
+                    .collect();
+                (l.id, inside)
+            })
+            .collect();
+        let mut at = if vertical { ox } else { oy };
+        for (l, inside) in held {
+            let (w, h, nx, ny) = {
+                let s = match self.pg().get(l) {
+                    Some(s) => s,
+                    None => continue,
+                };
+                let (w, h) = (s.h, s.w);       // the lane turns with its contents
+                if vertical {
+                    (w, h, at, oy)
+                } else {
+                    (w, h, ox, at)
+                }
+            };
+            {
+                let page = self.pgm();
+                if let Some(s) = page.shapes.iter_mut().find(|s| s.id == l) {
+                    s.w = w;
+                    s.h = h;
+                    s.x = nx;
+                    s.y = ny;
+                    s.data.insert("lane".into(), if vertical { "v".into() } else { "h".into() });
+                }
+            }
+            at += if vertical { w } else { h };
+            let (bx, by, bw, bh) = match self.pg().get(l) {
+                Some(s) => s.lane_body(),
+                None => continue,
+            };
+            for (cid, fx, fy) in inside {
+                let page = self.pgm();
+                if let Some(c) = page.shapes.iter_mut().find(|s| s.id == cid) {
+                    c.x = (bx + fx * bw).min(bx + bw - c.w).max(bx);
+                    c.y = (by + fy * bh).min(by + bh - c.h).max(by);
+                }
+            }
+        }
+        self.changed();
+        lanes.len()
+    }
+}
+
+// ---------------------------------------------------------------- shape data (K4-02)
+impl Editor {
+    /// Put a property on every selected shape.
+    pub fn set_prop(&mut self, name: &str, value: &str) -> usize {
+        let name = name.trim().to_string();
+        if name.is_empty() {
+            return 0;
+        }
+        let mut n = 0;
+        self.each_editable("Shape Data", |s| {
+            s.set_prop(&name, value);
+            n += 1;
+        });
+        n
+    }
+
+    /// Take a property off every selected shape.
+    pub fn clear_prop(&mut self, name: &str) -> usize {
+        let name = name.to_string();
+        let mut n = 0;
+        self.each_editable("Shape Data", |s| {
+            if !s.prop(&name).is_empty() || s.data.contains_key(&format!("{PROP}{name}")) {
+                s.clear_prop(&name);
+                n += 1;
+            }
+        });
+        n
+    }
+
+    /// Rename a property on every selected shape, keeping each one's value.
+    pub fn rename_prop(&mut self, from: &str, to: &str) -> usize {
+        let (from, to) = (from.to_string(), to.trim().to_string());
+        if to.is_empty() || from == to {
+            return 0;
+        }
+        let mut n = 0;
+        self.each_editable("Shape Data", |s| {
+            if let Some(v) = s.data.remove(&format!("{PROP}{from}")) {
+                s.set_prop(&to, &v);
+                n += 1;
+            }
+        });
+        n
+    }
+
+    /// The properties of the selection: every name on any of them, with the shared value where
+    /// they all agree and an empty value where they don't.
+    pub fn props_of_selection(&self) -> Vec<(String, String)> {
+        let sel: Vec<&Shape> = self.selected();
+        let mut out: Vec<(String, String)> = vec![];
+        for s in &sel {
+            for (k, _) in s.props() {
+                if !out.iter().any(|(n, _)| *n == k) {
+                    out.push((k, String::new()));
+                }
+            }
+        }
+        for (name, value) in out.iter_mut() {
+            // the value shows only where every selected shape agrees on it
+            let mut vals = sel.iter().map(|s| s.prop(name).to_string());
+            let first = vals.next().unwrap_or_default();
+            *value = if vals.all(|v| v == first) { first } else { String::new() };
+        }
+        out.sort_by(|a, b| a.0.to_lowercase().cmp(&b.0.to_lowercase()));
+        out
+    }
 }

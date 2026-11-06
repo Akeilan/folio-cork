@@ -346,3 +346,205 @@ fn diagram_picture_carries_the_drawing() {
     assert_eq!(again.pages[0].shapes.len(), 3);
     let _ = std::fs::remove_file(&p);
 }
+
+// ---------------------------------------------------------------- swimlanes (K4-01)
+#[test]
+fn lanes_hold_their_shapes_and_carry_them() {
+    let mut e = ed();
+    let first = e.add_lane();
+    assert!(e.pg().get(first).unwrap().is_lane());
+    let second = e.add_lane();
+    let third = e.add_lane();
+    let lanes = e.lanes();
+    assert_eq!(lanes.len(), 3);
+    // the lanes stack up, one under the next, in order
+    assert!(lanes[0].y < lanes[1].y && lanes[1].y < lanes[2].y, "{:?}", lanes.iter().map(|l| l.y).collect::<Vec<_>>());
+    assert_eq!(lanes.iter().map(|l| l.id).collect::<Vec<_>>(), vec![first, second, third]);
+    // a lane sits behind what it holds
+    assert!(e.pg().shapes[0].is_lane());
+
+    // a shape dropped in the second lane belongs to it
+    let (bx, by, bw, bh) = e.pg().get(second).unwrap().lane_body();
+    let box_id = e.insert_kind_at("rect", bx + bw / 2.0, by + bh / 2.0);
+    assert_eq!(e.inside_lane(second), vec![box_id]);
+    assert!(e.inside_lane(first).is_empty());
+
+    // moving the lane carries it
+    let (x0, y0) = { let s = e.pg().get(box_id).unwrap(); (s.x, s.y) };
+    e.sel = vec![second];
+    e.shift(second, 0.0, 60.0);
+    for id in e.inside_lane(second) {
+        e.shift(id, 0.0, 60.0);
+    }
+    let s = e.pg().get(box_id).unwrap();
+    assert_eq!((s.x, s.y), (x0, y0 + 60.0));
+}
+
+#[test]
+fn a_new_lane_pushes_the_ones_after_it_down() {
+    let mut e = ed();
+    let a = e.add_lane();
+    let b = e.add_lane();
+    let before = e.pg().get(b).unwrap().y;
+    e.sel = vec![a];
+    let mid = e.add_lane();
+    let (ya, ym, yb) = (e.pg().get(a).unwrap().y, e.pg().get(mid).unwrap().y, e.pg().get(b).unwrap().y);
+    assert!(ya < ym && ym < yb, "{ya} {ym} {yb}");
+    assert!(yb > before, "the lane after it moved down");
+    assert_eq!(e.lanes().len(), 3);
+}
+
+#[test]
+fn deleting_a_lane_keeps_its_shapes_and_closes_the_gap() {
+    let mut e = ed();
+    let a = e.add_lane();
+    let b = e.add_lane();
+    let c = e.add_lane();
+    let (bx, by, bw, bh) = e.pg().get(b).unwrap().lane_body();
+    let kept = e.insert_kind_at("rect", bx + bw / 2.0, by + bh / 2.0);
+    let y_c = e.pg().get(c).unwrap().y;
+    let h_b = e.pg().get(b).unwrap().h;
+    e.sel = vec![b];
+    assert_eq!(e.delete_lane(), 1);
+    assert!(e.pg().get(b).is_none());
+    assert!(e.pg().get(kept).is_some(), "what was in the lane stays");
+    assert_eq!(e.lanes().iter().map(|l| l.id).collect::<Vec<_>>(), vec![a, c]);
+    assert_eq!(e.pg().get(c).unwrap().y, y_c - h_b, "the lane below closed the gap");
+    let _ = (bh, bw);
+}
+
+#[test]
+fn lanes_turn_and_keep_what_they_hold() {
+    let mut e = ed();
+    let a = e.add_lane();
+    let b = e.add_lane();
+    let (bx, by, bw, bh) = e.pg().get(b).unwrap().lane_body();
+    let box_id = e.insert_kind_at("rect", bx + bw / 2.0, by + bh / 2.0);
+    assert!(!e.pg().get(a).unwrap().lane_vertical());
+    assert_eq!(e.turn_lanes(), 2);
+    assert!(e.pg().get(a).unwrap().lane_vertical() && e.pg().get(b).unwrap().lane_vertical());
+    // side by side now, and the shape is still in its own lane
+    let (la, lb) = (e.pg().get(a).unwrap().clone(), e.pg().get(b).unwrap().clone());
+    assert!(la.x < lb.x && (la.y - lb.y).abs() < 0.01, "{:?} {:?}", (la.x, la.y), (lb.x, lb.y));
+    assert_eq!(e.inside_lane(b), vec![box_id]);
+    let _ = bh;
+    // and back again
+    e.turn_lanes();
+    assert!(!e.pg().get(a).unwrap().lane_vertical());
+    assert_eq!(e.inside_lane(b), vec![box_id]);
+}
+
+#[test]
+fn the_cross_functional_template_has_lanes_with_a_flow_in_them() {
+    let mut e = ed();
+    crate::templates::apply("swimlane", &mut e);
+    let lanes = e.lanes();
+    assert_eq!(lanes.len(), 3);
+    assert_eq!(lanes.iter().map(|l| l.text.clone()).collect::<Vec<_>>(), vec!["Customer", "Sales", "Warehouse"]);
+    let held: usize = lanes.iter().map(|l| e.inside_lane(l.id).len()).sum();
+    assert!(held >= 5, "the flow shapes sit in the lanes: {held}");
+    assert!(e.pg().shapes.iter().any(|s| s.is_connector()));
+}
+
+#[test]
+#[ignore]
+fn write_swimlane_picture() {
+    // cargo test -p folio-cork write_swimlane_picture -- --ignored --nocapture
+    let mut e = ed();
+    crate::templates::apply("swimlane", &mut e);
+    let mut t = Text::bundled();
+    let mut images = crate::render::Images::default();
+    let out = std::path::Path::new(&std::env::var("LANE_OUT").unwrap_or("/tmp/swimlane.png".into())).to_path_buf();
+    crate::export::png(&e.doc, &[0], &out, &mut t, &mut images, 1.5).unwrap();
+    println!("wrote {}", out.display());
+}
+
+// ---------------------------------------------------------------- shape data (K4-02)
+#[test]
+fn shape_data_is_put_on_the_selection_and_read_back() {
+    let mut e = ed();
+    let a = e.insert_kind_at("rect", 100.0, 100.0);
+    let b = e.insert_kind_at("rect", 300.0, 100.0);
+    e.sel = vec![a, b];
+    assert_eq!(e.set_prop("Owner", "Ron"), 2);
+    e.sel = vec![a];
+    assert_eq!(e.set_prop("Cost", "12.50"), 1);
+    assert_eq!(e.pg().get(a).unwrap().prop("Cost"), "12.50");
+    assert_eq!(e.pg().get(b).unwrap().prop("Cost"), "");
+    // both selected: the shared value shows, the one they differ on comes back empty
+    e.sel = vec![a, b];
+    assert_eq!(e.props_of_selection(), vec![("Cost".to_string(), String::new()), ("Owner".to_string(), "Ron".to_string())]);
+    // renaming keeps each shape's own value
+    e.sel = vec![a];
+    assert_eq!(e.rename_prop("Cost", "Price"), 1);
+    assert_eq!(e.pg().get(a).unwrap().prop("Price"), "12.50");
+    assert_eq!(e.pg().get(a).unwrap().prop("Cost"), "");
+    // and a property comes off again
+    e.sel = vec![a, b];
+    assert_eq!(e.clear_prop("Owner"), 2);
+    assert!(e.props_of_selection().iter().all(|(n, _)| n != "Owner"));
+    // shape data is not mistaken for Cork's own fields
+    assert!(e.pg().get(a).unwrap().data.keys().all(|k| k.starts_with("prop.")));
+}
+
+#[test]
+fn shape_data_travels_in_the_vsdx_as_visio_writes_it() {
+    let mut e = ed();
+    let a = e.insert_kind_at("rect", 100.0, 100.0);
+    e.sel = vec![a];
+    e.set_prop("Part number", "A-120");
+    e.set_prop("Owner", "Ron");
+    let bytes = crate::vsdx::write(&e.doc).unwrap();
+
+    // the Visio side: a Property section with the names as typed
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes.clone())).unwrap();
+    let page = {
+        use std::io::Read;
+        let mut f = zip.by_name("visio/pages/page1.xml").unwrap();
+        let mut sx = String::new();
+        f.read_to_string(&mut sx).unwrap();
+        sx
+    };
+    assert!(page.contains("<Section N='Property'>"), "no Property section:\n{page}");
+    assert!(page.contains("N='Part_number'") && page.contains("V='Part number'"), "row name or label missing:\n{page}");
+    assert!(page.contains("V='A-120'") && page.contains("V='Ron'"), "values missing");
+
+    // read it back the way another program's file would be read (Cork's own copy left out)
+    let stripped = {
+        let mut out = std::io::Cursor::new(Vec::new());
+        {
+            let mut w = zip::ZipWriter::new(&mut out);
+            for i in 0..zip.len() {
+                use std::io::{Read, Write};
+                let mut f = zip.by_index(i).unwrap();
+                let name = f.name().unwrap_or_default().to_string();
+                if name == "folio/cork.json" {
+                    continue;
+                }
+                let mut buf = vec![];
+                f.read_to_end(&mut buf).unwrap();
+                w.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
+                w.write_all(&buf).unwrap();
+            }
+            w.finish().unwrap();
+        }
+        out.into_inner()
+    };
+    let back = crate::vsdx::read(&stripped).unwrap();
+    let s = back.pages[0].shapes.iter().find(|s| !s.is_connector()).expect("no shape read back");
+    assert_eq!(s.prop("Part number"), "A-120", "props read back: {:?}", s.props());
+    assert_eq!(s.prop("Owner"), "Ron");
+    assert_eq!(s.props().len(), 2);
+}
+
+#[test]
+fn shape_data_comes_back_from_cork_s_own_copy() {
+    let mut e = ed();
+    let a = e.insert_kind_at("rect", 100.0, 100.0);
+    e.sel = vec![a];
+    e.set_prop("Cost", "12.50");
+    let bytes = crate::vsdx::write(&e.doc).unwrap();
+    let back = crate::vsdx::read(&bytes).unwrap();
+    let s = back.pages[0].shapes.iter().find(|s| s.id == a).unwrap();
+    assert_eq!(s.prop("Cost"), "12.50");
+}

@@ -11,6 +11,8 @@ Diagrams, whiteboards and mood boards for Folio Studio. Cork is written in Rust 
   - A title bar in the app colour, menus, dialogs, a file browser, light and dark themes.
   - Deterministic maths.
 - `folio-cork`: the app.
+  - Swimlane diagrams (K4-01): Insert > Swimlane adds a lane for a team or a stage; moving a lane carries what's in it, Turn Lanes runs them down the page instead of across, and the Cross-functional flowchart template starts you off.
+  - Shape data (K4-02): named properties on a shape — cost, owner, part number — in the Shape Data pane (View > Shape Data), saved in the drawing and written into the .vsdx the way Visio writes them.
   - Diagrams in Page, Sheet and Show: Copy in Cork and paste there. The picture carries the drawing, and double-clicking it opens it in Cork again. The format is in [docs/FORMATS.md](docs/FORMATS.md).
 - `folio-draw`: Folio Draw, on this base since 1.11.0 (D3-06). It replaced the GTK version, which it matches.
   - Its engine is `crates/folio-draw-engine`, with no dependencies beyond `crates/folio-math` (the deterministic maths every engine shares).

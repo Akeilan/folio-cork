@@ -32,6 +32,7 @@ pub struct Res {
 pub enum Side {
     Layers,
     Comments,
+    Data,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -99,7 +100,7 @@ pub struct CorkApp {
     pub collapsed: HashSet<String>,
     left_scroll: f32,
     pub side: Side,
-    side_hits: Vec<(String, Rect)>,
+    pub(crate) side_hits: Vec<(String, Rect)>,
     pub reply: TextField,
     bar_hits: Vec<(String, Rect)>,
     pub drag_tile: Option<String>,
@@ -774,6 +775,7 @@ impl CorkApp {
             sharing: self.collab.is_some(),
             side_layers: self.settings.side_pane && self.side == Side::Layers,
             side_comments: self.settings.side_pane && self.side == Side::Comments,
+            side_data: self.settings.side_pane && self.side == Side::Data,
         }
     }
 
@@ -852,6 +854,20 @@ impl CorkApp {
             "print" => self.open_backstage(BackPage::Print),
             "undo" => self.ed.undo(),
             "redo" => self.ed.redo(),
+            "lane.add" => {
+                self.ed.add_lane();
+                self.flash("Lane added. Type to name it; moving a lane moves what's in it.");
+            }
+            "lane.delete" => {
+                if self.ed.delete_lane() == 0 {
+                    self.flash("Pick a lane first.");
+                }
+            }
+            "lane.turn" => {
+                if self.ed.turn_lanes() == 0 {
+                    self.flash("There are no lanes on this page yet.");
+                }
+            }
             "copy" => self.copy_out(host, r),
             "cut" => {
                 self.copy_out(host, r);
@@ -1016,8 +1032,12 @@ impl CorkApp {
                 self.settings.shapes_pane = !self.settings.shapes_pane;
                 self.layout();
             }
-            "pane.layers" | "pane.comments" => {
-                let want = if id == "pane.layers" { Side::Layers } else { Side::Comments };
+            "pane.layers" | "pane.comments" | "pane.data" => {
+                let want = match id {
+                    "pane.layers" => Side::Layers,
+                    "pane.data" => Side::Data,
+                    _ => Side::Comments,
+                };
                 if self.settings.side_pane && self.side == want {
                     self.settings.side_pane = false;
                 } else {
@@ -1348,6 +1368,17 @@ impl CorkApp {
             ("unsaved", "discard") => self.after = self.pending.take(),
             ("unsaved", _) => self.pending = None,
             ("page-rename", "ok") => self.ed.rename_page(&d.value("name")),
+            ("prop-edit", "ok") => {
+                let (name, value, was) = (d.value("name"), d.value("value"), d.value("was"));
+                if !was.is_empty() && was != name {
+                    self.ed.rename_prop(&was, &name);
+                }
+                if name.trim().is_empty() {
+                    self.flash("A property needs a name.");
+                } else {
+                    self.ed.set_prop(&name, &value);
+                }
+            }
             ("page-del", "delete") => {
                 self.ed.delete_page();
                 self.fit();
@@ -1789,6 +1820,38 @@ impl CorkApp {
             }
             return;
         }
+        if let Some(rest) = id.strip_prefix("prop:") {
+            // Shape Data (K4-02): a row to change, or the bin to take it off
+            let (name, del) = match rest.strip_suffix(":delete") {
+                Some(n) => (n.to_string(), true),
+                None => (rest.to_string(), false),
+            };
+            if del {
+                self.ed.clear_prop(&name);
+            } else {
+                let value = self.ed.props_of_selection().into_iter().find(|(n, _)| *n == name).map(|(_, v)| v).unwrap_or_default();
+                self.dialog = Some(
+                    Dialog::new("prop-edit", "Shape data")
+                        .text("name", "Name", &name)
+                        .text("value", "Value", &value)
+                        .text("was", "", &name)
+                        .button("ok", "OK")
+                        .button("cancel", "Cancel"),
+                );
+            }
+            return;
+        }
+        if id == "prop-add" {
+            self.dialog = Some(
+                Dialog::new("prop-edit", "Shape data")
+                    .text("name", "Name", "")
+                    .text("value", "Value", "")
+                    .text("was", "", "")
+                    .button("ok", "OK")
+                    .button("cancel", "Cancel"),
+            );
+            return;
+        }
         if let Some(rest) = id.strip_prefix("comment:") {
             let cid: Id = rest.split(':').next().and_then(|x| x.parse().ok()).unwrap_or(0);
             if rest.ends_with(":resolve") {
@@ -1827,6 +1890,7 @@ impl CorkApp {
         match id {
             "tab:layers" => self.side = Side::Layers,
             "tab:comments" => self.side = Side::Comments,
+            "tab:data" => self.side = Side::Data,
             "close-side" => {
                 self.settings.side_pane = false;
                 self.layout();
@@ -2848,7 +2912,7 @@ impl CorkApp {
         gfx::vline(pm, rr.x, rr.y, rr.bottom(), t.border);
         let mut cx = Ctx { pm, text: &mut r.text, icons: &mut r.icons, theme: &t, s };
         let mut x = rr.x + 10.0 * s;
-        for (id, label, side) in [("tab:layers", "Layers", Side::Layers), ("tab:comments", "Comments", Side::Comments)] {
+        for (id, label, side) in [("tab:layers", "Layers", Side::Layers), ("tab:comments", "Comments", Side::Comments), ("tab:data", "Data", Side::Data)] {
             let w = cx.measure(label, 13.0, true) + 20.0 * s;
             let tr = Rect::new(x, rr.y + 4.0 * s, w, 28.0 * s);
             cx.label(label, tr, 13.0, if self.side == side { t.text } else { t.muted }, self.side == side, Align::Center);
@@ -2967,6 +3031,46 @@ impl CorkApp {
                 if page.comments.is_empty() {
                     cx.label("No comments on this page.", Rect::new(rr.x + 12.0 * s, y, rr.w - 24.0 * s, 20.0 * s), 12.5, t.muted, false, Align::Left);
                 }
+            }
+            Side::Data => {
+                // Shape Data (K4-02): the properties of the selected shapes, to read and change
+                let n = self.ed.sel.len();
+                let props = self.ed.props_of_selection();
+                let head = match n {
+                    0 => "Pick a shape to see its data.".to_string(),
+                    1 => self.ed.first().map(|x| if x.text.trim().is_empty() { x.kind.clone() } else { x.text.trim().to_string() }).unwrap_or_default(),
+                    _ => format!("{n} shapes"),
+                };
+                cx.label(&head, Rect::new(rr.x + 12.0 * s, y, rr.w - 24.0 * s, 20.0 * s), 12.5, t.muted, false, Align::Left);
+                y += 26.0 * s;
+                for (name, value) in &props {
+                    let row = Rect::new(rr.x + 8.0 * s, y, rr.w - 16.0 * s, 30.0 * s);
+                    if row.contains(self.mouse.0, self.mouse.1) {
+                        gfx::fill_round(cx.pm, row, 4.0 * s, t.hover);
+                    }
+                    cx.label(name, Rect::new(row.x + 8.0 * s, row.y, row.w * 0.42, row.h), 12.5, t.text, true, Align::Left);
+                    let shown = if value.is_empty() && n > 1 { "(different)".to_string() } else { value.clone() };
+                    cx.label(&shown, Rect::new(row.x + row.w * 0.44, row.y, row.w * 0.44, row.h), 12.5, t.text, false, Align::Left);
+                    let del = Rect::new(row.right() - 26.0 * s, row.y + 4.0 * s, 22.0 * s, 22.0 * s);
+                    cx.icon_colored("delete", del.inset(3.0 * s), t.muted);
+                    self.side_hits.push((format!("prop:{name}:delete"), del));
+                    self.side_hits.push((format!("prop:{name}"), row));
+                    y += 32.0 * s;
+                }
+                if props.is_empty() && n > 0 {
+                    cx.label("No data on this shape yet.", Rect::new(rr.x + 12.0 * s, y, rr.w - 24.0 * s, 20.0 * s), 12.5, t.muted, false, Align::Left);
+                    y += 24.0 * s;
+                }
+                if n > 0 {
+                    let br = Rect::new(rr.x + 10.0 * s, y + 6.0 * s, 150.0 * s, 28.0 * s);
+                    gfx::fill_round(cx.pm, br, 4.0 * s, ACCENT);
+                    cx.icon_colored("plus", Rect::new(br.x + 8.0 * s, br.y + 6.0 * s, 16.0 * s, 16.0 * s), ACCENT.contrast_text());
+                    cx.label("Add Property", Rect::new(br.x + 28.0 * s, br.y, br.w - 30.0 * s, br.h), 12.5, ACCENT.contrast_text(), true, Align::Left);
+                    self.side_hits.push(("prop-add".into(), br));
+                    y += 38.0 * s;
+                }
+                cx.label("Click a row to change it.", Rect::new(rr.x + 12.0 * s, y + 6.0 * s, rr.w - 24.0 * s, 20.0 * s), 11.0, t.muted, false, Align::Left);
+                cx.label("Saved in the drawing, and in Visio.", Rect::new(rr.x + 12.0 * s, y + 24.0 * s, rr.w - 24.0 * s, 20.0 * s), 11.0, t.muted, false, Align::Left);
             }
         }
     }
@@ -3288,6 +3392,7 @@ pub struct St {
     pub sharing: bool,
     pub side_layers: bool,
     pub side_comments: bool,
+    pub side_data: bool,
 }
 
 impl CommandState for St {
@@ -3332,6 +3437,7 @@ impl CommandState for St {
             "pane.shapes" => self.settings.shapes_pane,
             "pane.layers" => self.side_layers,
             "pane.comments" => self.side_comments,
+            "pane.data" => self.side_data,
             "share-host" => self.sharing,
             "mood.polaroid" => f.map(|s| s.get("frame") == "polaroid").unwrap_or(false),
             t if t.starts_with("tool.") => {

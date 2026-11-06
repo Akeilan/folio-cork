@@ -497,3 +497,54 @@ pub fn b64_decode(s: &str) -> Vec<u8> {
     }
     out
 }
+
+// ---------------------------------------------------------------- shape data (K4-02)
+/// Properties a person puts on a shape (cost, owner, part number) live in `data` under this
+/// prefix, so they stay apart from the fields Cork keeps for itself.
+pub const PROP: &str = "prop.";
+
+impl Shape {
+    /// The shape's own properties, by name.
+    pub fn props(&self) -> Vec<(String, String)> {
+        self.data
+            .iter()
+            .filter(|(k, _)| k.starts_with(PROP))
+            .map(|(k, v)| (k[PROP.len()..].to_string(), v.clone()))
+            .collect()
+    }
+    pub fn prop(&self, name: &str) -> &str {
+        self.get(&format!("{PROP}{name}"))
+    }
+    pub fn set_prop(&mut self, name: &str, value: &str) {
+        let name = name.trim();
+        if name.is_empty() {
+            return;
+        }
+        self.data.insert(format!("{PROP}{name}"), value.to_string());
+    }
+    pub fn clear_prop(&mut self, name: &str) {
+        self.data.remove(&format!("{PROP}{name}"));
+    }
+}
+
+// ---------------------------------------------------------------- swimlanes (K4-01)
+/// How thick the title band of a lane is.
+pub const LANE_BAND: f32 = 28.0;
+
+impl Shape {
+    pub fn is_lane(&self) -> bool {
+        self.kind == "lane"
+    }
+    /// Lanes run across the page ("h", the title band down the left side) or down it ("v").
+    pub fn lane_vertical(&self) -> bool {
+        self.get("lane") == "v"
+    }
+    /// The lane's body: the part that holds shapes, inside the title band.
+    pub fn lane_body(&self) -> (f32, f32, f32, f32) {
+        if self.lane_vertical() {
+            (self.x, self.y + LANE_BAND, self.w, (self.h - LANE_BAND).max(1.0))
+        } else {
+            (self.x + LANE_BAND, self.y, (self.w - LANE_BAND).max(1.0), self.h)
+        }
+    }
+}

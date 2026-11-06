@@ -1,7 +1,7 @@
 //! Shape outlines, connection points and hit testing.
 
 use folio_kit::math::Det;
-use crate::model::Shape;
+use crate::model::{Shape, LANE_BAND};
 use crate::stencils;
 use folio_kit::sk;
 
@@ -90,6 +90,15 @@ pub fn geometry(s: &Shape) -> Geo {
     let full = (0.0, 0.0, w, h);
     let inset = |f: f32| (w * f, h * f, w * (1.0 - 2.0 * f), h * (1.0 - 2.0 * f));
     match s.kind.as_str() {
+        "lane" => {
+            // the title belongs in the band; the body is what shapes sit in (Shape::lane_body)
+            let band = if s.get("lane") == "v" { (0.0, 0.0, w, LANE_BAND.min(h)) } else { (0.0, 0.0, LANE_BAND.min(w), h) };
+            Geo {
+                subs: vec![filled(poly(&[(0.0, 0.0), (w, 0.0), (w, h), (0.0, h)]))],
+                points: sides(w, h),
+                text: band,
+            }
+        }
         "rect" | "swatch" | "image" | "font" | "text" | "frame" | "table" => Geo {
             subs: vec![filled(poly(&[(0.0, 0.0), (w, 0.0), (w, h), (0.0, h)]))],
             points: sides(w, h),

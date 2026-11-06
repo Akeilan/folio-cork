@@ -193,13 +193,37 @@ fn connection_section(s: &Shape) -> String {
     o + "</Section>"
 }
 
+/// Cork's own fields, which are not the shape data a person puts on a shape (K4-02).
+pub(crate) const OWN_KEYS: [&str; 8] = ["frame", "from", "hl", "lane", "lineart", "name", "tbox", "title"];
+
+/// Visio wants a plain identifier for a row's name; the name as typed rides in the Label.
+fn row_name(name: &str) -> String {
+    let mut out: String = name.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }).collect();
+    if out.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(true) {
+        out.insert(0, 'P');
+    }
+    out
+}
+
 fn data_section(s: &Shape) -> String {
-    let rows: Vec<String> = s
+    let mut rows: Vec<String> = s
         .data
         .iter()
-        .filter(|(k, _)| !matches!(k.as_str(), "frame" | "from" | "hl" | "lineart" | "tbox") && k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
+        // Cork's own fields ride along (so a lane is still a lane after another program has
+        // touched the file), except the few that would only be noise in Visio.
+        .filter(|(k, _)| !matches!(k.as_str(), "frame" | "from" | "hl" | "lineart" | "tbox") && !k.starts_with(PROP) && k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
         .map(|(k, v)| format!("<Row N='{}'>{}{}</Row>", esc(k), cell("Label", k), format!("<Cell N='Value' V='{}' U='STR'/>", esc(v))))
         .collect();
+    // the shape data a person put on the shape, as Visio writes it
+    for (name, value) in s.props() {
+        rows.push(format!(
+            "<Row N='{}'>{}{}{}</Row>",
+            esc(&row_name(&name)),
+            cell("Label", &name),
+            format!("<Cell N='Value' V='{}' U='STR'/>", esc(&value)),
+            cell("Type", "0")
+        ));
+    }
     if rows.is_empty() {
         String::new()
     } else {
@@ -947,8 +971,15 @@ impl<'a> Reader<'a> {
         for sec in sh.sections("Property") {
             for row in sec.children("Row") {
                 if let (Some(k), Some(v)) = (row.attr("N"), row.cell("Value")) {
-                    if !v.is_empty() {
+                    if v.is_empty() {
+                        continue;
+                    }
+                    if OWN_KEYS.contains(&k) {
                         s.data.insert(k.to_string(), v.to_string());
+                    } else {
+                        // anything else is shape data a person put on it, under the name they gave
+                        let label = row.cell("Label").filter(|l: &&str| !l.is_empty()).unwrap_or(k);
+                        s.set_prop(&label, &v);
                     }
                 }
             }

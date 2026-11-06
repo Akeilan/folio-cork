@@ -34,6 +34,10 @@ mood pixels 8ef1445947b303dd
 mood svg fcb38e25c8af391d
 mood pdf a5fbf07244bc6362
 mood vsdx bbf883fa497234aa
+swimlane pixels 2ea72f2a356bfb98
+swimlane svg 1c285eb96b646b86
+swimlane pdf adc77e682628f206
+swimlane vsdx 8155be1bf2afbb4e
 orgchart pixels 215c52cc9319aa84
 orgchart svg 7230d47d691c5880
 orgchart pdf dfae4798f81e3f36

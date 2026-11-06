@@ -14,6 +14,7 @@ pub const LIST: &[(&str, &str, &str)] = &[
     ("timeline", "Timeline", "Milestones along a line"),
     ("storymap", "User story map", "Activities, tasks and releases"),
     ("mood", "Mood board", "Pictures, colours and type"),
+    ("swimlane", "Cross-functional flowchart", "Lanes for each team, with the flow across them"),
     ("orgchart", "Org chart", "A small team to start from"),
     ("schematic", "Schematic", "A sample circuit to start from"),
 ];
@@ -29,6 +30,7 @@ pub fn icon(k: &str) -> &'static str {
         "timeline" => "flow-right",
         "storymap" => "tidy-masonry",
         "mood" => "palette",
+        "swimlane" => "lane",
         "orgchart" => "org",
         "schematic" => "stencil",
         _ => "template",
@@ -76,6 +78,19 @@ impl B<'_> {
         let id = self.shape("frame", x, y, w, h, title);
         if let Some(s) = self.ed.pgm().get_mut(id) {
             s.style.fill = Color::hex(fill).with_alpha(160);
+        }
+        id
+    }
+    fn lane(&mut self, x: f32, y: f32, w: f32, h: f32, title: &str) -> Id {
+        let id = self.shape("lane", x, y, w, h, title);
+        if let Some(s) = self.ed.pgm().get_mut(id) {
+            s.data.insert("lane".into(), "h".into());
+        }
+        // a lane sits behind what it holds
+        let pos = self.ed.pgm().shapes.iter().position(|s| s.id == id);
+        if let Some(i) = pos {
+            let s = self.ed.pgm().shapes.remove(i);
+            self.ed.pgm().shapes.insert(0, s);
         }
         id
     }
@@ -162,6 +177,23 @@ pub fn apply(key: &str, ed: &mut Editor) {
                     s.style.width = 2.5;
                 }
             }
+        }
+        "swimlane" => {
+            for (i, t) in ["Customer", "Sales", "Warehouse"].iter().enumerate() {
+                b.lane(0.0, i as f32 * 180.0, 900.0, 180.0, t);
+            }
+            let start = b.shape("flow.terminator", 70.0, 60.0, 130.0, 54.0, "Order placed");
+            let check = b.shape("flow.process", 260.0, 240.0, 150.0, 72.0, "Check the order");
+            let dec = b.shape("flow.decision", 460.0, 230.0, 170.0, 92.0, "In stock?");
+            let order = b.shape("flow.process", 300.0, 420.0, 150.0, 72.0, "Order more");
+            let pick = b.shape("flow.process", 540.0, 420.0, 150.0, 72.0, "Pick and pack");
+            let done = b.shape("flow.terminator", 700.0, 66.0, 130.0, 54.0, "Parcel arrives");
+            b.connect(start, check, Route::Elbow, "");
+            b.connect(check, dec, Route::Elbow, "");
+            b.connect(dec, pick, Route::Elbow, "Yes");
+            b.connect(dec, order, Route::Elbow, "No");
+            b.connect(order, pick, Route::Elbow, "");
+            b.connect(pick, done, Route::Elbow, "");
         }
         "kanban" => {
             for (i, (t, c)) in [("To do", 0xFFFDE7), ("Doing", 0xE3F2FD), ("Done", 0xE8F5E9)].iter().enumerate() {

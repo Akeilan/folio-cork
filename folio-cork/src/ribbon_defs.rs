@@ -102,6 +102,14 @@ pub fn tabs() -> Vec<Tab> {
                     ],
                 ),
                 Group::new(
+                    "Lanes",
+                    vec![
+                        I::large("lane.add", "Swimlane", "lane").desc("Add a lane for a team or a stage. Moving a lane moves what's in it."),
+                        I::small("lane.turn", "Turn Lanes", "lane-turn"),
+                        I::small("lane.delete", "Delete Lane", "delete"),
+                    ],
+                ),
+                Group::new(
                     "Comments",
                     vec![I::large("tool.comment", "Comment", "comment").desc("Pin a comment to the board or a shape.")],
                 ),
@@ -276,6 +284,7 @@ pub fn tabs() -> Vec<Tab> {
                         I::large("pane.shapes", "Shapes", "stencil"),
                         I::large("pane.layers", "Layers", "layers"),
                         I::large("pane.comments", "Comments", "comments"),
+                        I::large("pane.data", "Shape Data", "shape-data").desc("Named properties on a shape — cost, owner, part number — saved with the drawing."),
                     ],
                 ),
                 Group::new("Theme", vec![I::large("theme-menu", "Light or Dark", "dark").menu()]),
