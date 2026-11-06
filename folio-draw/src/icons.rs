@@ -37,6 +37,7 @@ const ICONS: &[(&str, &str)] = &[
     ("nobg", "<path d='M12 4c3 0 5 2.4 5 5.2 0 2-1 3.3-1 4.3 0 1.4 1.6 1.7 3 2.5 1.2.7 2 1.6 2 3.9H3c0-2.3.8-3.2 2-3.9 1.4-.8 3-1.1 3-2.5 0-1-1-2.3-1-4.3C7 6.4 9 4 12 4z'/><path d='M2 20h20' stroke-dasharray='2.5 2'/>"),
     ("lettering", "<path d='M4 19l5.5-14h2L17 19M6.6 14h7.8'/><path d='M3 22h18' stroke-dasharray='2.5 2'/>"),
     ("envelope", "<path d='M3 9C7 4 17 4 21 9'/><rect x='5' y='12' width='14' height='7' rx='1'/>"),
+    ("nodes", "<path d='M5 18L10 6l9 5-6 7z'/><rect x='3' y='16' width='4' height='4'/><rect x='8' y='4' width='4' height='4'/><rect x='17' y='9' width='4' height='4'/><rect x='11' y='16' width='4' height='4'/>"),
     ("density", "<rect x='3' y='5' width='18' height='14' rx='1.5'/><path d='M6 16c2-5 4-8 6-8s4 3 6 8' /><path d='M9 19v-3M12 19v-6M15 19v-3'/>"),
     ("wallpaper", "<rect x='3' y='5' width='18' height='12' rx='1.5'/><path d='M9 21h6M12 17v4'/><path d='M6 14l3-3 2 2 3-4 4 5'/>"),
     ("email", "<rect x='3' y='6' width='18' height='12' rx='1.5'/><path d='M3.5 7l8.5 6 8.5-6'/>"),

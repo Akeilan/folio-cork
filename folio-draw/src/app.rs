@@ -116,6 +116,10 @@ enum Drag {
     PendMove { start: Pt, orig: Pending },
     PendResize { handle: usize, orig: Pending },
     EmbMove { start: (f32, f32), last: (f32, f32) },
+    /// A node of the selected shape being dragged (ring, vertex).
+    NodeMove { ring: usize, vi: usize },
+    /// A needle point of the selected stitch object being dragged (block, point).
+    StitchMove { block: usize, pt: usize },
 }
 
 /// A shape just drawn that can still be moved and resized before it is kept.
@@ -186,6 +190,10 @@ fn quick_icon(id: &str) -> String {
     .into()
 }
 
+fn round4(v: f32) -> f64 {
+    (v as f64 * 10_000.0).round() / 10_000.0
+}
+
 pub struct DrawApp {
     pub doc: Doc,
     pub path: Option<PathBuf>,
@@ -226,6 +234,13 @@ pub struct DrawApp {
     pub export_ext: String,
     /// The selected embroidery object: (layer, object id).
     pub emb_sel: Option<(usize, i64)>,
+    /// Editing the selected shape's nodes rather than moving it whole.
+    pub emb_nodes: bool,
+    /// The node under the pointer's last press: (ring, vertex) or ("stitch", block, point).
+    pub sel_node: Option<(usize, usize)>,
+    pub sel_stitch: Option<(usize, usize)>,
+    /// Where the undo list stood when a node drag began, so the whole drag is one step.
+    node_mark: usize,
     pub text_size: usize,
     pub text_font: usize,
     pub text_underline: bool,
@@ -313,6 +328,10 @@ impl DrawApp {
             stitch_cache: None,
             export_ext: "pes".into(),
             emb_sel: None,
+            emb_nodes: false,
+            sel_node: None,
+            sel_stitch: None,
+            node_mark: 0,
             text_size: 2,
             text_font: 0,
             text_underline: false,
@@ -736,6 +755,17 @@ impl DrawApp {
             self.command("full-screen", host);
             return;
         }
+        if self.emb_nodes && matches!(key, Key::Delete) && (self.sel_node.is_some() || self.sel_stitch.is_some()) {
+            self.node_delete();
+            return;
+        }
+        if self.emb_nodes && matches!(key, Key::Escape) {
+            // out of node editing, with the shape still selected
+            self.emb_nodes = false;
+            self.sel_node = None;
+            self.sel_stitch = None;
+            return;
+        }
         if matches!(key, Key::Escape) && self.full_screen {
             self.command("full-screen", host);
             return;
@@ -941,9 +971,21 @@ impl DrawApp {
             Tool::EmbSelect => {
                 if let Some(st) = crate::emb::settings(&self.doc) {
                     let mm = crate::emb::px_to_mm(&st, p.0, p.1);
+                    if self.emb_nodes && self.node_press(mm, clicks) {
+                        return;
+                    }
                     self.emb_sel = crate::emb::object_at(&self.doc, mm.0, mm.1);
+                    self.sel_node = None;
+                    self.sel_stitch = None;
                     if self.emb_sel.is_some() {
+                        if clicks >= 2 {
+                            // double-clicking a shape edits its nodes, as the GTK version does
+                            self.emb_nodes = true;
+                            return;
+                        }
                         self.drag = Some(Drag::EmbMove { start: mm, last: mm });
+                    } else {
+                        self.emb_nodes = false;
                     }
                 }
             }
@@ -1093,6 +1135,18 @@ impl DrawApp {
                     self.drag = Some(Drag::EmbMove { start, last: mm });
                 }
             }
+            Some(Drag::NodeMove { ring, vi }) => {
+                if let Some(st) = crate::emb::settings(&self.doc) {
+                    let mm = crate::emb::px_to_mm(&st, p.0, p.1);
+                    self.set_node(ring, vi, mm);
+                }
+            }
+            Some(Drag::StitchMove { block, pt }) => {
+                if let Some(st) = crate::emb::settings(&self.doc) {
+                    let mm = crate::emb::px_to_mm(&st, p.0, p.1);
+                    self.set_stitch(block, pt, mm);
+                }
+            }
             Some(Drag::Pan { start, scroll }) => {
                 self.scroll = (scroll.0 - (x - start.0) / self.zoom, scroll.1 - (y - start.1) / self.zoom);
             }
@@ -1141,6 +1195,14 @@ impl DrawApp {
                 self.pending = Some(Pending { tool, a, b, color });
             }
             Drag::PendMove { .. } | Drag::PendResize { .. } => {}
+            Drag::NodeMove { .. } => {
+                let mark = self.node_mark;
+                self.doc.group_since(mark, "Move node");
+            }
+            Drag::StitchMove { .. } => {
+                let mark = self.node_mark;
+                self.doc.group_since(mark, "Move needle point");
+            }
             Drag::EmbMove { start, last } => {
                 let (dx, dy) = (last.0 - start.0, last.1 - start.1);
                 if dx.abs() + dy.abs() > 0.05 {
@@ -1296,6 +1358,185 @@ impl DrawApp {
         let fill = self.shape_fill && closed;
         let line = self.shape_outline || !fill;
         (line as u32) | ((fill as u32) << 1)
+    }
+
+    /// The selected object, if there is one.
+    fn emb_object(&self) -> Option<serde_json::Value> {
+        let (li, id) = self.emb_sel?;
+        let sp = crate::emb::layer_spec(&self.doc, li)?;
+        sp["objects"].as_array()?.iter().find(|o| o["id"].as_i64() == Some(id)).cloned()
+    }
+
+    /// How far from a node a click still counts, in millimetres.
+    fn node_tol(&self) -> f32 {
+        (6.0 / (self.zoom * crate::emb::PX_PER_MM)).max(0.3)
+    }
+
+    /// A press while editing nodes: pick a node up, or add one on a double-clicked edge.
+    /// True when it was the nodes' business.
+    fn node_press(&mut self, mm: (f32, f32), clicks: u32) -> bool {
+        let Some(o) = self.emb_object() else { return false };
+        let tol = self.node_tol();
+        if o["kind"] == "stitches" {
+            use folio_draw_engine::emb::plan::ST;
+            let blocks = o["blocks"].as_array().cloned().unwrap_or_default();
+            for (bi, b) in blocks.iter().enumerate() {
+                for (pi, q) in b["pts"].as_array().cloned().unwrap_or_default().iter().enumerate() {
+                    if q[2].as_u64().unwrap_or(0) as u8 != ST {
+                        continue;
+                    }
+                    let (x, y) = (q[0].as_f64().unwrap_or(0.0) as f32, q[1].as_f64().unwrap_or(0.0) as f32);
+                    if (x - mm.0).abs() <= tol && (y - mm.1).abs() <= tol {
+                        self.sel_stitch = Some((bi, pi));
+                        self.sel_node = None;
+                        self.node_mark = self.doc.undo_mark();
+                        self.drag = Some(Drag::StitchMove { block: bi, pt: pi });
+                        self.flash("Drag the needle point, or Delete to take it out.");
+                        return true;
+                    }
+                }
+            }
+            if clicks >= 2 {
+                if let Some((bi, k, q)) = Self::nearest_stitch_edge(&blocks, mm, tol) {
+                    self.edit_emb_object("Add stitch", |o| {
+                        if let Some(pts) = o["blocks"][bi]["pts"].as_array_mut() {
+                            pts.insert(k, serde_json::json!([q.0, q.1, ST]));
+                        }
+                    });
+                    self.sel_stitch = Some((bi, k));
+                    return true;
+                }
+            }
+            return false;
+        }
+        let rings = o["rings"].as_array().cloned().unwrap_or_default();
+        for (ri, ring) in rings.iter().enumerate() {
+            for (vi, q) in ring.as_array().cloned().unwrap_or_default().iter().enumerate() {
+                let (x, y) = (q[0].as_f64().unwrap_or(0.0) as f32, q[1].as_f64().unwrap_or(0.0) as f32);
+                if (x - mm.0).abs() <= tol && (y - mm.1).abs() <= tol {
+                    self.sel_node = Some((ri, vi));
+                    self.sel_stitch = None;
+                    self.node_mark = self.doc.undo_mark();
+                    self.drag = Some(Drag::NodeMove { ring: ri, vi });
+                    self.flash("Drag the node, or Delete to take it out.");
+                    return true;
+                }
+            }
+        }
+        if clicks >= 2 {
+            if let Some((ri, k, q)) = Self::nearest_ring_edge(&rings, mm, tol) {
+                self.edit_emb_object("Add node", |o| {
+                    if let Some(pts) = o["rings"][ri].as_array_mut() {
+                        pts.insert(k, serde_json::json!([q.0, q.1]));
+                    }
+                });
+                self.sel_node = Some((ri, k));
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Where a point sits on the line a-b, and how far from it (millimetres).
+    fn on_edge(a: (f32, f32), b: (f32, f32), p: (f32, f32)) -> ((f32, f32), f32) {
+        let v = (b.0 - a.0, b.1 - a.1);
+        let l2 = v.0 * v.0 + v.1 * v.1;
+        let t = if l2 < 1e-12 { 0.0 } else { (((p.0 - a.0) * v.0 + (p.1 - a.1) * v.1) / l2).clamp(0.0, 1.0) };
+        let q = (a.0 + v.0 * t, a.1 + v.1 * t);
+        let (dx, dy) = (q.0 - p.0, q.1 - p.1);
+        (q, (dx * dx + dy * dy).sqrt())
+    }
+
+    /// The ring edge nearest a point: (ring, where to put the new node, the point on the edge).
+    fn nearest_ring_edge(rings: &[serde_json::Value], mm: (f32, f32), tol: f32) -> Option<(usize, usize, (f32, f32))> {
+        let mut best: Option<(f32, usize, usize, (f32, f32))> = None;
+        for (ri, ring) in rings.iter().enumerate() {
+            let pts: Vec<(f32, f32)> = ring
+                .as_array()
+                .map(|a| a.iter().map(|q| (q[0].as_f64().unwrap_or(0.0) as f32, q[1].as_f64().unwrap_or(0.0) as f32)).collect())
+                .unwrap_or_default();
+            let n = pts.len();
+            for k in 0..n {
+                let (q, d) = Self::on_edge(pts[k], pts[(k + 1) % n], mm);
+                if d < tol && best.as_ref().map(|b| d < b.0).unwrap_or(true) {
+                    best = Some((d, ri, k + 1, q));
+                }
+            }
+        }
+        best.map(|(_, ri, k, q)| (ri, k, q))
+    }
+
+    /// The stitch nearest a point: (block, where to put the new stitch, the point on the line).
+    fn nearest_stitch_edge(blocks: &[serde_json::Value], mm: (f32, f32), tol: f32) -> Option<(usize, usize, (f32, f32))> {
+        use folio_draw_engine::emb::plan::{ST, TRIM};
+        let mut best: Option<(f32, usize, usize, (f32, f32))> = None;
+        for (bi, b) in blocks.iter().enumerate() {
+            let pts = b["pts"].as_array().cloned().unwrap_or_default();
+            for k in 1..pts.len() {
+                let (c, cp) = (pts[k][2].as_u64().unwrap_or(0) as u8, pts[k - 1][2].as_u64().unwrap_or(0) as u8);
+                if c != ST || cp == TRIM {
+                    continue;
+                }
+                let a = (pts[k - 1][0].as_f64().unwrap_or(0.0) as f32, pts[k - 1][1].as_f64().unwrap_or(0.0) as f32);
+                let z = (pts[k][0].as_f64().unwrap_or(0.0) as f32, pts[k][1].as_f64().unwrap_or(0.0) as f32);
+                let (q, d) = Self::on_edge(a, z, mm);
+                if d < tol && best.as_ref().map(|b| d < b.0).unwrap_or(true) {
+                    best = Some((d, bi, k, q));
+                }
+            }
+        }
+        best.map(|(_, bi, k, q)| (bi, k, q))
+    }
+
+    fn set_node(&mut self, ring: usize, vi: usize, mm: (f32, f32)) {
+        self.edit_emb_object("Move node", |o| {
+            if let Some(q) = o["rings"][ring].as_array_mut().and_then(|a| a.get_mut(vi)) {
+                *q = serde_json::json!([round4(mm.0), round4(mm.1)]);
+            }
+        });
+    }
+
+    fn set_stitch(&mut self, block: usize, pt: usize, mm: (f32, f32)) {
+        use folio_draw_engine::emb::plan::ST;
+        self.edit_emb_object("Move needle point", |o| {
+            if let Some(q) = o["blocks"][block]["pts"].as_array_mut().and_then(|a| a.get_mut(pt)) {
+                let c = q[2].as_u64().unwrap_or(ST as u64);
+                *q = serde_json::json!([round4(mm.0), round4(mm.1), c]);
+            }
+        });
+    }
+
+    /// Take the picked node out: a ring needs three, and a hole down to two goes altogether.
+    fn node_delete(&mut self) {
+        use folio_draw_engine::emb::plan::ST;
+        if let Some((bi, pi)) = self.sel_stitch {
+            self.edit_emb_object("Delete stitch", |o| {
+                if let Some(pts) = o["blocks"][bi]["pts"].as_array_mut() {
+                    if pts.len() > 2 && pts.get(pi).map(|p| p[2].as_u64().unwrap_or(0) as u8 == ST).unwrap_or(false) {
+                        pts.remove(pi);
+                    }
+                }
+            });
+            self.sel_stitch = None;
+            return;
+        }
+        let Some((ri, vi)) = self.sel_node else { return };
+        let Some(o) = self.emb_object() else { return };
+        let len = o["rings"][ri].as_array().map(|a| a.len()).unwrap_or(0);
+        if ri == 0 && len <= 3 {
+            self.flash("A shape needs at least three nodes. Delete the shape instead.");
+            return;
+        }
+        self.edit_emb_object("Delete node", |o| {
+            if len <= 3 && ri > 0 {
+                if let Some(rings) = o["rings"].as_array_mut() {
+                    rings.remove(ri);
+                }
+            } else if let Some(pts) = o["rings"][ri].as_array_mut() {
+                pts.remove(vi);
+            }
+        });
+        self.sel_node = None;
     }
 
     /// The chart thread the selected shape uses (1..=63), or the nearest to its colour.
@@ -1936,6 +2177,24 @@ impl DrawApp {
                 }
             }
             "emb.import" => self.open_back(BackPage::ImportStitches),
+            "emb.nodes" => {
+                let Some(o) = self.emb_object() else {
+                    self.flash("Select one shape (or one stitch design) to edit its nodes.");
+                    return;
+                };
+                let can = o["rings"].as_array().map(|a| !a.is_empty()).unwrap_or(false) || o["kind"] == "stitches";
+                if !can {
+                    self.flash("This object has no nodes to edit.");
+                    return;
+                }
+                self.emb_nodes = !self.emb_nodes;
+                self.sel_node = None;
+                self.sel_stitch = None;
+                if self.emb_nodes {
+                    self.set_tool(Tool::EmbSelect);
+                    self.flash("Drag a node to move it, Delete takes one out, double-click an edge to add one.");
+                }
+            }
             "emb.stitch" => {
                 let Some((li, id)) = self.emb_sel else {
                     self.flash("Select a shape first.");
@@ -3090,6 +3349,7 @@ impl DrawApp {
             stitch_view: self.stitch_view,
             density_view: self.density_view,
             stitch_out: self.stitch_out.is_some(),
+            emb_nodes: self.emb_nodes,
             full_screen: self.full_screen,
             emb_sel: self.emb_sel.is_some(),
         }
@@ -3290,6 +3550,41 @@ impl DrawApp {
                 let b = crate::emb::mm_to_px(&st, x1, y1);
                 let (p, q) = (to(a), to(b));
                 ants(&mut cv, Rect::new(p.0, p.1, q.0 - p.0, q.1 - p.1));
+                if self.emb_nodes {
+                    // a handle on every node (or needle point), the picked one filled red
+                    let hp = 4.0f32;
+                    let mut handle = |mx: f32, my: f32, on: bool| {
+                        let t = to(crate::emb::mm_to_px(&st, mx, my));
+                        let r = Rect::new(t.0 - hp, t.1 - hp, hp * 2.0, hp * 2.0);
+                        gfx::fill_rect(&mut cv, r, if on { Color::rgb(204, 26, 26) } else { Color::WHITE });
+                        gfx::stroke_round(&mut cv, r, 0.0, Color::rgb(128, 0, 0), 1.0);
+                    };
+                    if o["kind"] == "stitches" {
+                        use folio_draw_engine::emb::plan::ST;
+                        for (bi, b) in o["blocks"].as_array().cloned().unwrap_or_default().iter().enumerate() {
+                            for (pi, pt) in b["pts"].as_array().cloned().unwrap_or_default().iter().enumerate() {
+                                if pt[2].as_u64().unwrap_or(0) as u8 != ST {
+                                    continue;
+                                }
+                                handle(
+                                    pt[0].as_f64().unwrap_or(0.0) as f32,
+                                    pt[1].as_f64().unwrap_or(0.0) as f32,
+                                    self.sel_stitch == Some((bi, pi)),
+                                );
+                            }
+                        }
+                    } else {
+                        for (ri, ring) in o["rings"].as_array().cloned().unwrap_or_default().iter().enumerate() {
+                            for (vi, pt) in ring.as_array().cloned().unwrap_or_default().iter().enumerate() {
+                                handle(
+                                    pt[0].as_f64().unwrap_or(0.0) as f32,
+                                    pt[1].as_f64().unwrap_or(0.0) as f32,
+                                    self.sel_node == Some((ri, vi)),
+                                );
+                            }
+                        }
+                    }
+                }
             }
         }
         if self.density_view {
@@ -3534,6 +3829,7 @@ pub struct St {
     pub stitch_view: bool,
     pub density_view: bool,
     pub stitch_out: bool,
+    pub emb_nodes: bool,
     pub full_screen: bool,
     pub emb_sel: bool,
 }
@@ -3544,6 +3840,7 @@ impl CommandState for St {
             "undo" => self.can_undo,
             "redo" => self.can_redo,
             "crop" => self.has_sel,
+            "emb.nodes" if !self.emb_sel => false,
             "emb.view" | "emb.density" | "emb.stitchout" | "emb.info" | "emb.export" | "emb.place" | "emb.trace" | "tool.emb" => self.emb,
             "emb.recolour" | "emb.stitch" => self.emb_sel,
             "emb.hoop" => self.emb,
@@ -3561,6 +3858,7 @@ impl CommandState for St {
             "shape.outline" => self.shape_outline,
             "emb.density" => self.density_view,
             "emb.stitchout" => self.stitch_out,
+            "emb.nodes" => self.emb_nodes,
             "full-screen" => self.full_screen,
             "frame.play" => self.playing,
             t => t.strip_prefix("tool.").map(|t| t == self.tool.id()).unwrap_or(false),

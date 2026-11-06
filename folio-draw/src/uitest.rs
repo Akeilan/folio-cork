@@ -945,6 +945,70 @@ impl UiTest {
             app.ribbon.collapsed = false;
             Ok(())
         });
+        step!("Edit Nodes moves, adds and deletes a shape's nodes", |app: &mut DrawApp, h: &mut dyn Host, r: &mut Res| {
+            app.saved_for_test();
+            app.command("emb.new:0", h);
+            ev(app, h, r, Event::MouseMove { x: 1.0, y: 1.0 });
+            let spec = serde_json::json!({"objects": [{"id": 1, "kind": "shape", "rings": [[[-20, -20], [20, -20], [20, 20], [-20, 20]]],
+                "thread": {"rgb": [200, 20, 30], "pec": 5, "name": "Red"}}], "next_id": 2});
+            let li = crate::emb::add_shape_layer(&mut app.doc, "Square", &spec);
+            let st = crate::emb::settings(&app.doc).ok_or("no settings")?;
+            let nodes = |app: &DrawApp| -> usize {
+                crate::emb::layer_spec(&app.doc, li).map(|sp| sp["objects"][0]["rings"][0].as_array().map(|a| a.len()).unwrap_or(0)).unwrap_or(0)
+            };
+            // a double-click on the shape starts editing its nodes
+            app.set_tool(Tool::EmbSelect);
+            let (cx, cy) = crate::emb::mm_to_px(&st, 0.0, 0.0);
+            click_on(app, h, r, cx, cy, Button::Left);
+            check(app.emb_sel == Some((li, 1)), "the square wasn't selected")?;
+            let dc = sp(app, cx, cy);
+            ev(app, h, r, Event::MouseDown { x: dc.0, y: dc.1, button: Button::Left, clicks: 2 });
+            ev(app, h, r, Event::MouseUp { x: dc.0, y: dc.1, button: Button::Left });
+            check(app.emb_nodes, "double-clicking didn't start node editing")?;
+            shot(app, r);
+            // drag the top-left node 5 mm in, as one undo step
+            let before = app.doc.history().0.len();
+            let (nx, ny) = crate::emb::mm_to_px(&st, -20.0, -20.0);
+            let (tx, ty) = crate::emb::mm_to_px(&st, -15.0, -15.0);
+            drag_on(app, h, r, (nx, ny), (tx, ty), Button::Left);
+            let o = crate::emb::layer_spec(&app.doc, li).ok_or("gone")?["objects"][0].clone();
+            let moved = (o["rings"][0][0][0].as_f64().unwrap_or(0.0), o["rings"][0][0][1].as_f64().unwrap_or(0.0));
+            check((moved.0 + 15.0).abs() < 0.6 && (moved.1 + 15.0).abs() < 0.6, &format!("the node went to {moved:?}"))?;
+            check(app.doc.history().0.len() == before + 1, &format!("{} undo steps for one drag", app.doc.history().0.len() - before))?;
+            check(app.doc.history().0.last().map(|l| *l == "Move node").unwrap_or(false), "not labelled Move node")?;
+            key(app, h, r, Key::Char('z'), ctrl());
+            let o = crate::emb::layer_spec(&app.doc, li).ok_or("gone")?["objects"][0].clone();
+            check((o["rings"][0][0][0].as_f64().unwrap_or(0.0) + 20.0).abs() < 0.01, "undo didn't put the node back")?;
+            // a double-click on an edge adds a node there
+            let n0 = nodes(app);
+            let (ex, ey) = crate::emb::mm_to_px(&st, 0.0, -20.0);
+            let e = sp(app, ex, ey);
+            ev(app, h, r, Event::MouseMove { x: e.0, y: e.1 });
+            ev(app, h, r, Event::MouseDown { x: e.0, y: e.1, button: Button::Left, clicks: 2 });
+            ev(app, h, r, Event::MouseUp { x: e.0, y: e.1, button: Button::Left });
+            check(nodes(app) == n0 + 1, &format!("{} nodes, was {n0}", nodes(app)))?;
+            check(app.sel_node == Some((0, 1)), &format!("the new node isn't picked: {:?}", app.sel_node))?;
+            // Delete takes it out again
+            key(app, h, r, Key::Delete, Mods::NONE);
+            check(nodes(app) == n0, &format!("{} nodes after Delete", nodes(app)))?;
+            // a square can't go below three nodes
+            let (c1x, c1y) = crate::emb::mm_to_px(&st, 20.0, -20.0);
+            click_on(app, h, r, c1x, c1y, Button::Left);
+            key(app, h, r, Key::Delete, Mods::NONE);
+            let (c2x, c2y) = crate::emb::mm_to_px(&st, 20.0, 20.0);
+            click_on(app, h, r, c2x, c2y, Button::Left);
+            key(app, h, r, Key::Delete, Mods::NONE);
+            check(nodes(app) == 3, &format!("{} nodes left", nodes(app)))?;
+            let (c3x, c3y) = crate::emb::mm_to_px(&st, -20.0, 20.0);
+            click_on(app, h, r, c3x, c3y, Button::Left);
+            key(app, h, r, Key::Delete, Mods::NONE);
+            check(nodes(app) == 3, "a shape was left with fewer than three nodes")?;
+            check(app.flash_text().contains("three nodes"), &format!("it didn't say why: {:?}", app.flash_text()))?;
+            // Esc leaves node editing, the shape stays selected
+            key(app, h, r, Key::Escape, Mods::NONE);
+            check(!app.emb_nodes && app.emb_sel == Some((li, 1)), "Esc lost the selection")?;
+            check(crate::emb::make_plan(&app.doc).is_some(), "the shape can't be planned any more")
+        });
         step!("threads come from the chart, by colour or by name", |app: &mut DrawApp, h: &mut dyn Host, r: &mut Res| {
             use folio_draw_engine::emb::colour;
             app.saved_for_test();
