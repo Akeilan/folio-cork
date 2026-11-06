@@ -1298,6 +1298,20 @@ impl DrawApp {
         (line as u32) | ((fill as u32) << 1)
     }
 
+    /// The chart thread the selected shape uses (1..=63), or the nearest to its colour.
+    pub fn thread_index(&self) -> usize {
+        use folio_draw_engine::emb::colour;
+        let Some((li, id)) = self.emb_sel else { return 1 };
+        let Some(sp) = crate::emb::layer_spec(&self.doc, li) else { return 1 };
+        let Some(o) = sp["objects"].as_array().and_then(|a| a.iter().find(|o| o["id"].as_i64() == Some(id))) else { return 1 };
+        if let Some(p) = o["thread"]["pec"].as_u64() {
+            return (p as usize).clamp(1, colour::CHART);
+        }
+        let rgb = &o["thread"]["rgb"];
+        let c = [rgb[0].as_u64().unwrap_or(0) as u8, rgb[1].as_u64().unwrap_or(0) as u8, rgb[2].as_u64().unwrap_or(0) as u8];
+        colour::nearest_thread(colour::rgb_to_lab(c))
+    }
+
     /// The fonts the Text tool offers: the app's own first, then what is installed.
     pub fn text_fonts(&self) -> Vec<String> {
         let mut out = vec![String::new()];
@@ -1755,6 +1769,27 @@ impl DrawApp {
                 self.menu = Some(Menu::new("quick", Rect::new(r.x + 40.0 * self.s, r.bottom(), 0.0, 0.0), items));
             }
             "search" => self.title.focus_search(),
+            "thread-pick" => {
+                use folio_draw_engine::emb::colour;
+                if self.emb_sel.is_none() {
+                    self.flash("Select a shape first.");
+                    return;
+                }
+                let names: Vec<String> = (1..=colour::CHART).map(|i| {
+                    let c = colour::pec_rgb(i);
+                    format!("{} ({:02X}{:02X}{:02X})", colour::pec_name(i), c[0], c[1], c[2])
+                }).collect();
+                let refs: Vec<&str> = names.iter().map(|n| n.as_str()).collect();
+                let at = self.thread_index().saturating_sub(1).min(refs.len() - 1);
+                self.dialog = Some(
+                    Dialog::new("thread-pick", "Thread")
+                        .note("The 63 threads of the Brother chart. Any other colour is sewn with the nearest of them on machines that read only PEC.")
+                        .choice("thread", "Thread", &refs, at)
+                        .text("other", "Or any colour (#RRGGBB, empty to use the thread above)", "")
+                        .button("ok", "OK")
+                        .button("cancel", "Cancel"),
+                );
+            }
             "properties" => {
                 let (w, h) = (self.doc.w, self.doc.h);
                 let mm = (w as f32 * crate::page::MM_PER_PX, h as f32 * crate::page::MM_PER_PX);
@@ -2205,7 +2240,14 @@ impl DrawApp {
             ),
             "paste" => Menu::new("paste", rect, vec![MenuItem::new("paste", "Paste").key("Ctrl+V"), MenuItem::new("paste-layer", "Paste as new layer"), MenuItem::new("paste-file", "Paste from file...")]),
             "emb.new" => Menu::new("emb.new", rect, crate::emb::HOOPS.iter().enumerate().map(|(i, h)| MenuItem::new(&format!("emb.new:{i}"), h.0)).collect()),
-            "emb.recolour" => Menu::new("emb.recolour", rect, vec![]).with_palette(PALETTE.iter().map(|&c| Color::hex(c)).collect(), 10),
+            "emb.recolour" => {
+                use folio_draw_engine::emb::colour;
+                let chart: Vec<Color> = (1..=colour::CHART).map(|i| {
+                    let c = colour::pec_rgb(i);
+                    Color::rgb(c[0], c[1], c[2])
+                }).collect();
+                Menu::new("emb.recolour", rect, vec![MenuItem::new("thread-pick", "Choose a thread by name...")]).with_palette(chart, 9)
+            }
             "emb.export" => Menu::new("emb.export", rect, crate::emb::FORMATS.iter().map(|(e, l)| MenuItem::new(&format!("emb.export:{e}"), l)).collect()),
             "frame.loop" => Menu::new(
                 "frame.loop",
@@ -2232,16 +2274,24 @@ impl DrawApp {
         if let Some(c) = id.strip_prefix("color:").and_then(Color::parse) {
             let v = [c.r, c.g, c.b, 255];
             if menu == "emb.recolour" {
+                use folio_draw_engine::emb::colour;
                 let rgb = [c.r, c.g, c.b];
+                // the palette is the Brother chart, so the thread keeps its number and name
+                let i = colour::nearest_thread(colour::rgb_to_lab(rgb));
+                let t = if colour::pec_rgb(i) == rgb {
+                    serde_json::json!({"rgb": rgb, "pec": i, "name": colour::pec_name(i)})
+                } else {
+                    serde_json::json!({"rgb": rgb, "pec": i, "name": format!("#{:02X}{:02X}{:02X}", rgb[0], rgb[1], rgb[2])})
+                };
                 self.edit_emb_object("Thread colour", |o| {
                     if o["kind"] == "stitches" {
                         if let Some(bs) = o["blocks"].as_array_mut() {
                             for b in bs {
-                                b["thread"] = serde_json::json!({"rgb": rgb});
+                                b["thread"] = t.clone();
                             }
                         }
                     } else {
-                        o["thread"] = serde_json::json!({"rgb": rgb});
+                        o["thread"] = t.clone();
                     }
                 });
                 return;
@@ -2455,6 +2505,32 @@ impl DrawApp {
                     }
                     Err(e) => self.flash(&e),
                 }
+            }
+            ("thread-pick", "ok") => {
+                use folio_draw_engine::emb::colour;
+                let other = d.value("other").trim().to_string();
+                let t = match Color::parse(&other) {
+                    Some(c) => {
+                        let i = colour::nearest_thread(colour::rgb_to_lab([c.r, c.g, c.b]));
+                        serde_json::json!({"rgb": [c.r, c.g, c.b], "pec": i, "name": format!("#{:02X}{:02X}{:02X}", c.r, c.g, c.b)})
+                    }
+                    None => {
+                        let i = (d.choice_index("thread") + 1).clamp(1, colour::CHART);
+                        let c = colour::pec_rgb(i);
+                        serde_json::json!({"rgb": [c[0], c[1], c[2]], "pec": i, "name": colour::pec_name(i)})
+                    }
+                };
+                self.edit_emb_object("Thread colour", |o| {
+                    if o["kind"] == "stitches" {
+                        if let Some(bs) = o["blocks"].as_array_mut() {
+                            for b in bs {
+                                b["thread"] = t.clone();
+                            }
+                        }
+                    } else {
+                        o["thread"] = t.clone();
+                    }
+                });
             }
             ("emb.trace", "ok") => {
                 let n = |id: &str, dflt: f64| d.value(id).trim().replace(',', ".").parse::<f64>().unwrap_or(dflt);
