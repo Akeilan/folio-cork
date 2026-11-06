@@ -5,6 +5,7 @@
 //! from `folio-kit`, so the same layout runs under the window, in the pixel tests and on any
 //! machine the platform layer reaches.
 pub mod art;
+pub mod chart;
 pub mod document;
 pub mod effects;
 pub mod shapes;

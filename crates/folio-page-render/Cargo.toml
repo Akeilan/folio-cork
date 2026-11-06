@@ -1,0 +1,12 @@
+[package]
+name = "folio-page-render"
+version = "0.1.0"
+edition = "2021"
+description = "Drawing Folio Page's laid-out documents: text, tables, shapes, pictures and equations on the portable base"
+
+[dependencies]
+folio-canvas = { version = "0.1.0", path = "../folio-canvas" }
+folio-draw-engine = { version = "0.3.0", path = "../folio-draw-engine" }
+folio-kit = { version = "0.3.0", path = "../folio-kit" }
+folio-math = { version = "0.3.0", path = "../folio-math" }
+folio-page-engine = { version = "0.1.0", path = "../folio-page-engine" }

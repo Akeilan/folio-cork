@@ -921,6 +921,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "folio-page-render"
+version = "0.1.0"
+dependencies = [
+ "folio-canvas",
+ "folio-draw-engine",
+ "folio-kit",
+ "folio-math",
+ "folio-page-engine",
+]
+
+[[package]]
 name = "folio-platform"
 version = "0.3.0"
 dependencies = [
