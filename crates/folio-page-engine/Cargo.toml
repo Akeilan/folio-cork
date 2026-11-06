@@ -1,0 +1,17 @@
+[package]
+name = "folio-page-engine"
+version = "0.1.0"
+edition = "2021"
+description = "Folio Page's document engine: the .docx model, Word-compatible layout and pagination, with no system calls and no drawing"
+
+[dependencies]
+folio-math = { version = "0.3.0", path = "../folio-math" }
+quick-xml = { version = "0.42.0", default-features = false }
+fontdb = "0.22"
+ttf-parser = "0.25"
+rustybuzz = "0.18"
+unicode-linebreak = "0.1"
+unicode-segmentation = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+regex = { version = "1.10", default-features = false, features = ["std", "unicode", "perf"] }
+zip = { version = "9.2.0", default-features = false, features = ["deflate"] }
