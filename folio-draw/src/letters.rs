@@ -242,6 +242,76 @@ pub fn lettering_shapes(text: &mut Text, o: &Value) -> Vec<Shape> {
     glyphs.into_iter().flat_map(group_rings).collect()
 }
 
+/// A least-squares circle through points: (centre x, centre y, radius, how far off they are on
+/// average). None when they are too few or lie on a line.
+pub fn fit_circle(pts: &[(f32, f32)]) -> Option<(f32, f32, f32, f32)> {
+    let n = pts.len();
+    if n < 3 {
+        return None;
+    }
+    let nf = n as f64;
+    let mx = pts.iter().map(|p| p.0 as f64).sum::<f64>() / nf;
+    let my = pts.iter().map(|p| p.1 as f64).sum::<f64>() / nf;
+    let (mut suu, mut svv, mut suv, mut suuu, mut svvv, mut suvv, mut svuu) = (0f64, 0f64, 0f64, 0f64, 0f64, 0f64, 0f64);
+    for p in pts {
+        let (u, v) = (p.0 as f64 - mx, p.1 as f64 - my);
+        suu += u * u;
+        svv += v * v;
+        suv += u * v;
+        suuu += u * u * u;
+        svvv += v * v * v;
+        suvv += u * v * v;
+        svuu += v * u * u;
+    }
+    let det = suu * svv - suv * suv;
+    if det.abs() < 1e-9 {
+        return None;
+    }
+    let a = 0.5 * (suuu + suvv);
+    let b = 0.5 * (svvv + svuu);
+    let uc = (a * svv - b * suv) / det;
+    let vc = (b * suu - a * suv) / det;
+    let (cx, cy) = (uc + mx, vc + my);
+    let r = (uc * uc + vc * vc + (suu + svv) / nf).sqrt();
+    let rms = (pts.iter().map(|p| {
+        let (dx, dy) = (p.0 as f64 - cx, p.1 as f64 - cy);
+        let d = (dx * dx + dy * dy).sqrt() - r;
+        d * d
+    }).sum::<f64>() / nf).sqrt();
+    Some((cx as f32, cy as f32, r as f32, rms as f32))
+}
+
+/// How far lettering spans: across, or along its arc.
+pub fn span_of(shapes: &[Shape], o: &Value) -> f32 {
+    if shapes.is_empty() {
+        return 0.0;
+    }
+    let arc = o["arc"].as_str().unwrap_or("none");
+    let b = bounds(shapes);
+    if arc == "none" {
+        return b.2 - b.0;
+    }
+    let (cx, cy) = (o["x"].as_f64().unwrap_or(0.0) as f32, o["y"].as_f64().unwrap_or(0.0) as f32);
+    let radius = (o["radius"].as_f64().unwrap_or(40.0) as f32).max(1.0);
+    let mut lo = f32::MAX;
+    let mut hi = f32::MIN;
+    for g in shapes {
+        for r in g.iter().take(1) {
+            for p in r {
+                let dy = if arc == "top" { -(p[1] - cy) } else { p[1] - cy };
+                let a = (p[0] - cx).datan2(dy);
+                lo = lo.min(a);
+                hi = hi.max(a);
+            }
+        }
+    }
+    if hi > lo {
+        (hi - lo) * radius
+    } else {
+        b.2 - b.0
+    }
+}
+
 /// Fill beats satin for lettering under 8 mm cap height, built from outlines.
 pub fn default_type(cap: f32) -> &'static str {
     if cap < 8.0 {
@@ -419,6 +489,31 @@ mod tests {
         let slanted = warp(shapes, &json!({"kind": "slant", "amount": 30.0}));
         let sb = bounds(&slanted);
         assert!(sb.2 - sb.0 > b.2 - b.0, "slant didn't lean it over");
+    }
+
+    #[test]
+    fn a_circle_is_found_through_points_on_one() {
+        let (cx, cy, r) = (12.0f32, -5.0f32, 30.0f32);
+        let pts: Vec<(f32, f32)> = (0..12)
+            .map(|i| {
+                let a = i as f32 / 12.0 * 2.0 * std::f32::consts::PI;
+                (cx + r * a.dcos(), cy + r * a.dsin())
+            })
+            .collect();
+        let (fx, fy, fr, rms) = fit_circle(&pts).expect("no circle");
+        assert!((fx - cx).abs() < 0.01 && (fy - cy).abs() < 0.01, "centre {fx}, {fy}");
+        assert!((fr - r).abs() < 0.01, "radius {fr}");
+        assert!(rms < 0.01, "rms {rms}");
+    }
+
+    #[test]
+    fn points_on_a_line_are_no_circle() {
+        let pts: Vec<(f32, f32)> = (0..6).map(|i| (i as f32 * 5.0, 3.0)).collect();
+        match fit_circle(&pts) {
+            None => {}
+            Some((_, _, r, rms)) => assert!(r > 1e4 || rms > 1.0, "a line came out as a circle of {r} mm"),
+        }
+        assert_eq!(fit_circle(&[(0.0, 0.0), (1.0, 0.0)]), None);
     }
 
     #[test]

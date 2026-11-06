@@ -119,7 +119,8 @@ pub fn tabs() -> Vec<Tab> {
                     vec![
                         I::large("emb.new", "New embroidery", "hoop").menu().desc("A new design the size of a hoop."),
                         I::small("emb.hoop", "Hoop and machine", "hoop").desc("The hoop size, machine and trims of this design."),
-                        I::large("emb.import", "Import stitches", "emb-import").desc("Open a machine file (PES, DST, JEF, EXP, VP3, XXX, PEC) as a stitch object."),
+                        I::small("emb.import", "Import stitches", "emb-import").desc("Open a machine file (PES, DST, JEF, EXP, VP3, XXX, PEC) as a stitch object."),
+                        I::small("emb.info", "Stitch information", "emb-info"),
                     ],
                 ),
                 Group::new(
@@ -134,22 +135,27 @@ pub fn tabs() -> Vec<Tab> {
                     vec![
                         I::large("tool.emb", "Select shapes", "select").desc("Click a shape to select it; drag to move it; Delete takes it away."),
                         I::large("emb.recolour", "Thread colour", "color").menu(),
+                        I::small("emb.stitch", "Stitch properties", "stitches").desc("Stitch type, angle, density and underlay of the selected shape."),
+                        I::small("emb.nodes", "Edit nodes", "nodes").desc("Move, add (double-click an edge) or delete (Delete) the nodes of the selected shape, or the needle points of a stitch design. Double-clicking a shape does this too."),
+                        I::small("emb.envelope", "Envelope", "envelope").desc("Bend the selected shapes or lettering: arch, bulge, pinch, wave or slant."),
                         I::small("emb.holes", "Fill holes", "shape-fill").desc("Make the selected shape solid: its holes are stitched too."),
                         I::small("emb.merge", "Merge", "merge").desc("Make the shapes of this colour on this layer one shape where they touch."),
                         I::small("emb.split", "Split", "cut").desc("Break the selected shape into its separate parts, or draw a line across it to cut it in two."),
-                        I::small("emb.nodes", "Edit nodes", "nodes").desc("Move, add (double-click an edge) or delete (Delete) the nodes of the selected shape, or the needle points of a stitch design. Double-clicking a shape does this too."),
-                        I::large("emb.stitch", "Stitch properties", "stitches").desc("Stitch type, angle, density and underlay of the selected shape."),
-                        I::small("emb.envelope", "Envelope", "envelope").desc("Bend the selected shapes or lettering: arch, bulge, pinch, wave or slant."),
                     ],
                 ),
-                Group::new("Lettering", vec![I::large("emb.letter", "Lettering", "lettering").desc("Letters from a font, straight or on an arc, as shapes that can be stitched.")]),
+                Group::new(
+                    "Lettering",
+                    vec![
+                        I::large("emb.letter", "Lettering", "lettering").desc("Letters from a font, straight or on an arc, as shapes that can be stitched."),
+                        I::small("emb.reset-letter", "Re-set as lettering", "lettering").desc("Replace traced letters with real lettering from a font, at their size and on their line or arc."),
+                    ],
+                ),
                 Group::new(
                     "Stitches",
                     vec![
                         I::large("emb.view", "Stitch view", "stitches").desc("Show every planned stitch over the picture."),
-                        I::large("emb.stitchout", "Stitch out", "frame-play").desc("Sew the design on screen, stitch by stitch, with the needle where the machine would be."),
-                        I::large("emb.density", "Density", "density").desc("Colour the design by how many layers of thread cover it: green is fine, amber three layers, red four or more."),
-                        I::large("emb.info", "Stitch information", "emb-info"),
+                        I::small("emb.stitchout", "Stitch out", "frame-play").desc("Sew the design on screen, stitch by stitch, with the needle where the machine would be."),
+                        I::small("emb.density", "Density", "density").desc("Colour the design by how many layers of thread cover it: green is fine, amber three layers, red four or more."),
                         I::large("emb.export", "Export stitches", "emb-export").menu().desc("Save the design as a file for the embroidery machine."),
                     ],
                 ),

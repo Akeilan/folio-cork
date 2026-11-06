@@ -945,6 +945,66 @@ impl UiTest {
             app.ribbon.collapsed = false;
             Ok(())
         });
+        step!("traced letters re-set as lettering from a font", |app: &mut DrawApp, h: &mut dyn Host, r: &mut Res| {
+            app.saved_for_test();
+            app.command("emb.new:1", h);
+            ev(app, h, r, Event::MouseMove { x: 1.0, y: 1.0 });
+            let thread = serde_json::json!({"rgb": [20, 90, 200], "pec": 30, "name": "Blue"});
+            // five blobs on an arc, as tracing a word would leave them
+            use folio_kit::math::Det;
+            let (radius, cap) = (40.0f32, 9.0f32);
+            let mut objs = vec![];
+            for i in 0..5 {
+                let th = (i as f32 - 2.0) * 0.18;
+                let (bx, by) = (radius * th.dsin(), -radius * th.dcos());
+                let r = serde_json::json!([[bx - 3.0, by - cap / 2.0], [bx + 3.0, by - cap / 2.0], [bx + 3.0, by + cap / 2.0], [bx - 3.0, by + cap / 2.0]]);
+                objs.push(serde_json::json!({"id": i + 1, "kind": "shape", "rings": [r], "thread": thread, "group": "pic"}));
+            }
+            let spec = serde_json::json!({"objects": objs, "next_id": 6});
+            let li = crate::emb::add_shape_layer(&mut app.doc, "Traced", &spec);
+            let count = |app: &DrawApp, i: usize| crate::emb::layer_spec(&app.doc, i).map(|sp| sp["objects"].as_array().map(|a| a.len()).unwrap_or(0)).unwrap_or(0);
+            check(count(app, li) == 5, "five traced letters")?;
+            // the geometry is found: an arc of about the right radius and cap height
+            let letters: Vec<serde_json::Value> = crate::emb::layer_spec(&app.doc, li).ok_or("gone")?["objects"].as_array().cloned().unwrap_or_default();
+            let (kind, _, _, gr, gcap, span) = crate::app::DrawApp::lettering_geometry(&letters).ok_or("no geometry found")?;
+            check(kind == "top", &format!("found a {kind}, not an arc"))?;
+            check((gr - radius).abs() < 3.0, &format!("radius {gr:.1}, expected about {radius}"))?;
+            check((gcap - cap).abs() < 2.5, &format!("cap {gcap:.1}, expected about {cap}"))?;
+            check(span > 20.0, &format!("span {span:.1}"))?;
+            // re-set: the blobs go, real lettering takes their place, in one undo step
+            app.emb_sel = Some((li, 1));
+            app.command("emb.reset-letter", h);
+            shot(app, r);
+            let d = app.dialog.as_mut().ok_or("the Re-set box didn't open")?;
+            check(d.choice_index("arc") == 1, &format!("it didn't offer the arc: {}", d.choice_index("arc")))?;
+            let font = app.fonts.iter().position(|f| f == "Carlito Bold").ok_or("no Carlito Bold")?;
+            let d = app.dialog.as_mut().unwrap();
+            d.set_choice("font", font);
+            ev(app, h, r, Event::Text("FOLIO".into()));
+            let steps = app.doc.history().0.len();
+            key(app, h, r, Key::Enter, Mods::NONE);
+            check(app.dialog.is_none(), "the box stayed open")?;
+            check(count(app, li) == 0, &format!("{} traced letters left", count(app, li)))?;
+            let top = app.doc.layers.len() - 1;
+            let sp = crate::emb::layer_spec(&app.doc, top).ok_or("no lettering layer")?;
+            let o = sp["objects"][0].clone();
+            check(o["kind"] == "lettering" && o["text"] == "FOLIO", &format!("object {o}"))?;
+            check(o["arc"] == "top", &format!("arc {}", o["arc"]))?;
+            check(o["thread"]["pec"] == 30, &format!("it lost the traced colour: {}", o["thread"]))?;
+            // it spans about what the traced letters did
+            let nspan = {
+                let (_, _, _, _, _, s) = crate::app::DrawApp::lettering_geometry(&[o.clone()]).unwrap_or(("none", 0.0, 0.0, 0.0, 0.0, 0.0));
+                s
+            };
+            let _ = nspan;
+            let (x0, _, x1, _) = crate::emb::object_bounds(&o);
+            check(x1 - x0 > span * 0.6, &format!("the new letters span {:.1}, the traced ones {:.1}", x1 - x0, span))?;
+            check(app.doc.history().0.len() == steps + 1, &format!("{} undo steps", app.doc.history().0.len() - steps))?;
+            check(app.doc.history().0.last().map(|l| *l == "Re-set as lettering").unwrap_or(false), &format!("labelled {:?}", app.doc.history().0.last()))?;
+            key(app, h, r, Key::Char('z'), ctrl());
+            check(count(app, li) == 5, &format!("undo left {} traced letters", count(app, li)))?;
+            Ok(())
+        });
         step!("Fill holes, Merge and Split", |app: &mut DrawApp, h: &mut dyn Host, r: &mut Res| {
             app.saved_for_test();
             app.command("emb.new:1", h);
