@@ -1228,12 +1228,9 @@ impl UiTest {
             let saved = dir.join("send.png");
             check(app.save_to(&saved), "couldn't save")?;
             check(app.file_for_sending("png").map_err(|e| e.to_string())? == saved, "it made a copy of a file it could send")?;
-            // both commands say what happened rather than failing silently
-            app.command("wallpaper", h);
-            let msg = app.flash_text();
-            check(!msg.is_empty(), "Set as background said nothing")?;
-            app.command("email", h);
-            check(!app.flash_text().is_empty(), "Send in email said nothing")?;
+            // the commands are there and offer both formats; they are not run here, because they
+            // hand the file to another program on the computer
+            check(app.all_commands().iter().any(|(id, _)| id == "wallpaper"), "no Set as background")?;
             let m = app.menu_for_test("email");
             check(m.len() == 2, &format!("the email menu has {} choices", m.len()))?;
             Ok(())

@@ -813,7 +813,7 @@ checksum = "98de4bbd547a563b716d8dfa9aad1cb19bfab00f4fa09a6a4ed21dbcf44ce9c4"
 
 [[package]]
 name = "folio-cork"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "calamine",
  "chacha20poly1305",
@@ -830,7 +830,7 @@ dependencies = [
 
 [[package]]
 name = "folio-draw"
-version = "0.1.0"
+version = "1.11.0"
 dependencies = [
  "folio-draw-engine",
  "folio-kit",

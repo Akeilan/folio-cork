@@ -32,12 +32,14 @@ if [ -z "${INSTALLED_ONLY:-}" ]; then
   echo "== Folio Draw on the portable base (D3-06, not shipped yet): window test on X and without a display"
   (cd $R && cargo build -q --release -p folio-draw && rm -rf /tmp/draw-ui && DISPLAY=:$XD WAYLAND_DISPLAY= timeout 300 ./target/release/folio-draw --ui-test /tmp/draw-ui 2>&1 | grep -E "^FAIL|passed"; rm -rf /tmp/draw-hl; DISPLAY= WAYLAND_DISPLAY= timeout 300 ./target/release/folio-draw --ui-test /tmp/draw-hl --headless | grep -E "^FAIL|passed" | sed 's/^/no display: /')
 fi
-echo "== deb"
+echo "== debs"
+FV=$(sed -n 's/^Version: //p' $R/packaging-fonts/DEBIAN/control)
+sh $R/build-fonts-deb.sh /home/claude/out && ls -la /home/claude/out/folio-fonts_${FV}_all.deb
 sh $R/build-deb.sh /home/claude/out && ls -la /home/claude/out/folio-cork_${V}_amd64.deb
 for m in ${MACHINES:-/srv/jammy /srv/nolo /srv/noble}; do
   echo "== installed in $m"
-  cp /home/claude/out/folio-cork_${V}_amd64.deb $m/tmp/
-  flock /home/claude/.dpkg.lock chroot $m bash -c "DEBIAN_FRONTEND=noninteractive apt-get install -y -q /tmp/folio-cork_${V}_amd64.deb >/tmp/cork-install.log 2>&1 || tail -5 /tmp/cork-install.log; dpkg -l folio-cork | tail -1 | awk '{print \$1, \$3}'; folio-cork --version"
+  cp /home/claude/out/folio-cork_${V}_amd64.deb /home/claude/out/folio-fonts_${FV}_all.deb $m/tmp/
+  flock /home/claude/.dpkg.lock chroot $m bash -c "DEBIAN_FRONTEND=noninteractive apt-get install -y -q /tmp/folio-fonts_${FV}_all.deb /tmp/folio-cork_${V}_amd64.deb >/tmp/cork-install.log 2>&1 || tail -5 /tmp/cork-install.log; dpkg -l folio-cork | tail -1 | awk '{print \$1, \$3}'; folio-cork --version"
   chroot $m bash -c "rm -rf /tmp/cork-ui; DISPLAY=:$XD WAYLAND_DISPLAY= timeout 300 folio-cork --ui-test /tmp/cork-ui 2>&1 | grep -E '^FAIL|passed'; folio-cork --export /tmp/cork-ui/ui-test.vsdx /tmp/cork-ui/cli.pdf && head -c 5 /tmp/cork-ui/cli.pdf && echo ' cli export ok'; folio-cork --export /tmp/cork-ui/config/clipboard.png /tmp/cork-ui/dia.vsdx && echo 'diagram picture opens'; rm -rf /tmp/cork-hl; DISPLAY= WAYLAND_DISPLAY= timeout 300 folio-cork --ui-test /tmp/cork-hl --headless | grep -E '^FAIL|passed' | sed 's/^/no display: /'; ls /usr/share/folio/fonts/Carlito-Regular.ttf >/dev/null && echo 'bundled fonts installed'"
 done
 echo "== Wayland (Weston) on 24.04"
