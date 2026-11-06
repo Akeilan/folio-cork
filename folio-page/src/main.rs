@@ -4,6 +4,7 @@
 mod app;
 mod icons;
 mod ribbon_defs;
+mod settings;
 mod uitest;
 
 use folio_kit::platform::{run, Image, WindowSpec};
@@ -91,6 +92,7 @@ fn main() {
         None => (app::PageApp::blank(), None, None),
     };
     let mut a = app::PageApp::new(doc, path);
+    a.apply_settings();
     if let Some(e) = err {
         a.say("Can't open the file", &e);
     }

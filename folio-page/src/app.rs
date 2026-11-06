@@ -84,6 +84,9 @@ pub struct PageApp {
     painter: bool,
     view_mode: u8,
     pub test: Option<crate::uitest::UiTest>,
+    pub settings: crate::settings::Settings,
+    /// a close that is waiting on "save first?"
+    closing: bool,
 }
 
 impl PageApp {
@@ -128,6 +131,8 @@ impl PageApp {
             painter: false,
             view_mode: 0,
             test: None,
+            settings: crate::settings::Settings::load(),
+            closing: false,
         }
     }
 
@@ -143,6 +148,26 @@ impl PageApp {
         Document::open(include_bytes!("blank.docx")).expect("the blank document")
     }
 
+    /// Start with what was remembered last time.
+    pub fn apply_settings(&mut self) {
+        self.zoom = self.settings.zoom;
+        self.marks = self.settings.marks;
+        if self.settings.view_mode != 0 {
+            self.view_mode = self.settings.view_mode;
+            self.ed.set_view_mode(self.view_mode, 600.0);
+        }
+    }
+
+    fn remember(&mut self) {
+        self.settings.zoom = self.zoom;
+        self.settings.marks = self.marks;
+        self.settings.view_mode = self.view_mode;
+        if let Some(p) = self.path.clone() {
+            self.settings.remember(&p);
+        }
+        self.settings.save();
+    }
+
     pub fn open_path(&mut self, p: &Path) {
         match Document::open_path(&p.to_string_lossy()) {
             Ok(doc) => {
@@ -151,6 +176,7 @@ impl PageApp {
                 self.scroll = 0.0;
                 self.cache.clear();
                 self.flash(&format!("Opened {}", name_of(p)));
+                self.remember();
             }
             Err(e) => self.say("Can't open the file", &e.0),
         }
@@ -162,6 +188,7 @@ impl PageApp {
             Ok(()) => {
                 self.path = Some(p.clone());
                 self.flash(&format!("Saved {}", name_of(&p)));
+                self.remember();
             }
             Err(e) => self.say("Can't save the file", &e),
         }
@@ -420,6 +447,27 @@ impl PageApp {
             }
         }
         let body = Rect::new(area.x + side + 24.0 * s, area.y + 20.0 * s, area.w - side - 48.0 * s, area.h - 44.0 * s);
+        if page == "open" && !self.settings.recent.is_empty() {
+            let recent: Vec<String> = self.settings.recent.clone();
+            let mut cx = Ctx { pm, text: &mut r.text, icons: &mut r.icons, theme: &theme, s };
+            cx.label("Recent documents", Rect::new(body.x, body.y, body.w, 24.0 * s), 13.0, theme.muted, true, Align::Left);
+            let mut y = body.y + 28.0 * s;
+            for p in recent.iter().take(8) {
+                let name = std::path::Path::new(p)
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| p.clone());
+                cx.label(&name, Rect::new(body.x, y, body.w * 0.4, 22.0 * s), 13.0, theme.text, false, Align::Left);
+                y += 22.0 * s;
+            }
+            let rest = Rect::new(body.x + body.w * 0.42, body.y, body.w * 0.58, body.h);
+            let Pane::Backstage(b) = &mut self.pane else { return };
+            if let Some(f) = b.files.as_mut() {
+                f.paint(&mut cx, rest);
+            }
+            return;
+        }
+        let Pane::Backstage(b) = &mut self.pane else { return };
         if let Some(f) = b.files.as_mut() {
             let mut cx = Ctx { pm, text: &mut r.text, icons: &mut r.icons, theme: &theme, s };
             f.paint(&mut cx, body);
@@ -564,7 +612,7 @@ impl PageApp {
                 }
             }
             Event::Key { key, mods, down: true, .. } => self.key(key.clone(), *mods, host),
-            Event::CloseRequested => self.exit = true,
+            Event::CloseRequested => self.ask_to_close(),
             Event::FileDropped(p) => {
                 let p = p.clone();
                 self.open_path(&p);
@@ -773,6 +821,30 @@ impl PageApp {
     /// A button in a dialog: Find and Replace does its work and stays open.
     fn dialog_button(&mut self, id: &str, d: Option<Dialog>, host: &mut dyn Host) {
         let Some(d) = d else { return };
+        if d.id == "close" {
+            match id {
+                "save" => {
+                    match self.path.clone() {
+                        Some(p) => {
+                            self.save(&p);
+                            self.remember();
+                            self.exit = true;
+                        }
+                        None => {
+                            self.closing = false;
+                            self.command("saveas", host);
+                        }
+                    };
+                }
+                "discard" => {
+                    self.remember();
+                    self.exit = true;
+                }
+                _ => self.closing = false,
+            }
+            host.redraw();
+            return;
+        }
         if d.id != "find" || id == "close" {
             host.redraw();
             return;
@@ -806,6 +878,24 @@ impl PageApp {
         }
         self.dialog = Some(d);
         host.redraw();
+    }
+
+    /// Closing: a changed document asks to be saved first.
+    fn ask_to_close(&mut self) {
+        if !self.ed.modified || self.test.is_some() {
+            self.remember();
+            self.exit = true;
+            return;
+        }
+        self.closing = true;
+        let name = self.path.as_deref().map(name_of).unwrap_or_else(|| "this document".into());
+        self.dialog = Some(
+            Dialog::new("close", "Save before closing?")
+                .note(&format!("{name} has changes that have not been saved."))
+                .button("save", "Save")
+                .button("discard", "Close without saving")
+                .button("cancel", "Keep working"),
+        );
     }
 
     /// The page the caret is on.
@@ -1217,7 +1307,7 @@ impl PageApp {
                 self.set_zoom(z);
             }
             "zoom-100" => self.set_zoom(1.0),
-            "close" => self.exit = true,
+            "close" => self.ask_to_close(),
             _ => {}
         }
         self.cache.retain(|(_, v, _, _)| *v == self.ed.version_hint() as u64);
@@ -1332,15 +1422,16 @@ impl PageApp {
         self.page_rects.clone()
     }
 
-    /// What the window has open over the pages, for the tests.
-    pub fn open_things(&self) -> String {
-        format!(
-            "backstage={} dialog={} menu={} story={:?}",
-            matches!(self.pane, Pane::Backstage(_)),
-            self.dialog.is_some(),
-            self.menu.is_some(),
-            self.ed.story
-        )
+    /// Closing, as the window would ask it, for the tests.
+    pub fn ask_to_close_for_test(&mut self) {
+        let keep = self.test.take();
+        self.ask_to_close();
+        self.test = keep;
+    }
+
+    /// Whether the window is on its way out, for the tests.
+    pub fn wants_exit_for_test(&self) -> bool {
+        self.exit
     }
 
     /// The part of the window the pages are drawn in.

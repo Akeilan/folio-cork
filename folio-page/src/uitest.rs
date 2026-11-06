@@ -290,6 +290,16 @@ impl UiTest {
             app.open_path(&p);
             check(app.ed.text_of_document().trim() == want.trim(), "the text changed on the way out and back")
         });
+        step!("closing a changed document asks first", |app: &mut PageApp, h: &mut dyn Host, _r: &mut Res| {
+            typed(app, h, " one more word");
+            check(app.ed.modified, "the document should count as changed")?;
+            app.ask_to_close_for_test();
+            check(app.dialog.is_some(), "it closed without asking")?;
+            app.press_dialog_button("cancel", h);
+            check(!app.wants_exit_for_test(), "Keep working still closed it")?;
+            key(app, h, Key::Char('z'), ctrl());
+            Ok(())
+        });
         step!("Export PDF writes a PDF of the pages", move |app: &mut PageApp, _h: &mut dyn Host, _r: &mut Res| {
             let p = d_pdf.join("typed.pdf");
             app.export_pdf(&p);
