@@ -451,7 +451,7 @@ pub fn place_picture(doc: &mut Doc, w: usize, h: usize, rgba: Vec<u8>, name: &st
 
 /// The active layer's picture as shapes, one new layer per thread colour above it, the biggest
 /// colour at the bottom (sewn first). Returns how many shapes and colours came out.
-pub fn convert_layer(doc: &mut Doc) -> Result<(usize, usize), String> {
+pub fn convert_layer(doc: &mut Doc, params: &Value) -> Result<(usize, usize), String> {
     use folio_draw_engine::emb::{convert, raster::Img};
     let s = settings(doc).ok_or("This picture isn't an embroidery design.")?;
     let mut li = doc.active;
@@ -466,10 +466,35 @@ pub fn convert_layer(doc: &mut Doc) -> Result<(usize, usize), String> {
     if !rgba.chunks_exact(4).any(|p| p[3] > 0) {
         return Err("There is nothing on this layer to convert.".into());
     }
+    let mut pspec = pspec;
+    if params["crop"].as_bool().unwrap_or(false) && pspec["kind"] == PICTURE_KIND && !pspec["fitted"].as_bool().unwrap_or(true) {
+        // fit the artwork to the hoop first; its layer follows, so the shapes still line up
+        let pl = convert::place(&Img { w: cw, h: ch, px: rgba.clone() }, cw, ch, PX_PER_MM, 2.5, true);
+        doc.sel_all();
+        doc.sel_delete();
+        doc.float_from_rgba(cw, ch, pl.img.px, 0, 0);
+        doc.commit_float();
+        doc.sel_none();
+        pspec["upscale"] = json!(pspec["upscale"].as_f64().unwrap_or(1.0) * pl.upscale as f64);
+        pspec["fitted"] = json!(true);
+        let text = pspec.to_string();
+        doc.text_layer_set(li, &text, None);
+    }
+    let rgba = doc.layers[li].px.clone();
     let (ox, oy) = origin(&s);
-    let mut tp = json!({"colours": 0, "background": "remove", "smoothing": 1, "min_area": 1.5, "edge_radius": 2,
-        "upscale": pspec["upscale"].as_f64().unwrap_or(1.0), "threads": s["threads"].as_str().unwrap_or("brother")});
-    if !pspec["bg"].is_null() {
+    let mut tp = json!({
+        "colours": params["colours"].as_u64().unwrap_or(0),
+        "background": params["background"].as_str().unwrap_or("remove"),
+        "smoothing": params["smoothing"].as_u64().unwrap_or(1),
+        "min_area": params["min_area"].as_f64().unwrap_or(1.5),
+        "edge_radius": params["edge_radius"].as_u64().unwrap_or(2),
+        "upscale": pspec["upscale"].as_f64().unwrap_or(1.0),
+        "threads": s["threads"].as_str().unwrap_or("brother"),
+    });
+    // the colour to drop as background: the one chosen here, else the one the picture came with
+    if !params["bg"].is_null() {
+        tp["bg"] = params["bg"].clone();
+    } else if !pspec["bg"].is_null() {
         tp["bg"] = pspec["bg"].clone();
     }
     let pj = ej::parse(&tp.to_string())?;

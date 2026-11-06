@@ -245,6 +245,8 @@ pub struct DrawApp {
     pub fonts: Vec<String>,
     pub letter_font: String,
     pub page: crate::page::Setup,
+    /// What Convert to shapes was last asked for.
+    pub trace: serde_json::Value,
     printers: Vec<String>,
     stab_run: Option<crate::stabilizer::Stabilizer>,
     pub wand_contiguous: bool,
@@ -329,6 +331,7 @@ impl DrawApp {
             fonts: vec![],
             letter_font: "Carlito Bold".into(),
             page: crate::page::Setup::default(),
+            trace: serde_json::json!({}),
             printers: vec![],
             stab_run: None,
             wand_contiguous: true,
@@ -1977,10 +1980,32 @@ impl DrawApp {
                     self.open_back(BackPage::PlacePicture);
                 }
             }
-            "emb.trace" => match crate::emb::convert_layer(&mut self.doc) {
-                Ok((n, c)) => self.flash(&format!("{n} shapes in {c} colours, one layer per colour.")),
-                Err(e) => self.flash(&e),
-            },
+            "emb.trace" => {
+                if crate::emb::settings(&self.doc).is_none() {
+                    self.flash("This picture isn't an embroidery design.");
+                    return;
+                }
+                let t = self.trace.clone();
+                let bg = t["bg"].as_array().map(|a| format!("#{:02X}{:02X}{:02X}", a[0].as_u64().unwrap_or(255), a[1].as_u64().unwrap_or(255), a[2].as_u64().unwrap_or(255)));
+                let colours = t["colours"].as_u64().unwrap_or(0);
+                self.dialog = Some(
+                    Dialog::new("emb.trace", "Convert to shapes")
+                        .note("Each patch of colour becomes a shape you can reshape, recolour and give its own stitches.")
+                        .choice("colours", "Colours", &["As many as it takes", "Exactly this many"], (colours > 0) as usize)
+                        .text("count", "How many", &format!("{}", if colours > 0 { colours } else { 6 }))
+                        .choice("background", "Background", &["Leave the fabric showing", "Stitch it too", "Drop this colour"], match t["background"].as_str() {
+                            Some("keep") => 1,
+                            _ => if t["bg"].is_null() { 0 } else { 2 },
+                        })
+                        .text("bg", "That colour (#RRGGBB)", bg.as_deref().unwrap_or("#FFFFFF"))
+                        .check("crop", "Trim the picture's border and fill the hoop", t["crop"].as_bool().unwrap_or(false))
+                        .text("smoothing", "Smoothing (0 to 4)", &format!("{}", t["smoothing"].as_u64().unwrap_or(1)))
+                        .text("edge", "Edge smoothing (0 to 6)", &format!("{}", t["edge_radius"].as_u64().unwrap_or(2)))
+                        .text("min_area", "Smallest patch (mm\u{b2})", &format!("{}", t["min_area"].as_f64().unwrap_or(1.5)))
+                        .button("ok", "Convert")
+                        .button("cancel", "Cancel"),
+                );
+            }
             id if id.starts_with("emb.new:") => {
                 let hoop = id[8..].parse::<usize>().unwrap_or(0);
                 self.request(After::NewEmb(hoop));
@@ -2428,6 +2453,27 @@ impl DrawApp {
                             Err(e) => self.flash(&format!("Printing failed: {e}")),
                         }
                     }
+                    Err(e) => self.flash(&e),
+                }
+            }
+            ("emb.trace", "ok") => {
+                let n = |id: &str, dflt: f64| d.value(id).trim().replace(',', ".").parse::<f64>().unwrap_or(dflt);
+                let mut p = serde_json::json!({
+                    "colours": if d.choice_index("colours") == 1 { n("count", 6.0).clamp(1.0, 30.0) as u64 } else { 0 },
+                    "background": if d.choice_index("background") == 1 { "keep" } else { "remove" },
+                    "crop": d.checked("crop"),
+                    "smoothing": n("smoothing", 1.0).clamp(0.0, 4.0) as u64,
+                    "edge_radius": n("edge", 2.0).clamp(0.0, 6.0) as u64,
+                    "min_area": n("min_area", 1.5).clamp(0.1, 50.0),
+                });
+                if d.choice_index("background") == 2 {
+                    if let Some(c) = Color::parse(d.value("bg").trim()) {
+                        p["bg"] = serde_json::json!([c.r, c.g, c.b]);
+                    }
+                }
+                self.trace = p.clone();
+                match crate::emb::convert_layer(&mut self.doc, &p) {
+                    Ok((n, c)) => self.flash(&format!("{n} shapes in {c} colours, one layer per colour.")),
                     Err(e) => self.flash(&e),
                 }
             }
