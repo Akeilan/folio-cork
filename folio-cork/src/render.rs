@@ -2,7 +2,7 @@
 //! PNG export and printing.
 
 use crate::geom::{self, Seg};
-use crate::model::{Dash, Document, Id, Page, Shape};
+use crate::model::{Dash, Document, Id, Page, Shape, LANE_BAND};
 use crate::route;
 use folio_kit::gfx::{self, sk, Color};
 use folio_kit::text::{Align, Text, TextStyle, VAlign};
@@ -258,6 +258,39 @@ pub fn draw_shape(pm: &mut dyn Surface, doc: &Document, s: &Shape, text: &mut Te
                 let y = s.h - (s.h * 0.035).max(3.0) * 2.0 - lay.height / 2.0 - (s.w.min(s.h) * 0.05).max(4.0) * 0.4;
                 for p in text.outlines(&s.text, &st, Some(s.w)) {
                     pm.fill(&p, st.color, op, xf.pre_translate(0.0, y));
+                }
+            }
+            draw_votes(pm, s, text, view);
+            return;
+        }
+        "lane" => {
+            // the lane: its body, the title band down the left (or along the top), and the title
+            let v = s.lane_vertical();
+            let rect = [Seg::M(0.0, 0.0), Seg::L(s.w, 0.0), Seg::L(s.w, s.h), Seg::L(0.0, s.h), Seg::Z];
+            fill_segs(pm, &rect, s.style.fill, op, xf);
+            let band = if v {
+                [Seg::M(0.0, 0.0), Seg::L(s.w, 0.0), Seg::L(s.w, LANE_BAND), Seg::L(0.0, LANE_BAND), Seg::Z]
+            } else {
+                [Seg::M(0.0, 0.0), Seg::L(LANE_BAND, 0.0), Seg::L(LANE_BAND, s.h), Seg::L(0.0, s.h), Seg::Z]
+            };
+            fill_segs(pm, &band, s.style.fill.mix(s.style.line, 0.35), op, xf);
+            let st = stroke(s.style.width.max(1.0), s.style.dash);
+            stroke_segs(pm, &band, s.style.line, op, &st, xf);
+            stroke_segs(pm, &rect, s.style.line, op, &st, xf);
+            if !hide_text && !s.text.is_empty() {
+                let ts = TextStyle { size: 13.0, bold: true, color: s.tstyle.color, family: s.tstyle.family.clone(), align: Align::Center, ..Default::default() };
+                let along = if v { s.w } else { s.h };
+                let lay = text.layout(&s.text, &ts, Some(along));
+                // a lane running across the page has its title turned on its side, as Visio draws it
+                let inner = if v {
+                    xf.pre_translate(0.0, (LANE_BAND - lay.height) / 2.0)
+                } else {
+                    xf.pre_translate(LANE_BAND / 2.0, s.h / 2.0)
+                        .pre_concat(crate::geom::rotation(-90.0))
+                        .pre_translate(-along / 2.0, -lay.height / 2.0)
+                };
+                for p in text.outlines(&s.text, &ts, Some(along)) {
+                    pm.fill(&p, ts.color, op, inner);
                 }
             }
             draw_votes(pm, s, text, view);

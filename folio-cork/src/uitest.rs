@@ -9,6 +9,17 @@ use std::path::PathBuf;
 
 type Step = Box<dyn FnMut(&mut CorkApp, &mut dyn Host, &mut Res) -> Result<(), String>>;
 
+/// Where a step saves a screenshot of its own (set when the test starts).
+static SHOTS: std::sync::Mutex<Option<PathBuf>> = std::sync::Mutex::new(None);
+
+fn save_shot(app: &mut CorkApp, r: &mut Res, name: &str) {
+    let dir = SHOTS.lock().ok().and_then(|d| d.clone());
+    if let Some(dir) = dir {
+        let pm = shot_into(app, r);
+        let _ = std::fs::write(dir.join(name), gfx::encode_png(&pm));
+    }
+}
+
 pub struct UiTest {
     steps: Vec<(String, Step)>,
     i: usize,
@@ -86,6 +97,9 @@ fn check(c: bool, msg: &str) -> Result<(), String> {
 impl UiTest {
     pub fn new(dir: PathBuf) -> UiTest {
         let _ = std::fs::create_dir_all(&dir);
+        if let Ok(mut g) = SHOTS.lock() {
+            *g = Some(dir.clone());
+        }
         let mut steps: Vec<(String, Step)> = vec![];
         macro_rules! step {
             ($name:expr, $f:expr) => {
@@ -251,6 +265,52 @@ impl UiTest {
             check(app.ed.pg().get(s.id).unwrap().votes == 2, "votes not counted")?;
             check(crate::mood::vote_results(&app.ed).contains("2 votes"), "results wrong")
         });
+        step!("swimlanes: add, fill, move and turn", |app: &mut CorkApp, h: &mut dyn Host, r: &mut Res| {
+            app.ed.add_page(false);
+            ribbon_click(app, h, r, "insert", "lane.add")?;
+            ribbon_click(app, h, r, "insert", "lane.add")?;
+            check(app.ed.lanes().len() == 2, &format!("{} lanes", app.ed.lanes().len()))?;
+            let lane = app.ed.lanes()[1].clone();
+            let (bx, by, bw, bh) = lane.lane_body();
+            let s = app.ed.make_shape("rect", bx + bw / 2.0, by + bh / 2.0);
+            let sid = app.ed.add_shape(s, "in the lane");
+            check(app.ed.inside_lane(lane.id) == vec![sid], "the shape isn't in the lane")?;
+            // dragging the lane's band carries the shape with it
+            app.fit();
+            let before = app.ed.pg().get(sid).unwrap().y;
+            let from = sp(app, (lane.x + 8.0, lane.cy()));
+            let to = sp(app, (lane.x + 8.0, lane.cy() + 120.0));
+            drag(app, h, r, from, to);
+            let moved = app.ed.pg().get(sid).unwrap().y - before;
+            check(moved > 60.0, &format!("the shape moved {moved} with its lane"))?;
+            ribbon_click(app, h, r, "insert", "lane.turn")?;
+            check(app.ed.lanes().iter().all(|l| l.lane_vertical()), "the lanes didn't turn")?;
+            check(app.ed.inside_lane(app.ed.lanes()[1].id) == vec![sid], "the shape left its lane when turned")?;
+            ribbon_click(app, h, r, "insert", "lane.delete")?;
+            check(app.ed.lanes().len() == 1 && app.ed.pg().get(sid).is_some(), "deleting the lane took its shape")?;
+            let _ = bh;
+            Ok(())
+        });
+        step!("shape data on a shape, in the pane and in the file", |app: &mut CorkApp, h: &mut dyn Host, r: &mut Res| {
+            ribbon_click(app, h, r, "view", "pane.data")?;
+            shot_into(app, r);
+            let rect = app.ed.pg().shapes.iter().find(|s| s.kind == "rect").map(|s| (s.cx(), s.cy())).ok_or("no rect on this page")?;
+            let p = sp(app, rect);
+            click(app, h, r, p.0, p.1, 1);
+            shot_into(app, r);
+            let add = app.side_hits.iter().find(|(id, _)| id == "prop-add").map(|(_, r2)| *r2).ok_or("no Add Property button")?;
+            click(app, h, r, add.cx(), add.cy(), 1);
+            let d = app.dialog.as_mut().ok_or("no shape data dialog")?;
+            d.set_text_for_test("name", "Part number");
+            d.set_text_for_test("value", "A-120");
+            key(app, h, r, Key::Enter, Mods::NONE);      // Enter is the dialog's first button, OK
+            let s = app.ed.first().ok_or("nothing selected")?;
+            check(s.prop("Part number") == "A-120", &format!("shape data is {:?}", s.props()))?;
+            save_shot(app, r, "ui-shape-data.png");
+            let del = app.side_hits.iter().find(|(id, _)| id == "prop:Part number:delete").map(|(_, r2)| *r2).ok_or("no delete button for the row")?;
+            click(app, h, r, del.cx(), del.cy(), 1);
+            check(app.ed.first().map(|s| s.props().is_empty()).unwrap_or(false), "the property is still there")
+        });
         step!("mood board: picture, palette, tidy", |app: &mut CorkApp, _h: &mut dyn Host, r: &mut Res| {
             app.ed.add_page(true);
             crate::templates::apply("mood", &mut app.ed);
@@ -355,6 +415,10 @@ impl UiTest {
         if self.i == 6 {
             let pm = shot_into(app, r);
             let _ = std::fs::write(self.dir.join("ui-shapes.png"), gfx::encode_png(&pm));
+        }
+        if name.starts_with("swimlanes") {
+            let pm = shot_into(app, r);
+            let _ = std::fs::write(self.dir.join("ui-swimlanes.png"), gfx::encode_png(&pm));
         }
         self.i += 1;
     }
