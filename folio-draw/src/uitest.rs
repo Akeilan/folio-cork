@@ -622,6 +622,10 @@ impl UiTest {
             crate::emb::place_picture(&mut app.doc, pw, ph, pic, "Flag").ok_or("not placed")?;
             check(app.doc.layers.len() == before + 1, "no picture layer")?;
             app.command("emb.trace", h);
+            check(app.dialog.is_some(), "Convert to shapes didn't ask how")?;
+            shot(app, r);
+            key(app, h, r, Key::Enter, Mods::NONE);
+            check(app.dialog.is_none(), "the Convert box stayed open")?;
             let made = app.doc.layers.len() - before - 1;
             check(made == 2, &format!("{made} colour layers from a two-colour picture"))?;
             check(app.doc.history().0.last().map(|l| *l == "Convert to shapes").unwrap_or(false), "not one undo step")?;
@@ -939,6 +943,56 @@ impl UiTest {
             key(app, h, r, Key::Escape, Mods::NONE);
             check(!app.full_screen && !h.is_fullscreen(), "Esc didn't come back")?;
             app.ribbon.collapsed = false;
+            Ok(())
+        });
+        step!("Convert to shapes asks how many colours and what to do with the background", |app: &mut DrawApp, h: &mut dyn Host, r: &mut Res| {
+            app.saved_for_test();
+            app.command("emb.new:0", h);
+            ev(app, h, r, Event::MouseMove { x: 1.0, y: 1.0 });
+            // four bands of colour on a white ground
+            let (pw, ph) = (200usize, 120usize);
+            let mut pic = vec![0u8; pw * ph * 4];
+            let bands: [[u8; 4]; 4] = [[220, 30, 40, 255], [30, 120, 220, 255], [250, 210, 40, 255], [40, 160, 70, 255]];
+            for y in 0..ph {
+                for x in 0..pw {
+                    let o = (y * pw + x) * 4;
+                    let c = if (20..100).contains(&y) { bands[(x * 4 / pw).min(3)] } else { [255, 255, 255, 255] };
+                    pic[o..o + 4].copy_from_slice(&c);
+                }
+            }
+            let before = app.doc.layers.len();
+            crate::emb::place_picture(&mut app.doc, pw, ph, pic, "Bands").ok_or("not placed")?;
+            app.command("emb.trace", h);
+            let d = app.dialog.as_mut().ok_or("the Convert box didn't open")?;
+            d.set_choice("colours", 1);
+            d.set_check_for_test("crop", true);
+            ev(app, h, r, Event::Text("2".into()));
+            key(app, h, r, Key::Enter, Mods::NONE);
+            check(app.dialog.is_none(), "the box stayed open")?;
+            check(app.trace["colours"] == 2 && app.trace["background"] == "remove" && app.trace["crop"] == true, &format!("asked for {}", app.trace))?;
+            let made = app.doc.layers.len() - before - 1;
+            check(made == 2, &format!("{made} layers for exactly two colours"))?;
+            // the same picture, keeping the background, is one colour more
+            key(app, h, r, Key::Char('z'), ctrl());
+            check(app.doc.layers.len() == before + 1, &format!("undo left {} layers", app.doc.layers.len()))?;
+            app.command("emb.trace", h);
+            let d = app.dialog.as_mut().ok_or("it didn't reopen")?;
+            d.set_choice("background", 1);
+            key(app, h, r, Key::Enter, Mods::NONE);
+            let kept = app.doc.layers.len() - before - 1;
+            check(kept == made + 1, &format!("{kept} layers with the background stitched, {made} without"))?;
+            key(app, h, r, Key::Char('z'), ctrl());
+            app.command("emb.trace", h);
+            let d = app.dialog.as_mut().ok_or("it didn't reopen")?;
+            d.set_choice("background", 0);
+            key(app, h, r, Key::Enter, Mods::NONE);
+            // asking again offers back what was asked for last time
+            app.command("emb.trace", h);
+            let d = app.dialog.as_ref().ok_or("it didn't reopen")?;
+            check(d.choice_index("colours") == 1 && d.value("count") == "2", &format!("count {:?}", d.value("count")))?;
+            check(d.checked("crop"), "it forgot the crop")?;
+            key(app, h, r, Key::Escape, Mods::NONE);
+            app.trace = serde_json::json!({});
             Ok(())
         });
         step!("the picture can go to the desktop's background or into an email", |app: &mut DrawApp, h: &mut dyn Host, r: &mut Res| {
