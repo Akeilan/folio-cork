@@ -473,7 +473,12 @@ pub fn write(doc: &Document) -> Result<Vec<u8>, String> {
     let mut buf = std::io::Cursor::new(Vec::new());
     {
         let mut z = zip::ZipWriter::new(&mut buf);
-        let opt: zip::write::SimpleFileOptions = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        // The host system is written into every zip entry, and the crate takes it from whatever
+        // machine is running: say it outright, so a drawing saved on Linux, Windows or a Pi is
+        // the same file byte for byte (X3-12).
+        let opt: zip::write::SimpleFileOptions = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated)
+            .system(zip::System::Dos);
         let mut put = |z: &mut zip::ZipWriter<&mut std::io::Cursor<Vec<u8>>>, name: &str, data: &[u8]| -> Result<(), String> {
             z.start_file(name, opt).map_err(|e| e.to_string())?;
             z.write_all(data).map_err(|e| e.to_string())
