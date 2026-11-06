@@ -249,6 +249,57 @@ impl Path {
         b.finish()
     }
 
+    /// The path as closed polygons: curves cut into straight pieces no further
+    /// than `tol` from the curve. For fitting text round a shape.
+    pub fn flatten(&self, tol: f64) -> Vec<Vec<(f64, f64)>> {
+        let mut out: Vec<Vec<(f64, f64)>> = Vec::new();
+        let mut cur: Vec<(f64, f64)> = Vec::new();
+        let mut at = (0.0, 0.0);
+        for c in &self.cmds {
+            match *c {
+                Cmd::Move(x, y) => {
+                    if cur.len() > 2 {
+                        out.push(std::mem::take(&mut cur));
+                    } else {
+                        cur.clear();
+                    }
+                    cur.push((x, y));
+                    at = (x, y);
+                }
+                Cmd::Line(x, y) => {
+                    cur.push((x, y));
+                    at = (x, y);
+                }
+                Cmd::Curve(x1, y1, x2, y2, x3, y3) => {
+                    let d = ((x3 - at.0).abs() + (y3 - at.1).abs() + (x1 - at.0).abs() + (y1 - at.1).abs()).max(1.0);
+                    let n = ((d / tol.max(0.01)).dpow(0.5).ceil() as usize).clamp(3, 48);
+                    for i in 1..=n {
+                        let t = i as f64 / n as f64;
+                        let u = 1.0 - t;
+                        let x = u * u * u * at.0 + 3.0 * u * u * t * x1 + 3.0 * u * t * t * x2 + t * t * t * x3;
+                        let y = u * u * u * at.1 + 3.0 * u * u * t * y1 + 3.0 * u * t * t * y2 + t * t * t * y3;
+                        cur.push((x, y));
+                    }
+                    at = (x3, y3);
+                }
+                Cmd::Close => {
+                    if cur.len() > 2 {
+                        let first = cur[0];
+                        cur.push(first);
+                        out.push(std::mem::take(&mut cur));
+                        at = first;
+                    } else {
+                        cur.clear();
+                    }
+                }
+            }
+        }
+        if cur.len() > 2 {
+            out.push(cur);
+        }
+        out
+    }
+
     pub fn is_empty(&self) -> bool {
         self.cmds.is_empty()
     }
@@ -272,9 +323,27 @@ impl Path {
     }
 }
 
+/// Somewhere a drawing can be written down as it is made: an exporter that
+/// wants the paths and the glyphs themselves, not the pixels.
+pub trait Sink {
+    fn save(&mut self) {}
+    fn restore(&mut self) {}
+    fn clip(&mut self, _path: &Path, _even_odd: bool) {}
+    fn fill(&mut self, path: &Path, src: &Source, even_odd: bool);
+    #[allow(clippy::too_many_arguments)]
+    fn stroke(&mut self, path: &Path, src: &Source, width: f64, dash: &[f64], offset: f64, cap: sk::LineCap,
+              join: sk::LineJoin);
+    /// Glyphs in surface coordinates: the font, the size and the places, with
+    /// the transform that was in force (so the exporter can turn text too).
+    fn glyphs(&mut self, font: &glyphs::FontRef, size: f64, xscale: f64, run: &[(u16, f64, f64)], xf: &Matrix,
+              src: &Source);
+    fn image(&mut self, pm: &sk::Pixmap, x: f64, y: f64, w: f64, h: f64, opacity: f64);
+}
+
 /// A surface to draw on.
 pub struct Cx<'a> {
     pm: &'a mut sk::Pixmap,
+    sink: Option<&'a mut dyn Sink>,
     st: State,
     stack: Vec<State>,
     path: Path,
@@ -287,7 +356,16 @@ pub struct Cx<'a> {
 
 impl<'a> Cx<'a> {
     pub fn new(pm: &'a mut sk::Pixmap, glyphs: &'a mut Glyphs) -> Cx<'a> {
-        Cx { pm, st: State::default(), stack: Vec::new(), path: Path::default(), start: None, glyphs, scaled: HashMap::new() }
+        Cx { pm, sink: None, st: State::default(), stack: Vec::new(), path: Path::default(), start: None, glyphs,
+             scaled: HashMap::new() }
+    }
+
+    /// A surface that also writes down what it draws. The pixels are still
+    /// drawn, so a one-pixel picture is enough when only the writing matters.
+    pub fn recording(pm: &'a mut sk::Pixmap, glyphs: &'a mut Glyphs, sink: &'a mut dyn Sink) -> Cx<'a> {
+        let mut cx = Cx::new(pm, glyphs);
+        cx.sink = Some(sink);
+        cx
     }
 
     pub fn width(&self) -> u32 {
@@ -300,11 +378,17 @@ impl<'a> Cx<'a> {
 
     pub fn save(&mut self) {
         self.stack.push(self.st.clone());
+        if let Some(s) = self.sink.as_mut() {
+            s.save();
+        }
     }
 
     pub fn restore(&mut self) {
         if let Some(s) = self.stack.pop() {
             self.st = s;
+        }
+        if let Some(s) = self.sink.as_mut() {
+            s.restore();
         }
     }
 
@@ -568,6 +652,9 @@ impl<'a> Cx<'a> {
     }
 
     pub fn fill_preserve(&mut self) {
+        if let Some(s) = self.sink.as_mut() {
+            s.fill(&self.path, &self.st.src, self.st.even_odd);
+        }
         let Some(path) = self.path.build() else { return };
         let rule = if self.st.even_odd { sk::FillRule::EvenOdd } else { sk::FillRule::Winding };
         let src = self.st.src.clone();
@@ -581,6 +668,12 @@ impl<'a> Cx<'a> {
     }
 
     pub fn stroke_preserve(&mut self) {
+        if let Some(s) = self.sink.as_mut() {
+            let k = self.st.xf.scale();
+            s.stroke(&self.path, &self.st.src, self.st.line_width * k,
+                     &self.st.dash.iter().map(|d| d * k).collect::<Vec<_>>(), self.st.dash_offset * k,
+                     self.st.cap, self.st.join);
+        }
         let Some(path) = self.path.build() else { return };
         let mut st = sk::Stroke::default();
         let k = self.st.xf.scale();
@@ -603,6 +696,17 @@ impl<'a> Cx<'a> {
     }
 
     pub fn paint_with_alpha(&mut self, alpha: f64) {
+        if self.sink.is_some() {
+            // the whole of what the clip allows, in surface coordinates
+            let (w, h) = (self.pm.width() as f64, self.pm.height() as f64);
+            let whole = Path {
+                cmds: vec![Cmd::Move(0.0, 0.0), Cmd::Line(w, 0.0), Cmd::Line(w, h), Cmd::Line(0.0, h), Cmd::Close],
+            };
+            let src = self.st.src.clone();
+            if let Some(s) = self.sink.as_mut() {
+                s.fill(&whole, &src, false);
+            }
+        }
         let (w, h) = (self.pm.width() as f32, self.pm.height() as f32);
         let Some(r) = sk::Rect::from_xywh(0.0, 0.0, w, h) else { return };
         let src = self.st.src.clone();
@@ -612,6 +716,9 @@ impl<'a> Cx<'a> {
 
     /// Narrow what can be drawn to the path (and keep the path).
     pub fn clip_preserve(&mut self) {
+        if let Some(s) = self.sink.as_mut() {
+            s.clip(&self.path, self.st.even_odd);
+        }
         let Some(path) = self.path.build() else { return };
         let rule = if self.st.even_odd { sk::FillRule::EvenOdd } else { sk::FillRule::Winding };
         let mut m = match &self.st.clip {
@@ -668,6 +775,9 @@ impl<'a> Cx<'a> {
         let b = self.st.xf.apply(x + w, y + h);
         let (x0, y0) = (a.0.min(b.0), a.1.min(b.1));
         let (dw, dh) = ((b.0 - a.0).abs(), (b.1 - a.1).abs());
+        if let Some(s) = self.sink.as_mut() {
+            s.image(img, x0, y0, dw, dh, opacity);
+        }
         let sx = dw as f32 / img.width() as f32;
         let sy = dh as f32 / img.height() as f32;
         let mut paint = sk::PixmapPaint::default();
@@ -692,6 +802,12 @@ impl<'a> Cx<'a> {
     /// The same, with the glyphs squeezed or stretched sideways about their own
     /// origin (character scaling).
     pub fn show_glyphs_x(&mut self, font: &glyphs::FontRef, size: f64, xscale: f64, run: &[(u16, f64, f64)]) {
+        if self.sink.is_some() {
+            let (xf, src) = (self.st.xf, self.st.src.clone());
+            if let Some(s) = self.sink.as_mut() {
+                s.glyphs(font, size, xscale, run, &xf, &src);
+            }
+        }
         let mut cmds: Vec<Cmd> = Vec::new();
         for (gid, x, y) in run {
             let Some(p) = self.glyphs.outline(font, *gid) else { continue };
@@ -768,6 +884,35 @@ impl<'a> Cx<'a> {
         let m = Matrix::new(1.0, 0.0, 0.0, 1.0, dx, dy).then(&self.st.xf);
         let t = sk::Transform::from_row(m.xx as f32, m.yx as f32, m.xy as f32, m.yy as f32, m.x0 as f32, m.y0 as f32);
         let Some(tp) = p.clone().transform(t) else { return };
+        if self.sink.is_some() {
+            // the exporter wants the shape itself, not the pixels
+            let mut cmds = Vec::new();
+            for seg in tp.segments() {
+                match seg {
+                    sk::PathSegment::MoveTo(p) => cmds.push(Cmd::Move(p.x as f64, p.y as f64)),
+                    sk::PathSegment::LineTo(p) => cmds.push(Cmd::Line(p.x as f64, p.y as f64)),
+                    sk::PathSegment::QuadTo(a, b) => {
+                        let from = match cmds.last() {
+                            Some(Cmd::Move(x, y)) | Some(Cmd::Line(x, y)) => (*x, *y),
+                            Some(Cmd::Curve(.., x, y)) => (*x, *y),
+                            _ => (a.x as f64, a.y as f64),
+                        };
+                        let (cx, cy) = (a.x as f64, a.y as f64);
+                        let (px, py) = (b.x as f64, b.y as f64);
+                        cmds.push(Cmd::Curve(from.0 + 2.0 / 3.0 * (cx - from.0), from.1 + 2.0 / 3.0 * (cy - from.1),
+                                             px + 2.0 / 3.0 * (cx - px), py + 2.0 / 3.0 * (cy - py), px, py));
+                    }
+                    sk::PathSegment::CubicTo(a, b, c) => cmds.push(Cmd::Curve(a.x as f64, a.y as f64, b.x as f64,
+                                                                             b.y as f64, c.x as f64, c.y as f64)),
+                    sk::PathSegment::Close => cmds.push(Cmd::Close),
+                }
+            }
+            let path = Path { cmds };
+            let src = self.st.src.clone();
+            if let Some(s) = self.sink.as_mut() {
+                s.fill(&path, &src, false);
+            }
+        }
         let src = self.st.src.clone();
         let paint = paint_of(&src, 1.0);
         self.pm.fill_path(&tp, &paint, sk::FillRule::Winding, sk::Transform::identity(), self.st.clip.as_deref());

@@ -538,3 +538,15 @@ fn set(cr: &mut Cx, c: u32, a: f64) {
     cr.set_source_rgba(((c >> 16) & 255) as f64 / 255.0, ((c >> 8) & 255) as f64 / 255.0, (c & 255) as f64 / 255.0, a);
 }
 
+
+/// A shape's outline as closed polygons in a w by h box: what text flows
+/// round when it is set to follow the shape.
+pub fn polygons(shape: &Shape, w: f64, h: f64) -> Vec<Vec<(f64, f64)>> {
+    let Some(mut pm) = folio_kit::gfx::sk::Pixmap::new(1, 1) else { return Vec::new() };
+    let mut glyphs = folio_canvas::Glyphs::new();
+    let mut cx = Cx::new(&mut pm, &mut glyphs);
+    if !path(&mut cx, shape, w, h) {
+        return Vec::new();
+    }
+    cx.copy_path().flatten(0.25)
+}

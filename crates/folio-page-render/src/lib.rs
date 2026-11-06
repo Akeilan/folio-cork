@@ -13,8 +13,12 @@ pub mod fonts;
 pub mod math;
 pub mod metafile;
 pub mod page;
+pub mod pdf;
 pub mod pictures;
 pub mod shapes;
 
 pub use folio_canvas::{Cx, Glyphs};
-pub use page::{render_page_image, Overlay, Renderer, RevMarks};
+pub use pdf::{export_pdf, export_pdf_with, pdf_bytes, PdfOptions};
+pub use page::{enter_frame, frame_to_page, page_to_frame, render_page_image, stroke_border, Overlay,
+               Renderer, RevMarks};
+pub use folio_canvas;

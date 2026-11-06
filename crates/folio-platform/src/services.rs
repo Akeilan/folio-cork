@@ -39,6 +39,24 @@ pub fn font_dirs() -> Vec<PathBuf> {
     v
 }
 
+/// Where an app's own files are kept: a folder of that name beside the
+/// executable, `../share/<app>` from it (the installed layout), and the
+/// system's own share folder. Only the ones that exist.
+pub fn data_dirs(app: &str) -> Vec<PathBuf> {
+    let mut v = Vec::new();
+    if let Ok(exe) = std::env::current_exe() {
+        v.push(exe.with_file_name(app));
+        if let Some(p) = exe.parent().and_then(|p| p.parent()) {
+            v.push(p.join("share").join(app));
+        }
+    }
+    v.push(PathBuf::from("/usr/share").join(app));
+    v.push(PathBuf::from("/usr/local/share").join(app));
+    v.retain(|d| d.is_dir());
+    v.dedup();
+    v
+}
+
 /// A folder for this process's temporary files.
 pub fn temp_dir() -> PathBuf {
     std::env::temp_dir()

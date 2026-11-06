@@ -1,0 +1,15 @@
+[package]
+name = "folio-page-editor"
+version = "0.1.0"
+edition = "2021"
+description = "Editing a Folio Page document: the caret, selections, commands and undo over the document engine"
+
+[dependencies]
+folio-page-engine = { version = "0.1.0", path = "../folio-page-engine" }
+folio-page-render = { version = "0.1.0", path = "../folio-page-render" }
+folio-kit = { version = "0.3.0", path = "../folio-kit" }
+folio-canvas = { version = "0.1.0", path = "../folio-canvas" }
+folio-math = { version = "0.3.0", path = "../folio-math" }
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+geo = { version = "0.28", default-features = false }
+regex = { version = "1.10", default-features = false, features = ["std", "unicode", "perf"] }

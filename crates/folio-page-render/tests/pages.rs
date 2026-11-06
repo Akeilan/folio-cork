@@ -117,3 +117,31 @@ fn marks() {
         return;
     }
 }
+
+#[test]
+fn a_document_becomes_a_pdf() {
+    std::thread::Builder::new().stack_size(64 << 20).spawn(pdf).unwrap().join().unwrap();
+}
+
+fn pdf() {
+    let paths = docs(40);
+    let mut fonts = FontCache::new();
+    for p in &paths {
+        let Ok(mut doc) = Document::open_path(&p.to_string_lossy()) else { continue };
+        let layout = folio_page_engine::paginate::layout_document(&mut doc, &mut fonts);
+        if layout.pages.len() < 2 {
+            continue;
+        }
+        let once = || folio_page_render::pdf_bytes(&layout, &mut FontCache::new(), &Default::default()).unwrap();
+        let bytes = once();
+        assert!(bytes.starts_with(b"%PDF-"), "{:?}: not a PDF", p.file_name().unwrap());
+        assert!(bytes.ends_with(b"%%EOF\n") || bytes.ends_with(b"%%EOF"), "no end marker");
+        let text = String::from_utf8_lossy(&bytes);
+        let pages = text.matches("/Type /Page\n").count() + text.matches("/Type /Page ").count();
+        assert!(pages >= layout.pages.len(), "{pages} page objects for {} pages", layout.pages.len());
+        assert!(text.contains("/FontFile2"), "no font embedded");
+        assert!(text.contains("/ToUnicode"), "nothing to copy the words out by");
+        assert_eq!(bytes.len(), once().len(), "the same document gave a different PDF");
+        return;
+    }
+}
