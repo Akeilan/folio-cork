@@ -1,0 +1,18 @@
+[package]
+name = "folio-page"
+version = "0.1.0"
+edition = "2021"
+description = "Folio Page: the word processor, on the portable base"
+
+[[bin]]
+name = "folio-page"
+path = "src/main.rs"
+
+[dependencies]
+folio-canvas = { version = "0.1.0", path = "../crates/folio-canvas" }
+folio-kit = { version = "0.3.0", path = "../crates/folio-kit" }
+folio-math = { version = "0.3.0", path = "../crates/folio-math" }
+folio-page-editor = { version = "0.1.0", path = "../crates/folio-page-editor" }
+folio-page-engine = { version = "0.1.0", path = "../crates/folio-page-engine" }
+folio-page-render = { version = "0.1.0", path = "../crates/folio-page-render" }
+folio-platform = { version = "0.3.0", path = "../crates/folio-platform" }

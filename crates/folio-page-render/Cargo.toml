@@ -10,3 +10,6 @@ folio-draw-engine = { version = "0.3.0", path = "../folio-draw-engine" }
 folio-kit = { version = "0.3.0", path = "../folio-kit" }
 folio-math = { version = "0.3.0", path = "../folio-math" }
 folio-page-engine = { version = "0.1.0", path = "../folio-page-engine" }
+miniz_oxide = "0.9.1"
+pdf-writer = "0.15.0"
+ttf-parser = "0.25"
