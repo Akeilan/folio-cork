@@ -14,7 +14,8 @@ if [ -z "${INSTALLED_ONLY:-}" ]; then
   echo "== portability rules (X3-12)"
   (cd $R && tools/check-portability.sh)
   echo "== unit tests (no display)"
-  (cd $R && cargo test -q --workspace 2>&1 | grep -E "test result: FAILED|panicked"; echo "  $(cd $R && cargo test -q --workspace 2>&1 | grep -c 'test result: ok') test groups ok")
+  # once, into a file: running the whole workspace's tests twice doubles the wait
+  (cd $R && cargo test -q --release --no-fail-fast --workspace > /tmp/draw-tests.log 2>&1; grep -E "test result: FAILED|panicked" /tmp/draw-tests.log; echo "  $(grep -c 'test result: ok' /tmp/draw-tests.log) test groups ok")
   echo "== window test (source): X and without a display"
   (cd $R && cargo build -q --release -p folio-draw && rm -rf /tmp/draw-ui-src && DISPLAY=:$XD WAYLAND_DISPLAY= timeout 300 ./target/release/folio-draw --ui-test /tmp/draw-ui-src 2>&1 | grep -E "^FAIL|passed")
   (cd $R && rm -rf /tmp/draw-hl-src && DISPLAY= WAYLAND_DISPLAY= timeout 300 ./target/release/folio-draw --ui-test /tmp/draw-hl-src --headless | grep -E "^FAIL|passed" | sed 's/^/no display: /')

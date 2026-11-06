@@ -1947,6 +1947,9 @@ impl DrawApp {
                 if self.doc.clip_extract() {
                     let img = Image { w: self.doc.clip_w as u32, h: self.doc.clip_h as u32, rgba: self.doc.clip.clone() };
                     host.set_clipboard_image(&img);
+                    if !host.clipboard_images() {
+                        self.flash("This desktop doesn't take pictures on the clipboard yet, so it is only kept here.");
+                    }
                     if id == "cut" && had_sel && self.doc.sel_delete() {
                         self.doc.label_last("Cut");
                     }
@@ -1955,13 +1958,23 @@ impl DrawApp {
             "paste" => {
                 if let Some(img) = host.clipboard_image() {
                     self.paste_rgba(img.w as usize, img.h as usize, img.rgba);
-                } else if let Some(t) = host.clipboard_text() {
+                } else if let Some(t) = host.clipboard_text().filter(|t| std::path::Path::new(t.trim()).is_file()) {
+                    // a file name on the clipboard: the picture it names
                     let p = PathBuf::from(t.trim());
-                    if let Ok(b) = std::fs::read(&p) {
-                        if let Ok((w, h, px)) = files::decode(&b) {
-                            self.paste_rgba(w, h, px);
-                        }
+                    match std::fs::read(&p).map_err(|e| e.to_string()).and_then(|b| files::decode(&b).map_err(|e| e.to_string())) {
+                        Ok((w, h, px)) => self.paste_rgba(w, h, px),
+                        Err(_) => self.flash("The clipboard doesn't hold a picture."),
                     }
+                } else if !host.clipboard_images() {
+                    // the picture we copied ourselves is still here, even if the desktop wouldn't take it
+                    if self.doc.clip_w > 0 && !self.doc.clip.is_empty() {
+                        let (w, h, px) = (self.doc.clip_w, self.doc.clip_h, self.doc.clip.clone());
+                        self.paste_rgba(w, h, px);
+                    } else {
+                        self.flash("This desktop doesn't take pictures on the clipboard yet.");
+                    }
+                } else {
+                    self.flash("The clipboard doesn't hold a picture.");
                 }
             }
             "delete" if self.tool == Tool::EmbSelect && self.emb_sel.is_some() => self.delete_emb_object(),
@@ -2136,7 +2149,16 @@ impl DrawApp {
                 }
             }
             "paste-layer" => {
-                if let Some(img) = host.clipboard_image() {
+                // the desktop's clipboard, or the picture this app copied when the desktop
+                // wouldn't take one (Wayland)
+                let img = host.clipboard_image().or_else(|| {
+                    (!host.clipboard_images() && self.doc.clip_w > 0 && !self.doc.clip.is_empty()).then(|| Image {
+                        w: self.doc.clip_w as u32,
+                        h: self.doc.clip_h as u32,
+                        rgba: self.doc.clip.clone(),
+                    })
+                });
+                if let Some(img) = img {
                     self.doc.commit_float();
                     let n = self.doc.layers.len() + 1;
                     self.doc.layer_add(&format!("Layer {n}"));

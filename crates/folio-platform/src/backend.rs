@@ -16,6 +16,8 @@ struct WinHost {
     window: Rc<Window>,
     start: Instant,
     clipboard: Option<arboard::Clipboard>,
+    /// What the app asked for: the compositor may take a moment to do it.
+    fullscreen: bool,
     /// On Wayland, text goes through the compositor's own clipboard (arboard only reaches the
     /// X11 one, which a session without XWayland doesn't have).
     #[cfg(all(unix, not(target_os = "macos")))]
@@ -80,10 +82,22 @@ impl Host for WinHost {
         self.window.is_maximized()
     }
     fn set_fullscreen(&mut self, on: bool) {
+        self.fullscreen = on;
         self.window.set_fullscreen(if on { Some(winit::window::Fullscreen::Borderless(None)) } else { None });
     }
     fn is_fullscreen(&self) -> bool {
-        self.window.fullscreen().is_some()
+        // what was asked for: Wayland compositors answer the window itself only once they have
+        // reconfigured it, which is after this call
+        self.fullscreen || self.window.fullscreen().is_some()
+    }
+    fn clipboard_images(&self) -> bool {
+        // arboard reaches the X11 clipboard; under Wayland only words go through (the compositor's
+        // own clipboard), so a picture can't be copied there yet
+        #[cfg(all(unix, not(target_os = "macos")))]
+        if self.wl_clip.is_some() {
+            return false;
+        }
+        true
     }
     fn close(&mut self) {
         self.want_close = true;
@@ -321,6 +335,7 @@ impl<A: App> ApplicationHandler for Runner<A> {
             window: window.clone(),
             start: Instant::now(),
             clipboard: None,
+            fullscreen: false,
             #[cfg(all(unix, not(target_os = "macos")))]
             wl_clip: wayland_clipboard(&window),
             want_redraw: true,
