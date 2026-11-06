@@ -315,6 +315,48 @@ pub fn add_shape_layer(doc: &mut Doc, name: &str, spec: &Value) -> usize {
     doc.text_layer_add(name, &spec.to_string(), 0, 0, w, h, &block, w * 4)
 }
 
+/// A hoop by name ("4x4", "100x100mm") or the first one. Returns its index and size in mm.
+pub fn hoop_from(size: &str) -> Option<(usize, f32, f32)> {
+    let t = size.to_lowercase().replace('\u{d7}', "x").replace(' ', "");
+    if let Some(i) = HOOPS.iter().position(|h| h.0.to_lowercase() == t) {
+        return Some((i, HOOPS[i].1, HOOPS[i].2));
+    }
+    let mm = t.strip_suffix("mm");
+    let (a, b) = t.trim_end_matches("mm").split_once('x')?;
+    let (w, h) = (a.parse::<f32>().ok()?, b.parse::<f32>().ok()?);
+    let (w, h) = if mm.is_some() { (w, h) } else { (w * 25.4, h * 25.4) };
+    // the nearest hoop that holds it
+    let i = HOOPS.iter().position(|hp| hp.1 >= w - 0.5 && hp.2 >= h - 0.5)?;
+    Some((i, HOOPS[i].1, HOOPS[i].2))
+}
+
+/// A picture turned into an embroidery design from the command line: the whole picture fitted to
+/// the hoop (or its border trimmed first), converted, and planned. Returns the plan.
+pub fn design_from_picture(doc: &mut Doc, hoop: usize, colours: u64, threads: &str, crop: bool) -> Result<plan::Plan, String> {
+    let mut s = default_settings(hoop);
+    s["threads"] = json!(threads);
+    let (cw, ch) = canvas_px(&s);
+    let px = doc.flatten_rgba();
+    let (w, h) = (doc.w, doc.h);
+    let pl = folio_draw_engine::emb::convert::place(&folio_draw_engine::emb::raster::Img { w, h, px }, cw, ch, PX_PER_MM, 2.5, crop);
+    let mut out = Doc::empty(cw, ch);
+    out.push_layer("Background", vec![0u8; cw * ch * 4], 1.0, true, 0);
+    out.emb = s.to_string();
+    out.float_from_rgba(cw, ch, pl.img.px, 0, 0);
+    out.commit_float();
+    let mut spec = json!({"kind": PICTURE_KIND, "upscale": pl.upscale, "source": "picture", "fitted": true});
+    if let Some(b) = pl.bg {
+        spec["bg"] = json!(b);
+    }
+    let i = out.active;
+    let text = spec.to_string();
+    out.text_layer_set(i, &text, None);
+    let params = json!({"colours": colours, "background": "remove", "crop": false, "smoothing": 1, "edge_radius": 2, "min_area": 1.5});
+    convert_layer(&mut out, &params)?;
+    *doc = out;
+    make_plan(doc).ok_or_else(|| "The design came out empty.".to_string())
+}
+
 /// The density map as straight-alpha RGBA the size of the picture: 1 or 2 thread layers green,
 /// 3 amber, 4 or more orange to red. Nothing where no thread covers.
 pub fn density_rgba(doc: &Doc, p: &plan::Plan) -> Option<(usize, usize, Vec<u8>)> {
@@ -670,5 +712,50 @@ pub fn move_object(o: &mut Value, dx: f32, dy: f32) {
             shift(&mut plain);
             o["rings_plain"] = plain;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_hoop_can_be_named_or_measured() {
+        assert_eq!(hoop_from("4x4").map(|h| h.0), Some(0));
+        assert_eq!(hoop_from("4X4").map(|h| h.0), Some(0));
+        // inches and millimetres both find the hoop that holds them
+        let (i, w, h) = hoop_from("100x100mm").expect("100 mm");
+        assert!(w >= 100.0 && h >= 100.0, "{i}: {w} x {h}");
+        assert!(hoop_from("5x7").map(|h| h.0).unwrap_or(0) > 0, "5x7 is a bigger hoop than 4x4");
+        assert_eq!(hoop_from("nonsense"), None);
+        assert_eq!(hoop_from("40x40"), None, "nothing holds a 40-inch design");
+    }
+
+    #[test]
+    fn a_picture_becomes_a_planned_design() {
+        // four bands of colour on white
+        let (w, h) = (120usize, 80usize);
+        let mut px = vec![255u8; w * h * 4];
+        let bands: [[u8; 4]; 4] = [[220, 30, 40, 255], [30, 120, 220, 255], [250, 210, 40, 255], [40, 160, 70, 255]];
+        for y in 10..70 {
+            for x in 0..w {
+                let o = (y * w + x) * 4;
+                px[o..o + 4].copy_from_slice(&bands[(x * 4 / w).min(3)]);
+            }
+        }
+        let mut doc = Doc::empty(w, h);
+        doc.push_layer("Picture", px, 1.0, true, 0);
+        let plan = design_from_picture(&mut doc, 0, 4, "brother", false).expect("no plan");
+        assert_eq!(plan.blocks.len(), 4, "four colours");
+        assert!(plan.stitch_count() > 500, "{} stitches", plan.stitch_count());
+        let (x0, y0, x1, y1) = plan.bounds();
+        // it fits the 4x4 hoop (101.6 mm) with a margin
+        assert!(x1 - x0 < 101.6 && y1 - y0 < 101.6, "{:.1} x {:.1} mm", x1 - x0, y1 - y0);
+        assert!(x1 - x0 > 50.0, "it wasn't enlarged to the hoop: {:.1} mm", x1 - x0);
+        // every thread is a named chart thread
+        assert!(plan.blocks.iter().all(|b| !b.thread.name.is_empty()), "an unnamed thread");
+        // and it writes a machine file
+        let bytes = write(&plan, "pes", "Bands", "20261106").expect("no pes");
+        assert_eq!(&bytes[..8], b"#PES0060");
     }
 }

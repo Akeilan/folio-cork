@@ -27,6 +27,8 @@ if [ -z "${INSTALLED_ONLY:-}" ]; then
   fi
   echo "== window test (source, X)"
   (cd $R && DISPLAY=:$XD WAYLAND_DISPLAY= cargo run -q --release -p folio-cork -- --ui-test /tmp/cork-ui-src 2>&1 | grep -E "^FAIL|passed")
+  echo "== Folio Draw on the portable base (D3-06, not shipped yet): the command line"
+  (cd $R && ./target/release/folio-draw --embroider crates/folio-draw-engine/tests/data/bands.png -o $(mktemp -d)/draw-cli.pes --size 4x4 --colours 4 2>&1 | tail -1)
   echo "== Folio Draw on the portable base (D3-06, not shipped yet): window test on X and without a display"
   (cd $R && cargo build -q --release -p folio-draw && rm -rf /tmp/draw-ui && DISPLAY=:$XD WAYLAND_DISPLAY= timeout 300 ./target/release/folio-draw --ui-test /tmp/draw-ui 2>&1 | grep -E "^FAIL|passed"; rm -rf /tmp/draw-hl; DISPLAY= WAYLAND_DISPLAY= timeout 300 ./target/release/folio-draw --ui-test /tmp/draw-hl --headless | grep -E "^FAIL|passed" | sed 's/^/no display: /')
 fi
