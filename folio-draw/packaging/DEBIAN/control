@@ -1,0 +1,20 @@
+Package: folio-draw
+Version: 1.11.0
+Section: graphics
+Priority: optional
+Architecture: amd64
+Installed-Size: 20000
+Depends: libc6 (>= 2.35), libgcc-s1, libx11-6, libx11-xcb1, libxcursor1, libxi6, libxcb1, libxkbcommon0, libxkbcommon-x11-0, libwayland-client0, folio-fonts
+Recommends: cups-client, xdg-utils, fonts-dejavu-core
+Maintainer: Ron Shillings <ron.shillings@gmail.com>
+Description: pictures, with layers and machine embroidery
+ Folio Draw is a quick, uncluttered picture editor in the spirit of the classic
+ desktop paint program: pencil, brushes, shapes, text, fill, selections, crop,
+ resize and rotate, plus layers, blend modes and real transparency. It opens
+ and saves PNG, JPEG, BMP, GIF, WebP, TIFF, Windows icons, Photoshop PSD and
+ OpenRaster (.ora, which keeps the layers); an animated GIF or WebP opens with
+ one frame per layer. Embroidery: a picture becomes editable shapes with fill,
+ satin and running stitches, lettering from a font, a density view and a
+ stitch-out simulator, and saves for the machine as PES, DST, JEF, EXP, VP3,
+ XXX or PEC. Every codec and the embroidery planner are its own, with no image
+ library. Everything stays on this computer.

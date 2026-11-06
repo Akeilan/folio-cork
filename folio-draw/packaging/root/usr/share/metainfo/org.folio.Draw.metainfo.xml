@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>org.folio.Draw</id>
+  <name>Folio Draw</name>
+  <summary>Pictures, with layers and machine embroidery</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>LicenseRef-proprietary</project_license>
+  <description>
+    <p>Folio Draw is a quick, uncluttered picture editor: pencil, brushes, shapes, text, fill, selections,
+    crop, resize and rotate, with layers, blend modes and real transparency. It opens and saves PNG, JPEG,
+    BMP, GIF, WebP, TIFF, Windows icons, Photoshop PSD and OpenRaster. Embroidery turns a picture into
+    editable shapes and saves for the machine as PES, DST, JEF, EXP, VP3, XXX or PEC. Everything stays on
+    this computer.</p>
+  </description>
+  <launchable type="desktop-id">org.folio.Draw.desktop</launchable>
+  <provides><binary>folio-draw</binary></provides>
+  <releases><release version="1.11.0" date="2026-11-06"/></releases>
+</component>

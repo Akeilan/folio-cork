@@ -76,11 +76,19 @@ pub fn load(icons: &mut Icons) {
     }
 }
 
-/// The app icon in full colour, for the window and the desktop entry.
+/// The app icon in full colour, for the window, the desktop entry and packaging: Folio Draw's
+/// palette and brush, the same picture the GTK version ships.
 pub fn app_icon_svg() -> &'static str {
-    "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64' width='64' height='64'>\
-<rect x='6' y='6' width='52' height='52' rx='8' fill='#800000'/>\
-<rect x='12' y='12' width='40' height='40' rx='3' fill='#FFFFFF'/>\
-<path d='M18 44c6-14 12-4 18-16s10-4 10-4' fill='none' stroke='#2E75B6' stroke-width='4' stroke-linecap='round'/>\
-<circle cx='42' cy='40' r='6' fill='#F2B800'/></svg>"
+    "<svg xmlns='http://www.w3.org/2000/svg' width='256' height='256' viewBox='0 0 256 256'>\
+<defs><linearGradient id='bg' x1='0' y1='0' x2='0' y2='1'>\
+<stop offset='0' stop-color='#9a1010'/><stop offset='1' stop-color='#680000'/></linearGradient></defs>\
+<rect x='16' y='16' width='224' height='224' rx='44' fill='url(#bg)'/>\
+<path d='M128 52c-46 0-82 32-82 74 0 40 32 72 68 72 14 0 20-8 20-18 0-6-4-10-4-16 0-8 6-12 14-12h16c28 0 50-20 50-46 0-32-36-54-82-54z' fill='#ffffff'/>\
+<circle cx='92' cy='104' r='11' fill='#800000'/>\
+<circle cx='126' cy='84' r='11' fill='#800000' opacity='0.75'/>\
+<circle cx='162' cy='96' r='11' fill='#800000' opacity='0.5'/>\
+<circle cx='84' cy='142' r='11' fill='#800000' opacity='0.3'/>\
+<path d='M210 70l-58 70' stroke='#ffffff' stroke-width='10' stroke-linecap='round'/>\
+<path d='M148 136c-10 2-18 10-18 22 0 6-4 12-10 14 18 6 40-4 40-22 0-6-4-12-12-14z' fill='#ffd9d9' stroke='#800000' stroke-width='4'/>\
+</svg>"
 }

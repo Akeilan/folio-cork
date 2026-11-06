@@ -176,14 +176,12 @@ pub fn set_wallpaper(path: &Path) -> Result<(), String> {
         ("org.cinnamon.desktop.background", &["picture-uri"]),
         ("org.mate.background", &["picture-filename"]),
     ];
-    let mut tried = false;
     for (scheme, keys) in schemes {
         let known = Command::new("gsettings").args(["writable", scheme, keys[0]]).output();
         let Ok(o) = known else { continue };
         if !o.status.success() || !String::from_utf8_lossy(&o.stdout).trim().eq("true") {
             continue;
         }
-        tried = true;
         for key in keys {
             let value = if *key == "picture-filename" { path.display().to_string() } else { uri.clone() };
             let r = Command::new("gsettings").args([&"set", &scheme, key, value.as_str()]).status();
@@ -193,11 +191,7 @@ pub fn set_wallpaper(path: &Path) -> Result<(), String> {
         }
         return Ok(());
     }
-    Err(if tried {
-        "The desktop wouldn't take the picture as its background.".into()
-    } else {
-        "This desktop doesn't offer a way to set the background from a program.".to_string()
-    })
+    Err("This desktop doesn't offer a way to set the background from a program.".to_string())
 }
 
 /// Sockets: plain TCP and the address other computers on the network reach this one by.

@@ -15,9 +15,6 @@ STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT
 cp -a "$HERE/packaging/root/." "$STAGE/"
 install -D -m 755 "$BIN" "$STAGE/usr/bin/folio-cork"
-# The fonts that ship with Folio (X3-16), found from the executable at ../share/folio/fonts.
-mkdir -p "$STAGE/usr/share/folio/fonts"
-install -m 644 "$HERE"/fonts/*.ttf "$HERE"/fonts/LICENSE-*.txt "$STAGE/usr/share/folio/fonts/"
 "$BIN" --write-icon-svg /tmp/folio-cork-icon.svg
 install -D -m 644 /tmp/folio-cork-icon.svg "$STAGE/usr/share/icons/hicolor/scalable/apps/folio-cork.svg"
 for s in 16 24 32 48 64 128 256; do

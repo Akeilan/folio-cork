@@ -288,6 +288,8 @@ pub struct DrawApp {
     pm: Option<sk::Pixmap>,
     fitted: bool,
     pub test: Option<crate::uitest::UiTest>,
+    /// Draw's part of the suite's copy-and-paste chain (--clip-relay).
+    pub clip: Option<crate::clip::ClipRelay>,
     pub settings: crate::settings::Settings,
 }
 
@@ -379,6 +381,7 @@ impl DrawApp {
             pm: None,
             fitted: false,
             test: None,
+            clip: None,
             settings,
         }
         .with_settings()
@@ -597,6 +600,16 @@ impl DrawApp {
                         self.doc.set_active(next);
                         self.doc.mark_all();
                         self.playing = Some(self.now + self.frame_delay());
+                    }
+                }
+                if let Some(mut c) = self.clip.take() {
+                    let now = self.now;
+                    c.step(self, host, now);
+                    if c.done {
+                        self.code = c.code();
+                        self.exit = true;
+                    } else {
+                        self.clip = Some(c);
                     }
                 }
                 if let Some(mut t) = self.test.take() {
@@ -2222,7 +2235,7 @@ impl DrawApp {
                 let m = pg.margins;
                 self.dialog = Some(
                     Dialog::new("page-setup", "Page setup")
-                        .note(&crate::page::describe(&pg, self.doc.w, self.doc.h))
+                        .note(&format!("{} on {} paper", crate::page::describe(&pg, self.doc.w, self.doc.h), pg.paper_name()))
                         .choice("paper", "Paper", &papers, pg.paper)
                         .choice("orientation", "Orientation", &["Portrait", "Landscape"], pg.landscape as usize)
                         .text("margins", "Margins (mm: top, right, bottom, left)", &format!("{}, {}, {}, {}", m[0], m[1], m[2], m[3]))
@@ -4201,6 +4214,7 @@ impl CommandState for St {
         match id {
             "shape.fill" => self.shape_fill,
             "pane.layers" => self.layers,
+            "pane.history" => self.history,
             "view.grid" => self.grid,
             "view.rulers" => self.rulers,
             "frames" => self.frames,
@@ -4237,7 +4251,7 @@ impl folio_kit::platform::App for DrawApp {
         self.paint_into(pixels, w, h);
     }
     fn next_tick(&self) -> Option<Duration> {
-        if self.test.is_some() {
+        if self.test.is_some() || self.clip.is_some() {
             return Some(Duration::from_millis(60));
         }
         if let Some(due) = self.stitch_due {

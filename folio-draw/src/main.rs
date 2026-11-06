@@ -1,7 +1,9 @@
-//! Folio Draw on the portable base (D3-06). Until it matches the GTK version's tests, that one
-//! keeps shipping; this one is built and tested alongside it.
+//! Folio Draw on the portable base (D3-06). This is the version that ships: it matches what the
+//! GTK one did, down to the file formats and the shape-layer descriptions, so documents move
+//! between them.
 
 mod app;
+mod clip;
 mod emb;
 mod icons;
 mod letters;
@@ -138,6 +140,7 @@ fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut file = None;
     let mut ui_test: Option<PathBuf> = None;
+    let mut clip_dir: Option<PathBuf> = None;
     let mut headless = false;
     let mut i = 0;
     while i < args.len() {
@@ -166,6 +169,23 @@ fn main() {
                     std::process::exit(1);
                 }
                 return;
+            }
+            "--write-icon" => {
+                // Packaging: the app icon as a PNG of the given size.
+                let (Some(out), Some(size)) = (args.get(i + 1), args.get(i + 2).and_then(|s| s.parse::<u32>().ok())) else { std::process::exit(2) };
+                let pm = folio_kit::icons::render_svg(icons::app_icon_svg(), size, size).expect("icon");
+                std::fs::write(out, folio_kit::gfx::encode_png(&pm)).expect("write icon");
+                return;
+            }
+            "--write-icon-svg" => {
+                let Some(out) = args.get(i + 1) else { std::process::exit(2) };
+                std::fs::write(out, icons::app_icon_svg()).expect("write icon");
+                return;
+            }
+            "--clip-relay" => {
+                let Some(d) = args.get(i + 1) else { std::process::exit(2) };
+                clip_dir = Some(PathBuf::from(d));
+                i += 1;
             }
             "--ui-test" => {
                 let next = args.get(i + 1).filter(|a| !a.starts_with("--"));
@@ -199,6 +219,9 @@ fn main() {
         }
         a.settings = settings::Settings::default();
         a.test = Some(uitest::UiTest::new(d));
+    }
+    if let Some(d) = clip_dir {
+        a.clip = Some(clip::ClipRelay::new(d));
     }
     if headless {
         let mut frame = Vec::new();

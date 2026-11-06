@@ -1,10 +1,10 @@
 Package: folio-cork
-Version: 0.3.0
+Version: 0.3.1
 Section: graphics
 Priority: optional
 Architecture: amd64
 Installed-Size: 12000
-Depends: libc6 (>= 2.35), libgcc-s1, libx11-6, libx11-xcb1, libxcursor1, libxi6, libxcb1, libxkbcommon0, libxkbcommon-x11-0, libwayland-client0
+Depends: libc6 (>= 2.35), libgcc-s1, libx11-6, libx11-xcb1, libxcursor1, libxi6, libxcb1, libxkbcommon0, libxkbcommon-x11-0, libwayland-client0, folio-fonts
 Recommends: cups-client, xdg-utils, fonts-dejavu-core
 Suggests: libreoffice-draw
 Maintainer: Ron Shillings <ron.shillings@gmail.com>

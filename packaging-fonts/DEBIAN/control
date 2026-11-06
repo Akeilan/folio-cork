@@ -1,0 +1,14 @@
+Package: folio-fonts
+Version: 1.0.0
+Section: fonts
+Priority: optional
+Architecture: all
+Installed-Size: 4000
+Replaces: folio-cork (<< 0.3.1)
+Breaks: folio-cork (<< 0.3.1)
+Maintainer: Ron Shillings <ron.shillings@gmail.com>
+Description: the fonts that ship with Folio
+ Carlito, Liberation Serif and Liberation Mono, in Latin, Greek and Cyrillic.
+ Every Folio app on the portable base draws its documents from these, so a page
+ looks the same on any machine whatever else is installed. Installed under
+ /usr/share/folio/fonts, where the apps look for them.
