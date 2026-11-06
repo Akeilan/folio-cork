@@ -59,12 +59,51 @@ pub fn tabs() -> Vec<Tab> {
                 Group::new(
                     "Editing",
                     vec![
+                        I::large("find", "Find", "find").key("Ctrl+F").desc("Find words, and replace them."),
                         I::small("select-all", "Select All", "select-all").key("Ctrl+A"),
                         I::small("undo", "Undo", "undo").key("Ctrl+Z"),
                         I::small("redo", "Redo", "redo").key("Ctrl+Y"),
                     ],
                 ),
             ],
+        ),
+        Tab::new(
+            "insert",
+            "Insert",
+            "N",
+            vec![
+                Group::new(
+                    "Pages",
+                    vec![
+                        I::large("break-page", "Page Break", "break-page").key("Ctrl+Return"),
+                        I::small("break-column", "Column Break", "break-column"),
+                    ],
+                ),
+                Group::new("Tables", vec![I::large("table", "Table", "table").desc("A table of three rows and three columns.")]),
+                Group::new("Illustrations", vec![I::large("picture", "Picture", "picture").desc("A picture from a file.")]),
+                Group::new(
+                    "Header & Footer",
+                    vec![
+                        I::small("header", "Header", "header"),
+                        I::small("footer", "Footer", "footer"),
+                        I::small("page-number", "Page Number", "page-number"),
+                        I::small("body", "Back to the text", "body"),
+                    ],
+                ),
+            ],
+        ),
+        Tab::new(
+            "layout",
+            "Layout",
+            "P",
+            vec![Group::new(
+                "Page Setup",
+                vec![
+                    I::large("margins", "Margins", "margins").menu(),
+                    I::large("orientation", "Orientation", "orientation").menu(),
+                    I::large("paper", "Size", "paper").menu(),
+                ],
+            )],
         ),
         Tab::new(
             "view",
