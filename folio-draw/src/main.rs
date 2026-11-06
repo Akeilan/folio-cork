@@ -17,7 +17,121 @@ use std::path::PathBuf;
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 fn usage() {
-    println!("Usage: folio-draw [FILE]\n       folio-draw --ui-test [DIR] [--headless]\n       folio-draw --convert IN OUT\n       folio-draw --version");
+    println!(
+        "Usage: folio-draw [FILE]\n       folio-draw --ui-test [DIR] [--headless]\n       folio-draw --convert IN OUT\n{EMB_HELP}       folio-draw --version"
+    );
+}
+
+const EMB_HELP: &str = "       folio-draw --embroider PICTURE -o DESIGN.pes [--size 4x4] [--colours N]\n\
+                        \x20                              [--threads brother|exact] [--crop]\n\
+                        \x20        the output format follows the extension: .pes .dst .jef .exp .vp3 .xxx .pec\n\
+                        \x20        --size     a hoop (4x4, 5x7, 6x10, 8x8, 8x12) or millimetres (100x100mm)\n\
+                        \x20        --colours  exactly this many colours (the default works it out)\n\
+                        \x20        --threads  brother (the 63-colour chart, the default) or exact\n\
+                        \x20        --crop     trim the picture's border and fill the hoop\n";
+
+/// `--embroider`: a picture (or an embroidery document) turned into a machine file.
+fn embroider(args: &[String]) -> i32 {
+    let (mut src, mut out, mut size, mut colours, mut threads, mut crop) = (None, None, "4x4".to_string(), 0u64, "brother".to_string(), false);
+    let mut i = 0;
+    while i < args.len() {
+        let a = args[i].as_str();
+        let next = || args.get(i + 1).cloned();
+        match a {
+            "-o" | "--output" => match next() {
+                Some(v) => {
+                    out = Some(v);
+                    i += 1;
+                }
+                None => return bad("--output needs a file name"),
+            },
+            "--size" => match next() {
+                Some(v) => {
+                    size = v;
+                    i += 1;
+                }
+                None => return bad("--size needs a hoop"),
+            },
+            "--colours" | "--colors" => match next().and_then(|v| v.parse::<u64>().ok()) {
+                Some(v) => {
+                    colours = v.clamp(1, 30);
+                    i += 1;
+                }
+                None => return bad("--colours needs a number"),
+            },
+            "--threads" => match next() {
+                Some(v) if v == "brother" || v == "exact" => {
+                    threads = v;
+                    i += 1;
+                }
+                _ => return bad("--threads is brother or exact"),
+            },
+            "--crop" => crop = true,
+            "-h" | "--help" => {
+                println!("{EMB_HELP}");
+                return 0;
+            }
+            v if src.is_none() && !v.starts_with('-') => src = Some(v.to_string()),
+            v => return bad(&format!("unexpected argument {v}")),
+        }
+        i += 1;
+    }
+    let (Some(src), Some(out)) = (src, out) else { return bad("a picture and -o DESIGN are needed") };
+    let Some((hoop, _, _)) = emb::hoop_from(&size) else { return bad(&format!("no hoop fits {size}")) };
+    let mut doc = match app::DrawApp::load(std::path::Path::new(&src)) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("folio-draw: can't open {src}: {e}");
+            return 1;
+        }
+    };
+    // an embroidery document is planned as it is; a picture is converted first
+    let plan = if emb::settings(&doc).is_some() {
+        match emb::make_plan(&doc) {
+            Some(p) => p,
+            None => {
+                eprintln!("folio-draw: there are no stitches in {src}");
+                return 1;
+            }
+        }
+    } else {
+        match emb::design_from_picture(&mut doc, hoop, colours, &threads, crop) {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("folio-draw: {e}");
+                return 1;
+            }
+        }
+    };
+    let ext = out.rsplit('.').next().unwrap_or("pes").to_lowercase();
+    let stem: String = std::path::Path::new(&out).file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "Untitled".into());
+    let bytes = match emb::write(&plan, &ext, &stem.chars().take(16).collect::<String>(), "20261106") {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("folio-draw: {e}");
+            return 1;
+        }
+    };
+    if let Err(e) = folio_kit::platform::atomic_write(std::path::Path::new(&out), &bytes) {
+        eprintln!("folio-draw: {e}");
+        return 1;
+    }
+    let (x0, y0, x1, y1) = plan.bounds();
+    let threads: Vec<String> = plan.blocks.iter().map(|b| if b.thread.name.is_empty() { format!("#{:02X}{:02X}{:02X}", b.thread.rgb[0], b.thread.rgb[1], b.thread.rgb[2]) } else { b.thread.name.clone() }).collect();
+    println!(
+        "{out}: {} stitches, {} colours ({}), {:.1} x {:.1} mm",
+        plan.stitch_count(),
+        plan.blocks.len(),
+        threads.join(", "),
+        x1 - x0,
+        y1 - y0
+    );
+    0
+}
+
+fn bad(msg: &str) -> i32 {
+    eprintln!("folio-draw: {msg}\n\n{EMB_HELP}");
+    2
 }
 
 fn main() {
@@ -36,6 +150,7 @@ fn main() {
                 usage();
                 return;
             }
+            "--embroider" => std::process::exit(embroider(&args[i + 1..])),
             "--convert" => {
                 let (Some(a), Some(b)) = (args.get(i + 1), args.get(i + 2)) else {
                     usage();
