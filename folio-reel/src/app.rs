@@ -927,7 +927,7 @@ impl ReelApp {
                     v.push(("Pan and zoom".into(), c.panzoom.clone()));
                 }
                 if c.group != 0 {
-                    v.push(("Grouped".into(), format!("with {} more", self.p.group_members(c.group).len().saturating_sub(1))));
+                    v.push(("Grouped".into(), format!("with {} more", pr::count(self.p.group_members(c.group).len().saturating_sub(1), "clip", "clips"))));
                 }
                 v
             }
@@ -1084,7 +1084,7 @@ impl ReelApp {
                 Some(c) => format!("{} — {} long", c.name, pr::fmt_time(c.duration, None)),
                 None => {
                     if media::have() {
-                        format!("{} clips, {} long", self.p.all_clips().len(), pr::fmt_time(self.p.duration(), None))
+                        format!("{}, {} long", pr::count(self.p.all_clips().len(), "clip", "clips"), pr::fmt_time(self.p.duration(), None))
                     } else {
                         "No ffmpeg on this computer: Reel can't read or write video here.".to_string()
                     }
@@ -1509,7 +1509,7 @@ impl ReelApp {
                         self.say("Nothing to import", "Those don't look like subtitles. One block per caption: a time range, then the words.");
                     } else {
                         let n = self.p.add_subtitles(&entries).len();
-                        self.flash(&format!("{n} captions are on the Titles track."));
+                        self.flash(&format!("{} on the Titles track.", pr::count(n, "caption is", "captions are")));
                         self.touched();
                     }
                 }
@@ -1634,7 +1634,7 @@ impl ReelApp {
                     self.sel.clear();
                     self.touched();
                 }
-                self.flash(&format!("{} clips on the clipboard.", self.clipboard.len()));
+                self.flash(&format!("{} on the clipboard.", pr::count(self.clipboard.len(), "clip", "clips")));
             }
             "paste" => {
                 if self.clipboard.is_empty() {

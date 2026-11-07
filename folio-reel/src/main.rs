@@ -33,6 +33,32 @@ fn usage() {
     );
 }
 
+/// Printing that gives up quietly when whatever was reading has gone away.
+/// `folio-reel --info film.reel | head -2` is an ordinary thing to type, and it
+/// should not end in a crash.
+struct Out {
+    w: std::io::Stdout,
+    open: bool,
+}
+
+impl Out {
+    fn new() -> Out {
+        Out { w: std::io::stdout(), open: true }
+    }
+
+    /// One line. False once the other end has closed, and then nothing more.
+    fn line(&mut self, s: &str) -> bool {
+        use std::io::Write;
+        if !self.open {
+            return false;
+        }
+        if writeln!(self.w, "{s}").is_err() {
+            self.open = false;
+        }
+        self.open
+    }
+}
+
 fn open_or_exit(path: &str) -> Project {
     match pr::open(Path::new(path)) {
         Ok(p) => p,
@@ -72,16 +98,17 @@ fn export(out: &str, input: &str, preset: &str) -> i32 {
         }
     };
     let mut shown = -1i64;
+    let mut o = Out::new();
     let r = media::export(&cmd.args, cmd.duration, |secs| {
         let pct = (secs / cmd.duration.max(0.001) * 100.0) as i64;
         if pct / 10 > shown / 10 {
             shown = pct;
-            println!("  {}%", pct.min(100));
+            o.line(&format!("  {}%", pct.min(100)));
         }
     });
     match r {
         Ok(()) => {
-            println!("  --export wrote {out}");
+            Out::new().line(&format!("  --export wrote {out}"));
             0
         }
         Err(e) => {
@@ -121,7 +148,7 @@ fn frame(out: &str, input: &str, at: f64) -> i32 {
     };
     match std::fs::write(out, folio_kit::gfx::encode_png(&pm)) {
         Ok(()) => {
-            println!("  --frame wrote {out} ({}x{})", f.w, f.h);
+            Out::new().line(&format!("  --frame wrote {out} ({}x{})", f.w, f.h));
             0
         }
         Err(e) => {
@@ -133,24 +160,35 @@ fn frame(out: &str, input: &str, at: f64) -> i32 {
 
 fn info(input: &str) -> i32 {
     let p = open_or_exit(input);
-    println!("  {} x {} at {:.0} a second", p.data.width, p.data.height, p.data.fps);
-    println!("  {} long", pr::fmt_time(p.duration(), Some(p.data.fps)));
+    let mut o = Out::new();
+    if !o.line(&format!("  {} x {} at {:.0} a second", p.data.width, p.data.height, p.data.fps)) {
+        return 0;
+    }
+    if !o.line(&format!("  {} long", pr::fmt_time(p.duration(), Some(p.data.fps)))) {
+        return 0;
+    }
     for (i, name) in pr::TRACKS.iter().enumerate() {
         let clips = p.track(i);
         if clips.is_empty() {
             continue;
         }
-        println!("  {}: {} clips", pr::track_name(name), clips.len());
+        if !o.line(&format!("  {}: {}", pr::track_name(name), pr::count(clips.len(), "clip", "clips"))) {
+            return 0;
+        }
         for c in clips {
-            println!("    {:>8}  {:<24} {}", pr::fmt_time(c.start, None), c.name, pr::fmt_time(c.duration, None));
+            if !o.line(&format!("    {:>8}  {:<24} {}", pr::fmt_time(c.start, None), c.name, pr::fmt_time(c.duration, None))) {
+                return 0;
+            }
         }
     }
     for m in p.markers() {
-        println!("  marker {} at {}", m.name, pr::fmt_time(m.t, None));
+        if !o.line(&format!("  marker {} at {}", m.name, pr::fmt_time(m.t, None))) {
+            return 0;
+        }
     }
     let missing = p.missing_media();
     if !missing.is_empty() {
-        println!("  missing: {}", missing.iter().map(|m| m.name.clone()).collect::<Vec<_>>().join(", "));
+        o.line(&format!("  missing: {}", missing.iter().map(|m| m.name.clone()).collect::<Vec<_>>().join(", ")));
     }
     0
 }
@@ -162,7 +200,7 @@ fn probe(path: &str) -> i32 {
     }
     match media::probe(Path::new(path)) {
         Ok(i) => {
-            println!(
+            Out::new().line(&format!(
                 "  {} — {:.2}s, {}x{} at {:.2} a second, picture {}, sound {}{}",
                 path,
                 i.duration,
@@ -172,7 +210,7 @@ fn probe(path: &str) -> i32 {
                 if i.has_video { &i.video_codec } else { "none" },
                 if i.has_audio { &i.audio_codec } else { "none" },
                 if i.is_image() { " (a still)" } else { "" }
-            );
+            ));
             0
         }
         Err(e) => {
@@ -191,7 +229,7 @@ fn main() {
     while i < args.len() {
         match args[i].as_str() {
             "--version" | "-v" => {
-                println!("Folio Reel {VERSION}");
+                Out::new().line(&format!("Folio Reel {VERSION}"));
                 return;
             }
             "--help" | "-h" => {
@@ -199,8 +237,11 @@ fn main() {
                 return;
             }
             "--presets" => {
+                let mut o = Out::new();
                 for (name, fmt, size) in pr::EXPORT_PRESETS {
-                    println!("  {name}  ({fmt}, {size})");
+                    if !o.line(&format!("  {name}  ({fmt}, {size})")) {
+                        break;
+                    }
                 }
                 return;
             }

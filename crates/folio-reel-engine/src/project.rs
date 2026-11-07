@@ -681,6 +681,15 @@ fn unescape(s: &str) -> String {
     String::from_utf8_lossy(&out).to_string()
 }
 
+/// "1 clip", "3 clips" — so nothing in Reel ever says "1 clips".
+pub fn count(n: usize, one: &str, many: &str) -> String {
+    if n == 1 {
+        format!("{n} {one}")
+    } else {
+        format!("{n} {many}")
+    }
+}
+
 /// Seconds as a timecode. With `frames_fps`, h:mm:ss:ff; without, m:ss.t.
 pub fn fmt_time(secs: f64, frames_fps: Option<f64>) -> String {
     let secs = secs.max(0.0);
