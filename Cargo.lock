@@ -1016,6 +1016,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "folio-show"
+version = "3.0.0"
+dependencies = [
+ "folio-canvas",
+ "folio-kit",
+ "folio-math",
+ "folio-platform",
+ "folio-show-engine",
+]
+
+[[package]]
 name = "folio-show-engine"
 version = "0.3.0"
 dependencies = [

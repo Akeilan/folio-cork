@@ -1,0 +1,16 @@
+Package: folio-show
+Version: 3.0.0
+Section: editors
+Priority: optional
+Architecture: amd64
+Installed-Size: 24000
+Depends: libc6 (>= 2.35), libgcc-s1, libx11-6, libx11-xcb1, libxcursor1, libxi6, libxcb1, libxkbcommon0, libxkbcommon-x11-0, libwayland-client0, folio-fonts
+Recommends: cups-client, xdg-utils, fonts-dejavu-core, wl-clipboard
+Maintainer: Ron Shillings <ron.shillings@gmail.com>
+Description: ribbon presentations app
+ Folio Show is a presentations app with a ribbon interface, .pptx as its native
+ format, and an engine of its own: it reads and writes the format directly,
+ lays the slides out and draws them without a toolkit under it. Slides with
+ layouts and masters, shapes and text boxes, typing in place, bold, italic and
+ alignment, notes, and a full-screen show driven from the keyboard.
+ Everything stays on this computer.
