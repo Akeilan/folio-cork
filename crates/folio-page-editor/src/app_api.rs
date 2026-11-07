@@ -190,6 +190,30 @@ impl Editor {
         self.modified = true;
     }
 
+    /// A citation field, with the source written into it.
+    pub fn insert_citation(&mut self, author: &str, title: &str, year: &str) -> bool {
+        let mut shown = String::new();
+        if !author.trim().is_empty() {
+            shown.push_str(author.trim());
+        }
+        if !year.trim().is_empty() {
+            if !shown.is_empty() {
+                shown.push_str(", ");
+            }
+            shown.push_str(year.trim());
+        }
+        if shown.is_empty() {
+            shown = title.trim().to_string();
+        }
+        if shown.is_empty() {
+            return false;
+        }
+        self.begin_group("Citation");
+        let ok = self.insert_code_field(&format!("CITATION {shown}"));
+        self.end_group();
+        ok
+    }
+
     /// Set or clear one run property across the selection.
     pub fn run_prop(&mut self, name: &str, attrs: Option<&[(&str, &str)]>, label: &str) {
         match attrs {

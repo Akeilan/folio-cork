@@ -389,6 +389,31 @@ impl UiTest {
             }
             Ok(())
         });
+        step!("a caption numbers itself, and a cross-reference points at a heading", |app: &mut PageApp, h: &mut dyn Host, r: &mut Res| {
+            // a heading to point at
+            key(app, h, Key::End, ctrl());
+            key(app, h, Key::Enter, Mods::NONE);
+            typed(app, h, "A heading to refer to");
+            app.command("style:Heading 1", h);
+            key(app, h, Key::Enter, Mods::NONE);
+            app.command("style:Normal", h);
+            ribbon_click(app, h, r, "references", "caption")?;
+            let d = app.dialog.as_mut().ok_or("the caption dialog didn't open")?;
+            d.set_text_for_test("text", "A picture of the works");
+            app.press_dialog_button("ok", h);
+            check(app.ed.text_of_document().contains("A picture of the works"), "the caption isn't there")?;
+            ribbon_click(app, h, r, "references", "cross-ref")?;
+            let open = app.dialog.is_some();
+            check(open, "the cross-reference dialog didn't open")?;
+            app.press_dialog_button("ok", h);
+            let fields: Vec<String> = app.ed.body_fields().iter().map(|f| f.0.clone()).collect();
+            check(fields.iter().any(|f| f.trim_start().starts_with("REF") || f.trim_start().starts_with("PAGEREF")),
+                  &format!("no reference field was put in; the fields are {fields:?}"))?;
+            for _ in 0..8 {
+                key(app, h, Key::Char('z'), ctrl());
+            }
+            Ok(())
+        });
         step!("the document saves and opens again", move |app: &mut PageApp, _h: &mut dyn Host, _r: &mut Res| {
             let p = d_save.join("typed.docx");
             app.save(&p);
