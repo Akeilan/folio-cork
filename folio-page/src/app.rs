@@ -98,6 +98,7 @@ pub struct PageApp {
     printers: Vec<String>,
     /// what the cross-reference dialog is offering
     ref_targets: Vec<String>,
+    pub merge: crate::mailmerge::Merge,
     /// the headings in the navigation pane, with where each one sits
     nav_rows: Vec<(folio_page_editor::eng::xml::NodeId, Rect)>,
     nav_rect: Rect,
@@ -156,6 +157,7 @@ impl PageApp {
             read_mode: false,
             printers: Vec::new(),
             ref_targets: Vec::new(),
+            merge: crate::mailmerge::Merge::default(),
             nav_rows: Vec::new(),
             nav_rect: Rect::default(),
             ruler_rect: Rect::default(),
@@ -551,7 +553,12 @@ impl PageApp {
         gfx::fill_rect(pm, br, theme.app);
         let page = self.ed.caret_rect(self.ed.caret).map(|(p, _, _, _)| p + 1).unwrap_or(1);
         let words = self.ed.word_count();
-        let left = format!("Page {page} of {}    {words} words", self.ed.page_count().max(1));
+        let mut left = format!("Page {page} of {}    {words} words", self.ed.page_count().max(1));
+        if let Some(p) = self.merge.path.as_ref() {
+            let name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+            let which = self.merge.preview.map(|r| format!(", recipient {}", r + 1)).unwrap_or_default();
+            left.push_str(&format!("    {name}{which}"));
+        }
         let mut cx = Ctx { pm, text: &mut r.text, icons: &mut r.icons, theme: &theme, s };
         cx.label(&left, Rect::new(br.x + 12.0 * s, br.y, br.w / 2.0, br.h), 12.0, theme.app_text, false, Align::Left);
         let zoom = format!("{}%", (self.zoom * 100.0).round() as i32);
@@ -891,6 +898,14 @@ impl PageApp {
                     }
                     Err(e) => self.say("Can't read the picture", &e.to_string()),
                 },
+                "recipients" => match crate::mailmerge::Merge::open(&p) {
+                    Ok(m) => {
+                        let n = m.rows.len();
+                        self.merge = m;
+                        self.flash(&format!("{n} recipients"));
+                    }
+                    Err(e) => self.say("Can't read the list", &e),
+                },
                 "open" => self.open_path(&p),
                 "save" | "saveas" => self.save(&p),
                 "pdf" => self.export_pdf(&p),
@@ -999,6 +1014,13 @@ impl PageApp {
         if d.id == "print" {
             if id == "ok" {
                 self.print_now(&d);
+            }
+            host.redraw();
+            return;
+        }
+        if d.id == "merge" {
+            if id == "ok" {
+                self.write_merged(&d.value("folder"), &d.value("stem"));
             }
             host.redraw();
             return;
@@ -1137,6 +1159,53 @@ impl PageApp {
             }
         }
         self.cache.clear();
+    }
+
+    /// Show one recipient's details in place of the merge fields.
+    fn show_merge_row(&mut self, row: Option<usize>) {
+        let Some(row) = row else { return };
+        let fields = self.ed.fields_all();
+        for (i, (_, code, _)) in fields.iter().enumerate() {
+            let Some(col) = crate::mailmerge::field_column(code) else { continue };
+            let value = self.merge.value(row, &col).unwrap_or_else(|| format!("«{col}»"));
+            self.ed.set_field_text_at(i, &value);
+        }
+        self.merge.preview = Some(row);
+        self.cache.clear();
+        self.flash(&format!("Recipient {} of {}", row + 1, self.merge.rows.len()));
+    }
+
+    /// Where merged documents go by default: beside the document itself.
+    fn merge_folder(&self) -> PathBuf {
+        self.path
+            .as_ref()
+            .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+            .unwrap_or_else(folio_kit::platform::home_dir)
+    }
+
+    /// One document per recipient, written into the folder given.
+    fn write_merged(&mut self, folder: &str, stem: &str) {
+        let dir = PathBuf::from(folder.trim());
+        if !dir.is_dir() {
+            self.say("Can't write the documents", "That folder isn't there.");
+            return;
+        }
+        let stem = if stem.trim().is_empty() { "Letter" } else { stem.trim() };
+        let was = self.merge.preview;
+        let mut written = 0;
+        for row in 0..self.merge.rows.len() {
+            self.show_merge_row(Some(row));
+            let out = dir.join(self.merge.out_name(stem, row));
+            match self.ed.save_copy(&out.to_string_lossy()) {
+                Ok(()) => written += 1,
+                Err(e) => {
+                    self.say("Can't write the documents", &e);
+                    break;
+                }
+            }
+        }
+        self.show_merge_row(was.or(Some(0)));
+        self.flash(&format!("{written} documents written"));
     }
 
     /// Printing: the pages go to the printer as a PDF, which is what the
@@ -1325,6 +1394,15 @@ impl PageApp {
                 items.push(MenuItem::new("border:all", "All borders"));
                 items.push(MenuItem::new("border:outside", "Outside borders"));
                 items.push(MenuItem::new("border:none", "No borders"));
+            }
+            "merge-field" => {
+                if self.merge.headers.is_empty() {
+                    items.push(MenuItem::new("recipients", "Choose the recipients first..."));
+                } else {
+                    for h in self.merge.headers.clone() {
+                        items.push(MenuItem::new(&format!("mfield:{h}"), &h));
+                    }
+                }
             }
             "symbol" => {
                 for ch in SYMBOLS {
@@ -1672,6 +1750,55 @@ impl PageApp {
                         .text("title", "Title", "")
                         .text("year", "Year", "")
                         .button("ok", "Insert")
+                        .button("cancel", "Cancel"),
+                );
+            }
+            "recipients" => {
+                self.pane = Pane::Backstage(Back { page: "recipients".into(), files: Some(self.file_pane_named(false, "csv")) });
+            }
+            "merge-field" => {}
+            "mfield" => {
+                if let Some(name) = arg {
+                    self.ed.insert_code_field(&format!("MERGEFIELD {name}"));
+                    self.show_caret();
+                    self.cache.clear();
+                }
+            }
+            "preview-merge" => {
+                if !self.merge.is_open() {
+                    self.flash("Choose the list of recipients first");
+                    return;
+                }
+                let row = match self.merge.preview {
+                    Some(r) => Some(r),
+                    None => Some(0),
+                };
+                self.show_merge_row(row);
+            }
+            "merge-next" | "merge-prev" => {
+                if !self.merge.is_open() {
+                    self.flash("Choose the list of recipients first");
+                    return;
+                }
+                let last = self.merge.rows.len() - 1;
+                let row = match (self.merge.preview, head) {
+                    (Some(r), "merge-next") => (r + 1).min(last),
+                    (Some(r), _) => r.saturating_sub(1),
+                    (None, _) => 0,
+                };
+                self.show_merge_row(Some(row));
+            }
+            "finish-merge" => {
+                if !self.merge.is_open() {
+                    self.flash("Choose the list of recipients first");
+                    return;
+                }
+                self.dialog = Some(
+                    Dialog::new("merge", "Finish & Merge")
+                        .note(&format!("{} recipients in the list.", self.merge.rows.len()))
+                        .text("folder", "Folder", &self.merge_folder().to_string_lossy())
+                        .text("stem", "File names start with", "Letter")
+                        .button("ok", "Write the documents")
                         .button("cancel", "Cancel"),
                 );
             }
@@ -2032,6 +2159,12 @@ impl PageApp {
     /// Whether the window is on its way out, for the tests.
     pub fn wants_exit_for_test(&self) -> bool {
         self.exit
+    }
+
+    /// Open a list of recipients, as the File pane would, for the tests.
+    pub fn open_recipients_for_test(&mut self, p: &Path) -> Result<(), String> {
+        self.merge = crate::mailmerge::Merge::open(p)?;
+        Ok(())
     }
 
     /// The ruler's place, for the tests.

@@ -108,6 +108,7 @@ impl UiTest {
             };
         }
         let d_save = dir.clone();
+        let d_merge = dir.clone();
         let d_pdf = dir.clone();
 
         step!("the window shows a page", |app: &mut PageApp, _h: &mut dyn Host, r: &mut Res| {
@@ -410,6 +411,34 @@ impl UiTest {
             check(fields.iter().any(|f| f.trim_start().starts_with("REF") || f.trim_start().starts_with("PAGEREF")),
                   &format!("no reference field was put in; the fields are {fields:?}"))?;
             for _ in 0..8 {
+                key(app, h, Key::Char('z'), ctrl());
+            }
+            Ok(())
+        });
+        step!("a mail merge writes one document per recipient", move |app: &mut PageApp, h: &mut dyn Host, r: &mut Res| {
+            let list = d_merge.join("people.csv");
+            std::fs::write(&list, "Name,Town\nAda,Leeds\nGrace,New York\n").map_err(|e| e.to_string())?;
+            app.open_recipients_for_test(&list)?;
+            check(app.merge.headers == vec!["Name".to_string(), "Town".to_string()],
+                  &format!("columns are {:?}", app.merge.headers))?;
+            key(app, h, Key::End, ctrl());
+            key(app, h, Key::Enter, Mods::NONE);
+            typed(app, h, "Dear ");
+            app.command("mfield:Name", h);
+            app.command("preview-merge", h);
+            check(app.ed.text_of_document().contains("Ada"), &format!("the first recipient isn't shown: {:?}",
+                                                                      app.ed.text_of_document()))?;
+            app.command("merge-next", h);
+            check(app.ed.text_of_document().contains("Grace"), "the next recipient isn't shown")?;
+            app.command("finish-merge", h);
+            let d = app.dialog.as_mut().ok_or("the finish dialog didn't open")?;
+            d.set_text_for_test("folder", &d_merge.to_string_lossy());
+            d.set_text_for_test("stem", "Letter");
+            app.press_dialog_button("ok", h);
+            check(d_merge.join("Letter-1.docx").is_file() && d_merge.join("Letter-2.docx").is_file(),
+                  "the merged documents weren't written")?;
+            let _ = r;
+            for _ in 0..6 {
                 key(app, h, Key::Char('z'), ctrl());
             }
             Ok(())

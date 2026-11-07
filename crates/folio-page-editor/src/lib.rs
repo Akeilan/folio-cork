@@ -4133,6 +4133,15 @@ impl Editor {
         Ok(())
     }
 
+    /// Write a copy somewhere else, leaving the document as it stands: a
+    /// merge writes one of these per recipient.
+    pub fn save_copy(&mut self, path: &str) -> Result<(), String> {
+        let was = self.modified;
+        self.doc.save(path).map_err(|e| e.0)?;
+        self.modified = was;
+        Ok(())
+    }
+
     pub fn export_pdf(&mut self, path: &str) -> Result<(), String> {
         render::export_pdf(&self.layout, &mut self.fonts, path)
     }
