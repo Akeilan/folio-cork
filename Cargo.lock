@@ -996,6 +996,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "folio-sheet"
+version = "3.0.0"
+dependencies = [
+ "folio-canvas",
+ "folio-kit",
+ "folio-math",
+ "folio-platform",
+ "folio-sheet-engine",
+]
+
+[[package]]
+name = "folio-sheet-engine"
+version = "0.3.0"
+dependencies = [
+ "folio-canvas",
+ "folio-kit",
+ "folio-math",
+]
+
+[[package]]
 name = "font-types"
 version = "0.11.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"

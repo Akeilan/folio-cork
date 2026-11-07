@@ -880,6 +880,36 @@ impl<'a> Cx<'a> {
 
     /// Fill a ready-made path, offset by (dx, dy) in user coordinates: text
     /// laid out by the toolkit comes this way.
+    /// Add a ready-made path (a glyph run, say) to the path being built, in user space.
+    pub fn append_sk_path(&mut self, p: &sk::Path, dx: f64, dy: f64) {
+        let mut last = (0.0, 0.0);
+        for seg in p.segments() {
+            match seg {
+                sk::PathSegment::MoveTo(a) => {
+                    last = (a.x as f64 + dx, a.y as f64 + dy);
+                    self.move_to(last.0, last.1);
+                }
+                sk::PathSegment::LineTo(a) => {
+                    last = (a.x as f64 + dx, a.y as f64 + dy);
+                    self.line_to(last.0, last.1);
+                }
+                sk::PathSegment::QuadTo(a, b) => {
+                    let (cx, cy) = (a.x as f64 + dx, a.y as f64 + dy);
+                    let (px, py) = (b.x as f64 + dx, b.y as f64 + dy);
+                    self.curve_to(last.0 + 2.0 / 3.0 * (cx - last.0), last.1 + 2.0 / 3.0 * (cy - last.1),
+                                  px + 2.0 / 3.0 * (cx - px), py + 2.0 / 3.0 * (cy - py), px, py);
+                    last = (px, py);
+                }
+                sk::PathSegment::CubicTo(a, b, c) => {
+                    let p3 = (c.x as f64 + dx, c.y as f64 + dy);
+                    self.curve_to(a.x as f64 + dx, a.y as f64 + dy, b.x as f64 + dx, b.y as f64 + dy, p3.0, p3.1);
+                    last = p3;
+                }
+                sk::PathSegment::Close => self.close_path(),
+            }
+        }
+    }
+
     pub fn fill_sk_path(&mut self, p: &sk::Path, dx: f64, dy: f64) {
         let m = Matrix::new(1.0, 0.0, 0.0, 1.0, dx, dy).then(&self.st.xf);
         let t = sk::Transform::from_row(m.xx as f32, m.yx as f32, m.xy as f32, m.yy as f32, m.x0 as f32, m.y0 as f32);

@@ -1,0 +1,16 @@
+[package]
+name = "folio-sheet"
+version = "3.0.0"
+edition = "2021"
+description = "Folio Sheet: the spreadsheet, on the portable base"
+
+[[bin]]
+name = "folio-sheet"
+path = "src/main.rs"
+
+[dependencies]
+folio-canvas = { version = "0.1.0", path = "../crates/folio-canvas" }
+folio-kit = { version = "0.3.0", path = "../crates/folio-kit" }
+folio-math = { version = "0.3.0", path = "../crates/folio-math" }
+folio-platform = { version = "0.3.0", path = "../crates/folio-platform" }
+folio-sheet-engine = { version = "0.3.0", path = "../crates/folio-sheet-engine" }

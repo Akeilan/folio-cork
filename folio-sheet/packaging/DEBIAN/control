@@ -1,0 +1,16 @@
+Package: folio-sheet
+Version: 3.0.0
+Section: math
+Priority: optional
+Architecture: amd64
+Installed-Size: 24000
+Depends: libc6 (>= 2.35), libgcc-s1, libx11-6, libx11-xcb1, libxcursor1, libxi6, libxcb1, libxkbcommon0, libxkbcommon-x11-0, libwayland-client0, folio-fonts
+Recommends: cups-client, xdg-utils, fonts-dejavu-core, wl-clipboard
+Maintainer: Ron Shillings <ron.shillings@gmail.com>
+Description: ribbon spreadsheet
+ Folio Sheet is a spreadsheet with a ribbon interface, .xlsx as its native
+ format, and an engine of its own: it reads and writes the format directly,
+ works out the formulas itself, and draws the grid without a toolkit under
+ it. Hundreds of functions, number formats, cell styles, frozen panes, find
+ and replace, rows and columns, several sheets to a workbook, and CSV out.
+ Everything stays on this computer.

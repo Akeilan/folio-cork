@@ -7,7 +7,7 @@ breach() { echo "BREACH: $1"; shift; printf '  %s\n' "$@"; fail=1; }
 
 # Code above the platform layer: the toolkit and the apps (tests may do as they like).
 ABOVE=$(find crates -path crates/folio-platform -prune -o -name '*.rs' -print; find folio-* -name '*.rs' 2>/dev/null)
-ABOVE=$(echo "$ABOVE" | grep -v '/tests\.rs$\|/tests/' )
+ABOVE=$(echo "$ABOVE" | grep -v '/tests\.rs$\|/tests/\|/tests_[a-z0-9_]*\.rs$' )
 
 # 1. Only the platform layer touches the OS.
 os=$(grep -nE 'std::process::Command|std::net::|std::os::|std::env::(var|set_var|current_exe|temp_dir|home_dir)|libc::|extern "C"|#\[link|cfg\((target_os|windows|unix)|cfg!\((target_os|windows|unix)' $ABOVE)

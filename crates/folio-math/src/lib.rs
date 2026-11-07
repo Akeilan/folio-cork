@@ -15,6 +15,18 @@ pub trait Det: Sized {
     fn dcbrt(self) -> Self;
     /// Integer power by repeated multiplication, in a fixed order.
     fn dpowi(self, n: i32) -> Self;
+    fn dasin(self) -> Self;
+    fn datan(self) -> Self;
+    fn dsinh(self) -> Self;
+    fn dcosh(self) -> Self;
+    fn dtanh(self) -> Self;
+    fn dlog10(self) -> Self;
+    fn dlog2(self) -> Self;
+    /// The logarithm of self to the given base.
+    fn dlog(self, base: Self) -> Self;
+    fn dexp2(self) -> Self;
+    fn dhypot(self, other: Self) -> Self;
+    fn dsqrt(self) -> Self;
     /// x * x.
     fn sq(self) -> Self;
 }
@@ -57,6 +69,39 @@ impl Det for f32 {
     }
     fn dpow(self, e: f32) -> f32 {
         libm::powf(self, e)
+    }
+    fn dasin(self) -> f32 {
+        libm::asinf(self)
+    }
+    fn datan(self) -> f32 {
+        libm::atanf(self)
+    }
+    fn dsinh(self) -> f32 {
+        libm::sinhf(self)
+    }
+    fn dcosh(self) -> f32 {
+        libm::coshf(self)
+    }
+    fn dtanh(self) -> f32 {
+        libm::tanhf(self)
+    }
+    fn dlog10(self) -> f32 {
+        libm::log10f(self)
+    }
+    fn dlog2(self) -> f32 {
+        libm::log2f(self)
+    }
+    fn dlog(self, base: f32) -> f32 {
+        libm::logf(self) / libm::logf(base)
+    }
+    fn dexp2(self) -> f32 {
+        libm::exp2f(self)
+    }
+    fn dhypot(self, other: f32) -> f32 {
+        libm::hypotf(self, other)
+    }
+    fn dsqrt(self) -> f32 {
+        libm::sqrtf(self)
     }
     fn sq(self) -> f32 {
         self * self
@@ -101,6 +146,39 @@ impl Det for f64 {
     }
     fn dpow(self, e: f64) -> f64 {
         libm::pow(self, e)
+    }
+    fn dasin(self) -> f64 {
+        libm::asin(self)
+    }
+    fn datan(self) -> f64 {
+        libm::atan(self)
+    }
+    fn dsinh(self) -> f64 {
+        libm::sinh(self)
+    }
+    fn dcosh(self) -> f64 {
+        libm::cosh(self)
+    }
+    fn dtanh(self) -> f64 {
+        libm::tanh(self)
+    }
+    fn dlog10(self) -> f64 {
+        libm::log10(self)
+    }
+    fn dlog2(self) -> f64 {
+        libm::log2(self)
+    }
+    fn dlog(self, base: f64) -> f64 {
+        libm::log(self) / libm::log(base)
+    }
+    fn dexp2(self) -> f64 {
+        libm::exp2(self)
+    }
+    fn dhypot(self, other: f64) -> f64 {
+        libm::hypot(self, other)
+    }
+    fn dsqrt(self) -> f64 {
+        libm::sqrt(self)
     }
     fn sq(self) -> f64 {
         self * self
