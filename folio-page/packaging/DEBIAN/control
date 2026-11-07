@@ -1,0 +1,19 @@
+Package: folio-page
+Version: 3.0.0
+Replaces: folio-writer (<< 2.33.0)
+Breaks: folio-writer (<< 2.33.0)
+Section: editors
+Priority: optional
+Architecture: amd64
+Installed-Size: 24000
+Depends: libc6 (>= 2.35), libgcc-s1, libx11-6, libx11-xcb1, libxcursor1, libxi6, libxcb1, libxkbcommon0, libxkbcommon-x11-0, libwayland-client0, folio-fonts
+Recommends: hunspell-en-us | hunspell-dictionary, hyphen-en-us, cups-client, xdg-utils, fonts-dejavu-core, wl-clipboard
+Maintainer: Ron Shillings <ron.shillings@gmail.com>
+Description: ribbon word processor
+ Folio Page is a word processor with a ribbon interface, .docx as its native
+ format, and an engine of its own: it reads and writes the format directly,
+ lays pages out the way Word does, and draws them without a toolkit under it.
+ Styles, tables, pictures, shapes, charts, headers and footers, footnotes, a
+ contents list, captions and cross-references, comments and tracked changes,
+ spelling, mail merge and a ruler. It prints, and exports PDFs with the fonts
+ embedded and the words still searchable. Everything stays on this computer.

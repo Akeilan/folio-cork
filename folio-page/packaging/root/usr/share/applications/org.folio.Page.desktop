@@ -1,0 +1,17 @@
+[Desktop Entry]
+Type=Application
+Name=Folio Page
+GenericName=Word Processor
+Comment=Write documents, with styles, tables, pictures and tracked changes
+Exec=folio-page %F
+Icon=folio-page
+Terminal=false
+Categories=Office;WordProcessor;
+MimeType=application/vnd.openxmlformats-officedocument.wordprocessingml.document;application/msword;
+Keywords=word;document;letter;write;docx;report;
+StartupWMClass=folio-page
+Actions=new-window;
+
+[Desktop Action new-window]
+Name=New Document
+Exec=folio-page
