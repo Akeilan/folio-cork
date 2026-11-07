@@ -220,6 +220,7 @@ pub enum Story {
 }
 
 pub mod app_api;
+pub mod newchart;
 pub mod objects;
 pub mod hf;
 pub mod inspect;

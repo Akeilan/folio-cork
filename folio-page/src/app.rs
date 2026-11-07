@@ -1018,6 +1018,25 @@ impl PageApp {
             host.redraw();
             return;
         }
+        if d.id == "chart" {
+            if id == "ok" {
+                let kind = ["column", "bar", "line", "pie"][d.choice_index("kind").min(3)];
+                let text = d.value("data").replace(" / ", "\n").replace('/', "\n");
+                match folio_page_editor::newchart::ChartData::parse(&text) {
+                    Some(data) => {
+                        let xml = folio_page_editor::newchart::chart_xml(kind, &data, &d.value("title"));
+                        let book = folio_page_editor::newchart::chart_workbook(&data);
+                        if self.ed.insert_chart(&xml, &book, 432.0, 252.0, false).is_none() {
+                            self.flash("The chart wouldn't go in there");
+                        }
+                        self.cache.clear();
+                    }
+                    None => self.say("Can't read those numbers", "Rows are separated by / and cells by commas, and the first row names the series."),
+                }
+            }
+            host.redraw();
+            return;
+        }
         if d.id == "merge" {
             if id == "ok" {
                 self.write_merged(&d.value("folder"), &d.value("stem"));
@@ -1402,6 +1421,12 @@ impl PageApp {
                     for h in self.merge.headers.clone() {
                         items.push(MenuItem::new(&format!("mfield:{h}"), &h));
                     }
+                }
+            }
+            "shape" => {
+                for (id, label) in [("rect", "Rectangle"), ("roundRect", "Rounded rectangle"), ("ellipse", "Oval"),
+                                    ("triangle", "Triangle"), ("line", "Line"), ("arrow", "Arrow")] {
+                    items.push(MenuItem::new(&format!("shape-kind:{id}"), label));
                 }
             }
             "symbol" => {
@@ -1801,6 +1826,40 @@ impl PageApp {
                         .button("ok", "Write the documents")
                         .button("cancel", "Cancel"),
                 );
+            }
+            "chart" => {
+                let data = folio_page_editor::newchart::ChartData::default();
+                self.dialog = Some(
+                    Dialog::new("chart", "Chart")
+                        .choice("kind", "Kind", &["Column", "Bar", "Line", "Pie"], 0)
+                        .text("title", "Title", "")
+                        .text("data", "Numbers", &data.as_text().replace('\n', " / "))
+                        .note("Rows are separated by / and cells by commas. The first row names the series.")
+                        .button("ok", "Insert")
+                        .button("cancel", "Cancel"),
+                );
+            }
+            "shape" => {}
+            "shape-kind" => {
+                let Some(prst) = arg else { return };
+                let pg = self.caret_page();
+                let (pw, ph) = self.ed.page_size(pg);
+                let (w, h) = if prst == "line" { (200.0, 0.0) } else { (180.0, 110.0) };
+                let (x, y) = ((pw - w) / 2.0, (ph * 0.3).max(90.0));
+                let arrow = prst == "arrow";
+                let name = match prst.as_str() {
+                    "rect" => "Rectangle",
+                    "roundRect" => "Rounded Rectangle",
+                    "ellipse" => "Oval",
+                    "triangle" => "Triangle",
+                    "line" | "arrow" => "Line",
+                    _ => "Shape",
+                };
+                let geom = if prst == "arrow" { "line" } else { prst.as_str() };
+                if !self.ed.insert_shape(geom, pg, x, y, w, h, name, arrow) {
+                    self.flash("A shape goes in the body of the document");
+                }
+                self.cache.clear();
             }
             "find" => {
                 self.dialog = Some(
