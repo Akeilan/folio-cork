@@ -655,3 +655,11 @@ fn a_title_with_no_picture_drawn_is_left_out_rather_than_drawn_blank() {
     let line = render::export_command(&p, &t, &PathBuf::from("/tmp/o.mp4")).unwrap().args.join(" ");
     assert!(!line.contains("title-"), "{line}");
 }
+
+#[test]
+fn nothing_in_reel_ever_says_one_clips() {
+    assert_eq!(count(0, "clip", "clips"), "0 clips");
+    assert_eq!(count(1, "clip", "clips"), "1 clip");
+    assert_eq!(count(2, "clip", "clips"), "2 clips");
+    assert_eq!(count(1, "caption is", "captions are"), "1 caption is");
+}
