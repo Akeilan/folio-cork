@@ -443,6 +443,24 @@ impl UiTest {
             }
             Ok(())
         });
+        step!("a chart and a shape go into the document", |app: &mut PageApp, h: &mut dyn Host, r: &mut Res| {
+            key(app, h, Key::End, ctrl());
+            let before = page_ink(app, r);
+            ribbon_click(app, h, r, "insert", "chart")?;
+            let d = app.dialog.as_mut().ok_or("the chart dialog didn't open")?;
+            d.set_text_for_test("title", "Sales");
+            app.press_dialog_button("ok", h);
+            let after = page_ink(app, r);
+            check(after > before, &format!("the chart wasn't drawn ({before} -> {after})"))?;
+            check(!app.ed.chart_parts().is_empty(), "no chart part in the document")?;
+            app.command("shape-kind:ellipse", h);
+            let with_shape = page_ink(app, r);
+            check(with_shape > after, "the shape wasn't drawn")?;
+            for _ in 0..6 {
+                key(app, h, Key::Char('z'), ctrl());
+            }
+            Ok(())
+        });
         step!("the document saves and opens again", move |app: &mut PageApp, _h: &mut dyn Host, _r: &mut Res| {
             let p = d_save.join("typed.docx");
             app.save(&p);

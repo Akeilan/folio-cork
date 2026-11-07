@@ -94,6 +94,8 @@ const ICONS: &[(&str, &str)] = &[
     ("accept-all", "<path d='M3 13l3 3 7-8M10 15l2 2 9-10' stroke-width='1.8'/>"),
     ("reject-all", "<path d='M4 7l8 8M12 7l-8 8M14 7l8 8M22 7l-8 8' stroke-width='1.6'/>"),
     ("find", "<circle cx='11' cy='11' r='6'/><path d='M15.5 15.5L21 21'/>"),
+    ("shapes", "<rect x='3' y='3' width='9' height='9'/><circle cx='16.5' cy='16.5' r='4.5'/><path d='M16.5 3l4.5 7h-9z'/>"),
+    ("chart", "<path d='M4 20h16M7 20v-7M12 20V6M17 20v-10' stroke-width='2.2'/>"),
     ("symbol", "<path d='M8 19h8M12 19V9a3 3 0 1 1 3-3' stroke-width='1.6'/><circle cx='8' cy='7' r='2.4'/>"),
     ("page-setup", "<rect x='5' y='3' width='14' height='18'/><rect x='8' y='6' width='8' height='12' stroke-dasharray='2 2'/>"),
     ("font-dialog", "<path d='M4 18L9 5l5 13M5.5 14h7'/><path d='M17 17h4M19 15v4' stroke-width='1.4'/>"),

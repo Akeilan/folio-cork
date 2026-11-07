@@ -87,6 +87,10 @@ pub fn tabs() -> Vec<Tab> {
                 ),
                 Group::new("Tables", vec![I::large("table", "Table", "table").desc("A table of three rows and three columns.")]),
                 Group::new("Illustrations", vec![I::large("picture", "Picture", "picture").desc("A picture from a file.")]),
+                Group::new(
+                    "Illustrations 2",
+                    vec![I::large("shape", "Shapes", "shapes").menu(), I::large("chart", "Chart", "chart")],
+                ),
                 Group::new("Symbols", vec![I::large("symbol", "Symbol", "symbol").menu()]),
                 Group::new(
                     "Header & Footer",
