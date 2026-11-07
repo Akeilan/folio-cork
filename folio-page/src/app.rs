@@ -99,6 +99,9 @@ pub struct PageApp {
     /// what the cross-reference dialog is offering
     ref_targets: Vec<String>,
     pub merge: crate::mailmerge::Merge,
+    pub spell: crate::spell::Spell,
+    /// the word a right-click landed on, for the suggestions menu
+    word_hit: Option<(folio_page_editor::Pos, folio_page_editor::Pos, String)>,
     /// the headings in the navigation pane, with where each one sits
     nav_rows: Vec<(folio_page_editor::eng::xml::NodeId, Rect)>,
     nav_rect: Rect,
@@ -158,6 +161,8 @@ impl PageApp {
             printers: Vec::new(),
             ref_targets: Vec::new(),
             merge: crate::mailmerge::Merge::default(),
+            spell: crate::spell::Spell::default(),
+            word_hit: None,
             nav_rows: Vec::new(),
             nav_rect: Rect::default(),
             ruler_rect: Rect::default(),
@@ -339,6 +344,7 @@ impl PageApp {
             let mut cx = Cx::new(&mut pm, &mut self.glyphs);
             cx.scale(z as f64, z as f64);
             let mut ov = Overlay { gridlines: false, marks: self.marks, ..Default::default() };
+            ov.misspelled = crate::spell::page_squiggles(&mut self.ed, &mut self.spell, i);
             for (pg, x, y, sw, sh) in self.ed.selection_rects() {
                 if pg == i {
                     ov.selection.push((x, y, sw, sh));
@@ -706,6 +712,18 @@ impl PageApp {
             }
         }
         match ev {
+            Event::MouseDown { x, y, button: Button::Right, .. } => {
+                if self.canvas.contains(*x, *y) {
+                    self.layout_pages();
+                    if let Some((pg, px, py)) = self.point_on_page(*x, *y) {
+                        if let Some(p) = self.ed.hit(pg, px, py) {
+                            self.ed.move_to(p, false, false);
+                            self.word_menu(p, Rect::new(*x, *y, 1.0, 1.0));
+                            host.redraw();
+                        }
+                    }
+                }
+            }
             Event::MouseDown { x, y, button: Button::Left, clicks } => {
                 if self.nav && self.nav_rect.contains(*x, *y) {
                     if let Some((node, _)) = self.nav_rows.iter().find(|(_, r)| r.contains(*x, *y)).cloned() {
@@ -1353,6 +1371,35 @@ impl PageApp {
         self.cache.clear();
     }
 
+    /// The menu a right-click in the text opens: other spellings when the
+    /// word is doubted, and the everyday edits otherwise.
+    fn word_menu(&mut self, at: folio_page_editor::Pos, r: Rect) {
+        let (a, b) = self.ed.word_at(at);
+        let text = self.ed.para_text_of(a.para);
+        let word: String = text.chars().skip(a.off).take(b.off.saturating_sub(a.off)).collect();
+        let mut items: Vec<MenuItem> = Vec::new();
+        let doubted = !word.trim().is_empty() && self.spell.ready() && !self.spell.known(word.trim());
+        if doubted {
+            self.word_hit = Some((a, b, word.trim().to_string()));
+            for s in self.spell.suggestions(word.trim()) {
+                items.push(MenuItem::new(&format!("fix:{s}"), &s));
+            }
+            if items.is_empty() {
+                items.push(MenuItem::new("none", "No other spellings").off(true));
+            }
+            items.push(MenuItem::sep());
+            items.push(MenuItem::new("spell-ignore", "Ignore"));
+            items.push(MenuItem::new("spell-add", "Add to dictionary"));
+            items.push(MenuItem::sep());
+        } else {
+            self.word_hit = None;
+        }
+        items.push(MenuItem::new("cut", "Cut").key("Ctrl+X"));
+        items.push(MenuItem::new("copy", "Copy").key("Ctrl+C"));
+        items.push(MenuItem::new("paste", "Paste").key("Ctrl+V"));
+        self.menu = Some(Menu::new("word", r, items));
+    }
+
     /// The page the caret is on.
     fn caret_page(&self) -> usize {
         self.ed.caret_rect(self.ed.caret).map(|(p, _, _, _)| p).unwrap_or(0)
@@ -1861,6 +1908,29 @@ impl PageApp {
                 }
                 self.cache.clear();
             }
+            "fix" => {
+                let (Some(word), Some((a, b, _))) = (arg, self.word_hit.clone()) else { return };
+                self.ed.select_ranges(&[(a, b)]);
+                self.ed.type_text(&word);
+                self.word_hit = None;
+                self.cache.clear();
+            }
+            "spell-ignore" | "spell-add" => {
+                if let Some((_, _, word)) = self.word_hit.clone() {
+                    if head == "spell-add" {
+                        self.spell.add_word(&word);
+                    } else {
+                        self.spell.ignore(&word);
+                    }
+                    self.cache.clear();
+                }
+            }
+            "spelling" => {
+                self.spell.on = !self.spell.on;
+                self.spell.forget_results();
+                self.cache.clear();
+                self.flash(if self.spell.on { "Spelling is being checked" } else { "Spelling is not being checked" });
+            }
             "find" => {
                 self.dialog = Some(
                     Dialog::new("find", "Find and Replace")
@@ -2078,6 +2148,7 @@ impl PageApp {
             marks: self.marks,
             nav: self.nav,
             ruler: self.ruler,
+            spelling: self.spell.on,
             read_mode: self.read_mode,
             track: self.ed.tracking(),
             painter: self.painter,
@@ -2099,6 +2170,7 @@ pub struct State {
     pub marks: bool,
     pub nav: bool,
     pub ruler: bool,
+    pub spelling: bool,
     pub read_mode: bool,
     pub track: bool,
     pub painter: bool,
@@ -2126,6 +2198,7 @@ impl CommandState for State {
             "marks" => self.marks,
             "read-mode" => self.read_mode,
             "nav" => self.nav,
+            "spelling" => self.spelling,
             "ruler" => self.ruler,
             "track" => self.track,
             "painter" => self.painter,
@@ -2224,6 +2297,27 @@ impl PageApp {
     pub fn open_recipients_for_test(&mut self, p: &Path) -> Result<(), String> {
         self.merge = crate::mailmerge::Merge::open(p)?;
         Ok(())
+    }
+
+    /// The wavy lines on the first page, for the tests.
+    pub fn squiggles_now(&mut self) -> Vec<(f64, f64, f64)> {
+        crate::spell::page_squiggles(&mut self.ed, &mut self.spell, 0)
+    }
+
+    /// Open the right-click menu on a word, for the tests.
+    pub fn open_word_menu_for_test(&mut self, at: folio_page_editor::Pos) {
+        self.word_menu(at, Rect::new(100.0, 100.0, 1.0, 1.0));
+    }
+
+    /// Choose something from the open menu, as a click would, for the tests.
+    pub fn pick_menu_for_test(&mut self, id: &str, host: &mut dyn Host) {
+        self.menu = None;
+        self.command(id, host);
+    }
+
+    /// What the open menu is offering, for the tests.
+    pub fn menu_items_now(&self) -> Vec<String> {
+        self.menu.as_ref().map(|m| m.items.iter().map(|i| i.id.clone()).collect()).unwrap_or_default()
     }
 
     /// The ruler's place, for the tests.

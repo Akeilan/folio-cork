@@ -213,6 +213,11 @@ pub fn tabs() -> Vec<Tab> {
                     ],
                 ),
                 Group::new(
+                    "Proofing",
+                    vec![I::large("spelling", "Spelling", "spelling")
+                        .desc("Underline words the dictionary doesn't know. Right-click one for other spellings.")],
+                ),
+                Group::new(
                     "Tracking",
                     vec![I::large("track", "Track Changes", "track").desc("Record what is changed from now on.")],
                 ),

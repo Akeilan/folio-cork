@@ -16,3 +16,4 @@ folio-page-editor = { version = "0.1.0", path = "../crates/folio-page-editor" }
 folio-page-engine = { version = "0.1.0", path = "../crates/folio-page-engine" }
 folio-page-render = { version = "0.1.0", path = "../crates/folio-page-render" }
 folio-platform = { version = "0.3.0", path = "../crates/folio-platform" }
+spellbook = "0.4.2"

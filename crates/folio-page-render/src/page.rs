@@ -89,6 +89,8 @@ pub struct Overlay {
     pub marks: bool,
     /// paragraphs ending a section, with the label of the break
     pub sect_breaks: HashMap<eng::xml::NodeId, String>,
+    /// words the spelling check doubts: x, y (the baseline) and width
+    pub misspelled: Vec<(f64, f64, f64)>,
 }
 
 impl Renderer {
@@ -281,6 +283,9 @@ impl Renderer {
                     cr.restore();
                 }
             }
+        }
+        for (x, y, w) in &ov.misspelled {
+            wavy_underline(cr, *x, *y, *w);
         }
         if let Some((x, y, h)) = ov.caret {
             cr.set_source_rgb(0.0, 0.0, 0.0);
@@ -1419,6 +1424,27 @@ fn draw_marks(cr: &mut Cx, p: &ParaLayout, pl: &eng::paginate::Placed, ov: &Over
         }
     }
     cr.restore();
+}
+
+/// The red wave under a word the spelling check doubts.
+fn wavy_underline(cr: &mut Cx, x: f64, y: f64, w: f64) {
+    if w <= 0.5 {
+        return;
+    }
+    let step = 2.0;
+    let amp = 1.0;
+    cr.set_source_rgb(0.84, 0.13, 0.13);
+    cr.set_line_width(0.9);
+    cr.move_to(x, y + 1.6);
+    let mut at = x;
+    let mut up = true;
+    while at < x + w {
+        let next = (at + step).min(x + w);
+        cr.line_to(next, y + 1.6 + if up { -amp } else { amp });
+        at = next;
+        up = !up;
+    }
+    cr.stroke();
 }
 
 /// Turned text (a cell's text direction): the context turned about the

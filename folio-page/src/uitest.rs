@@ -461,6 +461,29 @@ impl UiTest {
             }
             Ok(())
         });
+        step!("a misspelling gets a red line, and the menu offers a fix", |app: &mut PageApp, h: &mut dyn Host, r: &mut Res| {
+            if !app.spell.ready() {
+                return Ok(()); // no dictionary on this machine
+            }
+            key(app, h, Key::End, ctrl());
+            key(app, h, Key::Enter, Mods::NONE);
+            typed(app, h, "A speling mistake");
+            shot(app, r);
+            let marks = app.squiggles_now();
+            check(!marks.is_empty(), "nothing was underlined")?;
+            // right-click the word
+            let p = app.ed.caret;
+            let back = folio_page_editor::Pos { para: p.para, off: p.off.saturating_sub(9) };
+            app.open_word_menu_for_test(back);
+            check(app.menu_items_now().iter().any(|i| i.starts_with("fix:")), "no other spellings were offered")?;
+            let fix = app.menu_items_now().into_iter().find(|i| i.starts_with("fix:")).unwrap();
+            app.pick_menu_for_test(&fix, h);
+            check(!app.ed.text_of_document().contains("speling"), "the misspelling is still there")?;
+            for _ in 0..4 {
+                key(app, h, Key::Char('z'), ctrl());
+            }
+            Ok(())
+        });
         step!("the document saves and opens again", move |app: &mut PageApp, _h: &mut dyn Host, _r: &mut Res| {
             let p = d_save.join("typed.docx");
             app.save(&p);
