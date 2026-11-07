@@ -381,3 +381,35 @@ pub fn run_headless(app: &mut dyn App, w: u32, h: u32, scale: f32, max_ticks: u3
     app.paint(frame, w, h, &mut host);
     if app.wants_exit() { Some(app.exit_code()) } else { None }
 }
+
+#[repr(C)]
+struct Tm {
+    sec: i32,
+    min: i32,
+    hour: i32,
+    mday: i32,
+    mon: i32,
+    year: i32,
+    wday: i32,
+    yday: i32,
+    isdst: i32,
+    gmtoff: i64,
+    zone: *const u8,
+}
+
+extern "C" {
+    fn localtime_r(t: *const i64, out: *mut Tm) -> *mut Tm;
+}
+
+/// How far local time is ahead of UTC, in seconds, at the given Unix time.
+/// The one place the suite asks the system what the clock says locally.
+pub fn local_offset_secs(unix_secs: i64) -> i64 {
+    let mut tm = Tm { sec: 0, min: 0, hour: 0, mday: 0, mon: 0, year: 0, wday: 0, yday: 0, isdst: 0, gmtoff: 0, zone: std::ptr::null() };
+    unsafe {
+        if localtime_r(&unix_secs, &mut tm).is_null() {
+            0
+        } else {
+            tm.gmtoff
+        }
+    }
+}

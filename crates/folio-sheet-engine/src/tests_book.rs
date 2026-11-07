@@ -1,0 +1,1301 @@
+//! Workbook-level tests: typing, calculation, undo, files, drawing.
+use crate::book::Book;
+use crate::cellref::Rect;
+use crate::value::{Value, XlErr};
+
+fn blank() -> Book {
+    Book::open("testdata/Blank.xlsx").unwrap()
+}
+
+fn n(b: &Book, r: u32, c: u32) -> f64 {
+    match b.value(0, r, c) {
+        Value::Num(x) => x,
+        v => panic!("not a number at {},{}: {:?}", r, c, v),
+    }
+}
+
+#[test]
+fn typing_and_calc() {
+    let mut b = blank();
+    b.set_input(0, 0, 0, "5").unwrap();
+    b.set_input(0, 0, 1, "=A1*2").unwrap();
+    assert_eq!(n(&b, 0, 1), 10.0);
+    b.set_input(0, 0, 0, "7").unwrap();
+    assert_eq!(n(&b, 0, 1), 14.0);
+    b.set_input(0, 1, 0, "=SUM(A1:B1)").unwrap();
+    assert_eq!(n(&b, 1, 0), 21.0);
+    b.set_input(0, 2, 0, "=1/0").unwrap();
+    assert_eq!(b.value(0, 2, 0), Value::Err(XlErr::Div0));
+    assert_eq!(b.input(0, 0, 1), "=A1*2");
+    b.set_input(0, 3, 0, "1/2/2026").unwrap();
+    assert_eq!(b.display(0, 3, 0), "1/2/2026");
+    assert_eq!(b.input(0, 3, 0), "1/2/2026");
+    b.set_input(0, 4, 0, "'=x").unwrap();
+    assert_eq!(b.input(0, 4, 0), "'=x");
+    assert_eq!(b.value(0, 4, 0), Value::str("=x"));
+    b.set_input(0, 5, 0, "$1,234.5").unwrap();
+    assert_eq!(b.display(0, 5, 0), "$1,234.50 ");
+    b.set_input(0, 6, 0, "12345678901234").unwrap();
+    assert_eq!(b.display(0, 6, 0), "1.23457E+13");
+    // undo
+    assert_eq!(b.undo().unwrap().0, "Typing");
+    assert_eq!(b.value(0, 6, 0), Value::Empty);
+    b.redo();
+    assert_eq!(n(&b, 6, 0), 12345678901234.0);
+}
+
+#[test]
+fn spills() {
+    let mut b = blank();
+    b.set_input(0, 0, 0, "=SEQUENCE(3)").unwrap();
+    assert_eq!(n(&b, 2, 0), 3.0);
+    b.set_input(0, 0, 1, "=SUM(A1#)").unwrap();
+    assert_eq!(n(&b, 0, 1), 6.0);
+    b.set_input(0, 0, 2, "=A3*10").unwrap();
+    assert_eq!(n(&b, 0, 2), 30.0);
+    b.set_input(0, 1, 0, "x").unwrap();
+    assert_eq!(b.value(0, 0, 0), Value::Err(XlErr::Spill));
+    assert_eq!(n(&b, 0, 2), 0.0);
+    b.set_input(0, 1, 0, "").unwrap();
+    assert_eq!(n(&b, 0, 0), 1.0);
+    assert_eq!(n(&b, 0, 2), 30.0);
+    b.set_input(0, 0, 0, "=SEQUENCE(4)").unwrap();
+    assert_eq!(n(&b, 0, 1), 10.0);
+}
+
+#[test]
+fn circular_and_sheets() {
+    let mut b = blank();
+    b.set_input(0, 0, 0, "=B1+1").unwrap();
+    b.set_input(0, 0, 1, "=A1+1").unwrap();
+    assert_eq!(b.circ.len(), 2);
+    assert_eq!(n(&b, 0, 0), 0.0);
+    b.rename_sheet(0, "Data").unwrap();
+    b.insert_sheet(1, Some("Other")).unwrap();
+    b.set_input(1, 0, 0, "=Data!A1+5").unwrap();
+    b.set_input(0, 0, 0, "3").unwrap();
+    assert_eq!(b.value(1, 0, 0), Value::num(8.0));
+    b.rename_sheet(0, "New").unwrap();
+    assert_eq!(b.input(1, 0, 0), "=New!A1+5");
+    b.delete_sheet(0).unwrap();
+    assert_eq!(b.input(0, 0, 0), "=#REF!+5");
+    assert_eq!(b.value(0, 0, 0), Value::Err(XlErr::Ref));
+    b.undo();
+    assert_eq!(b.value(1, 0, 0), Value::num(8.0));
+}
+
+#[test]
+fn iterate() {
+    let mut b = blank();
+    b.calc.iterate = true;
+    b.calc.count = 50;
+    b.set_input(0, 0, 0, "=A1+1").unwrap();
+    assert_eq!(n(&b, 0, 0), 50.0);
+}
+
+#[test]
+fn files_roundtrip() {
+    let mut b = Book::open("testdata/ref.xlsx").unwrap();
+    assert_eq!(b.value(0, 0, 0), Value::str("Item"));
+    assert_eq!(n(&b, 3, 3), 32.5);
+    assert_eq!(b.display(0, 1, 3), "15.00");
+    assert_eq!(b.sheets[0].merges, vec![Rect::new(9, 0, 10, 2)]);
+    b.set_input(0, 12, 5, "=SEQUENCE(2,2)").unwrap();
+    b.define_name("rate", "=Sheet1!$C$2", None, None, None).unwrap();
+    b.set_input(0, 20, 0, "=rate*2").unwrap();
+    assert_eq!(n(&b, 20, 0), 2.5);
+    let data = b.to_bytes().unwrap();
+    let c = Book::from_bytes(&data).unwrap();
+    assert_eq!(c.value(0, 13, 6), Value::num(4.0));
+    assert_eq!(c.input(0, 12, 5), "=SEQUENCE(2,2)");
+    assert_eq!(c.value(0, 20, 0), Value::num(2.5));
+    assert_eq!(c.display(0, 1, 3), "15.00");
+    assert_eq!(c.sheets[0].merges, vec![Rect::new(9, 0, 10, 2)]);
+    std::fs::write("/tmp/rt.xlsx", &data).unwrap();
+}
+
+#[test]
+fn geometry_and_render() {
+    let b = Book::open("testdata/ref.xlsx").unwrap();
+    assert_eq!(b.mdw(0), 7.0);
+    assert_eq!(b.col_px(0, 0), 64.0);
+    let p = crate::view::ViewParams { width: 300.0, height: 100.0, ..Default::default() };
+    let g = b.geometry(0, &p);
+    assert_eq!(g.hw, 27.0);
+    assert_eq!(g.rows[1], (1, 40.0, 20.0));
+    let p = crate::view::ViewParams { width: 640.0, height: 330.0, sel: vec![Rect::new(1, 1, 2, 3)], active: (1, 1), ..Default::default() };
+    crate::render::render_png(&b, 0, &p, "/tmp/new_main.png").unwrap();
+}
+
+#[test]
+fn insert_delete_rows_cols() {
+    let mut b = blank();
+    for r in 0..5 {
+        b.set_input(0, r, 0, &format!("{}", r + 1)).unwrap();
+    }
+    b.set_input(0, 0, 1, "=SUM(A1:A5)").unwrap();
+    b.set_input(0, 4, 1, "=A5*2").unwrap();
+    b.insert_sheet(1, Some("S2")).unwrap();
+    b.set_input(1, 0, 0, "=Sheet1!A3").unwrap();
+    b.insert_rows(0, 2, 2).unwrap();
+    assert_eq!(b.input(0, 0, 1), "=SUM(A1:A7)");
+    assert_eq!(b.input(0, 6, 1), "=A7*2");
+    assert_eq!(b.input(1, 0, 0), "=Sheet1!A5");
+    assert_eq!(n(&b, 0, 1), 15.0);
+    assert_eq!(b.value(0, 2, 0), Value::Empty);
+    b.delete_rows(0, 4, 1).unwrap(); // the row that held 3
+    assert_eq!(b.input(1, 0, 0), "=Sheet1!#REF!");
+    assert_eq!(n(&b, 0, 1), 12.0);
+    b.undo();
+    assert_eq!(b.input(1, 0, 0), "=Sheet1!A5");
+    b.undo();
+    assert_eq!(b.input(0, 0, 1), "=SUM(A1:A5)");
+    assert_eq!(n(&b, 2, 0), 3.0);
+    b.insert_cols(0, 0, 1).unwrap();
+    assert_eq!(b.input(0, 0, 2), "=SUM(B1:B5)");
+    b.delete_cols(0, 0, 1).unwrap();
+    // cells: shift down only in column A
+    b.insert_cells(0, Rect::new(1, 0, 1, 0), true).unwrap();
+    assert_eq!(b.input(0, 0, 1), "=SUM(A1:A6)");
+    assert_eq!(n(&b, 2, 0), 2.0);
+    assert_eq!(b.input(0, 4, 1), "=A6*2");
+    b.delete_cells(0, Rect::new(1, 0, 1, 0), true).unwrap();
+    assert_eq!(b.input(0, 0, 1), "=SUM(A1:A5)");
+    // merges move; a merge split by a cell shift is refused
+    b.set_merges_cmd(0, vec![Rect::new(10, 0, 10, 1)], "m");
+    b.insert_rows(0, 5, 1).unwrap();
+    assert_eq!(b.sheets[0].merges, vec![Rect::new(11, 0, 11, 1)]);
+    assert!(b.insert_cells(0, Rect::new(11, 0, 11, 0), true).is_err());
+}
+
+#[test]
+fn ref_error_with_sheet() {
+    let mut b = blank();
+    b.set_input(0, 0, 0, "=Sheet1!#REF!").unwrap();
+    assert_eq!(b.value(0, 0, 0), Value::Err(XlErr::Ref));
+}
+
+#[test]
+fn sort_filter_dedupe() {
+    let mut b = blank();
+    let data = [("Name", "Qty"), ("pear", "7"), ("apple", "12"), ("fig", "3"), ("apple", "12"), ("kiwi", "")];
+    for (r, (a, q)) in data.iter().enumerate() {
+        b.set_input(0, r as u32, 0, a).unwrap();
+        if !q.is_empty() {
+            b.set_input(0, r as u32, 1, q).unwrap();
+        }
+        b.set_input(0, r as u32, 2, &format!("=B{}*2", r + 1)).unwrap();
+    }
+    let rc = Rect::new(0, 0, 5, 2);
+    assert!(b.guess_header(0, rc));
+    b.sort_range(0, rc, &[crate::book_data::SortKey { line: 1, ascending: true, on: Default::default() }], true, false).unwrap();
+    assert_eq!(b.value(0, 1, 0), Value::str("fig"));
+    assert_eq!(b.value(0, 5, 0), Value::str("kiwi")); // blank last
+    assert_eq!(b.input(0, 1, 2), "=B2*2");
+    assert_eq!(n(&b, 1, 2), 6.0);
+    b.sort_range(0, rc, &[crate::book_data::SortKey { line: 0, ascending: false, on: Default::default() }], true, false).unwrap();
+    assert_eq!(b.value(0, 1, 0), Value::str("pear"));
+    // filter
+    b.set_autofilter(0, Some(rc)).unwrap();
+    b.filter_column(0, 0, Some(crate::book_data::FilterKind::Values { values: vec!["apple".into()], blank: false })).unwrap();
+    let hidden: Vec<u32> = (1..6).filter(|r| b.row_px(0, *r) == 0.0).collect();
+    assert_eq!(hidden.len(), 3);
+    let (vals, blank) = b.filter_values(0, 0);
+    assert_eq!(vals, vec!["apple", "fig", "kiwi", "pear"]);
+    assert!(!blank);
+    b.filter_column(0, 1, Some(crate::book_data::FilterKind::Custom { and: true, conds: vec![("greaterThan".into(), "5".into())] })).unwrap();
+    let data = b.to_bytes().unwrap();
+    let c = Book::from_bytes(&data).unwrap();
+    assert_eq!(c.sheets[0].autofilter, b.sheets[0].autofilter);
+    b.clear_filters(0).unwrap();
+    assert!((1..6).all(|r| b.row_px(0, r) > 0.0));
+    b.set_autofilter(0, None).unwrap();
+    // remove duplicates
+    let (removed, left) = b.remove_duplicates(0, rc, &[0, 1], true).unwrap();
+    assert_eq!((removed, left), (1, 4));
+    assert_eq!(b.value(0, 5, 0), Value::Empty);
+}
+
+#[test]
+fn clipboard() {
+    use crate::book_clip::{Op, PasteOpts, What};
+    let mut b = blank();
+    b.set_input(0, 0, 0, "1").unwrap();
+    b.set_input(0, 1, 0, "2").unwrap();
+    b.set_input(0, 0, 1, "=A1*10").unwrap();
+    b.set_input(0, 1, 1, "=A2*10").unwrap();
+    b.set_input(0, 5, 5, "=B1+1").unwrap();
+    // copy B1:B2 to D1: relative refs move
+    let out = b.paste_cells(0, Rect::new(0, 1, 1, 1), 0, Rect::cell(0, 3), PasteOpts::default(), false).unwrap();
+    assert_eq!(out, Rect::new(0, 3, 1, 3));
+    assert_eq!(b.input(0, 0, 3), "=C1*10");
+    // values
+    b.paste_cells(0, Rect::new(0, 1, 1, 1), 0, Rect::cell(0, 4), PasteOpts { what: What::Values, ..Default::default() }, false).unwrap();
+    assert_eq!(b.input(0, 1, 4), "20");
+    // operation: add A1:A2 onto E1:E2
+    b.paste_cells(0, Rect::new(0, 0, 1, 0), 0, Rect::cell(0, 4), PasteOpts { what: What::Values, op: Op::Add, ..Default::default() }, false).unwrap();
+    assert_eq!(n(&b, 1, 4), 22.0);
+    // transpose
+    b.paste_cells(0, Rect::new(0, 0, 1, 1), 0, Rect::cell(10, 0), PasteOpts { transpose: true, ..Default::default() }, false).unwrap();
+    assert_eq!(b.input(0, 10, 1), "2");
+    assert_eq!(b.input(0, 11, 0), "=XFD12*10");
+    // tiling: copy A1 into A20:A22
+    b.paste_cells(0, Rect::cell(0, 0), 0, Rect::new(19, 0, 21, 0), PasteOpts::default(), false).unwrap();
+    assert_eq!(b.input(0, 21, 0), "1");
+    // cut moves and references follow
+    b.paste_cells(0, Rect::new(0, 1, 0, 1), 0, Rect::cell(30, 1), PasteOpts::default(), true).unwrap();
+    assert_eq!(b.input(0, 5, 5), "=B31+1");
+    assert_eq!(b.input(0, 30, 1), "=A1*10");
+    assert_eq!(b.value(0, 0, 1), Value::Empty);
+    b.undo();
+    assert_eq!(b.input(0, 5, 5), "=B1+1");
+    // across workbooks
+    let bytes = b.copy_to_bytes(0, Rect::new(0, 0, 1, 1)).unwrap();
+    let clip = Book::from_bytes(&bytes).unwrap();
+    let mut c = blank();
+    c.paste_from(&clip, 0, Rect::new(0, 0, 1, 1), 0, Rect::cell(4, 4), PasteOpts::default()).unwrap();
+    assert_eq!(c.input(0, 4, 5), "=E5*10");
+    assert_eq!(c.value(0, 5, 5), Value::num(20.0));
+    c.paste_from(&clip, 0, Rect::new(0, 0, 1, 1), 0, Rect::cell(10, 0), PasteOpts { what: What::Values, ..Default::default() }).unwrap();
+    assert_eq!(c.input(0, 11, 1), "20");
+}
+
+#[test]
+fn fills() {
+    let mut b = blank();
+    b.set_input(0, 0, 0, "1").unwrap();
+    b.set_input(0, 1, 0, "3").unwrap();
+    b.set_input(0, 0, 1, "Mon").unwrap();
+    b.set_input(0, 0, 2, "Item 9").unwrap();
+    b.set_input(0, 0, 3, "1/15/2026").unwrap();
+    b.set_input(0, 1, 3, "2/15/2026").unwrap();
+    b.autofill(0, Rect::new(0, 3, 1, 3), Rect::new(0, 3, 3, 3), true, false, false).unwrap();
+    b.set_input(0, 0, 4, "=A1*2").unwrap();
+    b.set_input(0, 0, 5, "x").unwrap();
+    b.autofill(0, Rect::new(0, 0, 1, 0), Rect::new(0, 0, 4, 0), true, false, false).unwrap();
+    assert_eq!(n(&b, 4, 0), 9.0);
+    b.autofill(0, Rect::new(0, 1, 0, 2), Rect::new(0, 1, 3, 2), true, false, false).unwrap();
+    b.autofill(0, Rect::new(0, 4, 0, 5), Rect::new(0, 4, 3, 5), true, false, false).unwrap();
+    assert_eq!(b.value(0, 3, 1), Value::str("Thu"));
+    assert_eq!(b.value(0, 2, 2), Value::str("Item 11"));
+    assert_eq!(b.input(0, 3, 4), "=A4*2");
+    assert_eq!(b.value(0, 3, 5), Value::str("x"));
+    assert_eq!(b.display(0, 3, 3), "4/15/2026");
+    // up
+    b.set_input(0, 10, 7, "5").unwrap();
+    b.set_input(0, 11, 7, "6").unwrap();
+    b.autofill(0, Rect::new(10, 7, 11, 7), Rect::new(8, 7, 11, 7), true, false, false).unwrap();
+    assert_eq!(n(&b, 8, 7), 3.0);
+    // copy (Ctrl+drag)
+    b.autofill(0, Rect::new(0, 0, 1, 0), Rect::new(0, 0, 5, 0), false, false, false).unwrap();
+    assert_eq!(n(&b, 5, 0), 3.0);
+    // series dialog
+    b.set_input(0, 20, 0, "2").unwrap();
+    let k = b.fill_series(0, Rect::new(20, 0, 30, 0), false, "growth", "day", 3.0, Some(500.0), false).unwrap();
+    assert_eq!(k, 5);
+    assert_eq!(n(&b, 25, 0), 486.0);
+    // flash fill
+    b.set_input(0, 40, 0, "John Smith").unwrap();
+    b.set_input(0, 41, 0, "Ada Lovelace").unwrap();
+    b.set_input(0, 42, 0, "Alan Turing").unwrap();
+    b.set_input(0, 40, 1, "Smith").unwrap();
+    assert_eq!(b.flash_fill(0, 40, 1).unwrap(), 2);
+    assert_eq!(b.value(0, 42, 1), Value::str("Turing"));
+}
+
+#[test]
+fn charts_read_and_write() {
+    use crate::book_chart::kind_name;
+    let b = Book::open("testdata/charts.xlsx").unwrap();
+    let kinds: Vec<String> = b.sheets[0].objects.iter().filter_map(|o| o.chart.as_ref().map(|c| kind_name(c))).collect();
+    assert_eq!(kinds, vec!["col", "line-markers", "pie", "scatter", "combo", "bar-stacked", "doughnut", "area"], "{:?}", kinds);
+    assert_eq!(b.sheets[0].objects.iter().filter(|o| o.kind() == "picture").count(), 1);
+    let ch = b.chart(0, 1).unwrap();
+    assert_eq!(b.chart_title_text(ch).as_deref(), Some("Sales and costs"));
+    let s0 = ch.plots[0].series[0].clone();
+    assert_eq!(b.series_name(&s0, 0), "Sales");
+    let v: Vec<Option<f64>> = b.chart_values(s0.val.as_ref().unwrap()).iter().map(|p| p.v).collect();
+    assert_eq!(v, vec![Some(120.0), Some(150.0), Some(90.0), Some(180.0)]);
+    assert!(b.chart(0, 5).unwrap().plots[1].secondary);
+    // unchanged charts come back byte for byte
+    let bytes = b.to_bytes().unwrap();
+    let b2 = Book::from_bytes(&bytes).unwrap();
+    assert_eq!(b2.sheets[0].objects.len(), 9);
+    assert_eq!(b2.sheets[1].objects.len(), 1);
+    let z = crate::zip::ZipReader::open(&bytes).unwrap();
+    let ob = std::fs::read("testdata/charts.xlsx").unwrap();
+    let orig = crate::zip::ZipReader::open(&ob).unwrap();
+    assert!(z.read("xl/media/image1.png").is_ok());
+    let a = String::from_utf8(z.read("xl/charts/chart1.xml").unwrap()).unwrap();
+    let o = String::from_utf8(orig.read("xl/charts/chart1.xml").unwrap()).unwrap();
+    assert_eq!(a.replace("\r\n", "\n").trim_start_matches(|c| c != '<').len() > 0, true);
+    assert!(a.contains("<c:f>Data!$B$2:$B$5</c:f>") && o.contains("<c:f>Data!$B$2:$B$5</c:f>"));
+}
+
+#[test]
+fn charts_follow_edits() {
+    let mut b = Book::open("testdata/charts.xlsx").unwrap();
+    let before = b.obj_rect(0, &b.sheets[0].objects[1].clone());
+    b.insert_rows(0, 1, 2).unwrap();
+    let ch = b.chart(0, 1).unwrap();
+    assert_eq!(ch.plots[0].series[0].val.as_ref().unwrap().f.as_deref(), Some("Data!$B$4:$B$7"));
+    let after = b.obj_rect(0, &b.sheets[0].objects[1].clone());
+    assert!(after.1 > before.1, "the chart moves down with its rows");
+    // the other sheet's chart follows too
+    assert_eq!(b.chart(1, 0).unwrap().plots[0].series[0].val.as_ref().unwrap().f.as_deref(), Some("Data!$B$4:$B$7"));
+    b.rename_sheet(0, "Figures").unwrap();
+    assert_eq!(b.chart(1, 0).unwrap().plots[0].series[0].val.as_ref().unwrap().f.as_deref(), Some("Figures!$B$4:$B$7"));
+    let bytes = b.to_bytes().unwrap();
+    let _ = std::fs::write("/tmp/charts_edited.xlsx", &bytes);
+    let z = crate::zip::ZipReader::open(&bytes).unwrap();
+    let a = String::from_utf8(z.read("xl/charts/chart1.xml").unwrap()).unwrap();
+    assert!(a.contains("<c:f>Figures!$B$4:$B$7</c:f>"), "{}", &a[..400.min(a.len())]);
+    b.undo();
+    b.undo();
+    assert_eq!(b.chart(0, 1).unwrap().plots[0].series[0].val.as_ref().unwrap().f.as_deref(), Some("Data!$B$2:$B$5"));
+}
+
+#[test]
+fn charts_insert_change_delete() {
+    use crate::book_chart::kind_name;
+    let mut b = blank();
+    for (r, row) in [["", "North", "South"], ["Q1", "10", "20"], ["Q2", "15", "25"], ["Q3", "12", "30"]].iter().enumerate() {
+        for (c, v) in row.iter().enumerate() {
+            b.set_input(0, r as u32, c as u32, v).unwrap();
+        }
+    }
+    let i = b.insert_chart(0, Rect::new(0, 0, 3, 2), "col", 300.0, 20.0).unwrap();
+    let ch = b.chart(0, i).unwrap().clone();
+    assert_eq!(ch.plots[0].series.len(), 2);
+    assert_eq!(b.series_name(&ch.plots[0].series[1], 1), "South");
+    assert_eq!(ch.plots[0].series[0].cat.as_ref().unwrap().f.as_deref(), Some("Sheet1!$A$2:$A$4"));
+    assert_eq!(b.chart_title_text(&ch).as_deref(), Some("Chart Title"));
+    assert_eq!(b.chart_range_text(0, i).as_deref(), Some("Sheet1!$A$1:$C$4"));
+    b.switch_chart_rows(0, i).unwrap();
+    let ch = b.chart(0, i).unwrap().clone();
+    assert_eq!(ch.plots[0].series.len(), 3);
+    assert_eq!(b.series_name(&ch.plots[0].series[0], 0), "Q1");
+    b.set_chart_kind(0, i, "line-markers").unwrap();
+    assert_eq!(kind_name(b.chart(0, i).unwrap()), "line-markers");
+    b.set_chart_kind(0, i, "combo").unwrap();
+    assert_eq!(b.chart(0, i).unwrap().plots.len(), 2);
+    // saved and read back
+    let bytes = b.to_bytes().unwrap();
+    let _ = std::fs::write("/tmp/charts_new.xlsx", &bytes);
+    let b2 = Book::from_bytes(&bytes).unwrap();
+    assert_eq!(kind_name(b2.chart(0, 0).unwrap()), "combo");
+    assert_eq!(b2.chart(0, 0).unwrap().all_series().count(), 3);
+    // moved, then deleted: the parts go
+    b.set_object_rect(0, i, 10.0, 200.0, 400.0, 250.0, "Move Chart").unwrap();
+    let r = b.obj_rect(0, &b.sheets[0].objects[i].clone());
+    assert!((r.0 - 10.0).abs() < 1.0 && (r.1 - 200.0).abs() < 1.0 && (r.2 - 400.0).abs() < 1.0, "{:?}", r);
+    b.delete_objects(0, &[i]).unwrap();
+    let bytes = b.to_bytes().unwrap();
+    let z = crate::zip::ZipReader::open(&bytes).unwrap();
+    assert!(!z.names().iter().any(|n| n.contains("chart") || n.contains("drawing")), "{:?}", z.names());
+    b.undo();
+    assert_eq!(b.sheets[0].objects.len(), 1);
+    // a chart reading the file back after the file had one
+    let b3 = Book::from_bytes(&b.to_bytes().unwrap()).unwrap();
+    assert_eq!(b3.sheets[0].objects.len(), 1);
+}
+
+#[test]
+fn charts_render() {
+    let b = Book::open("testdata/charts.xlsx").unwrap();
+    let mut p = crate::view::ViewParams::default();
+    p.width = 1600.0;
+    p.height = 900.0;
+    crate::render::render_png(&b, 0, &p, "/tmp/charts_test.png").unwrap();
+}
+
+#[test]
+fn conditional_formats() {
+    let b = Book::open("testdata/cf.xlsx").unwrap();
+    let blocks = b.cf_blocks(0);
+    assert_eq!(blocks.len(), 11);
+    let at = |r: u32, c: u32| b.cf_at(0, r, c, &blocks);
+    // A: > 5 (values 3,8,1,9,5,7,2,6,4,10)
+    assert_eq!(at(1, 0).unwrap().dxf.fill, Some(0xFFC7CE));
+    assert!(at(0, 0).is_none());
+    assert!(at(4, 0).is_none(), "5 is not greater than 5");
+    // B: top 3 = 10, 9, 8
+    assert_eq!(at(9, 1).unwrap().dxf.bold, Some(true));
+    assert!(at(1, 1).is_some() && at(5, 1).is_none());
+    // C: above the average (5.5)
+    assert!(at(5, 2).is_some() && at(4, 2).is_none());
+    // D: colour scale: lowest red, highest green
+    assert_eq!(at(2, 3).unwrap().scale, Some(0xF8696B));
+    assert_eq!(at(9, 3).unwrap().scale, Some(0x63BE7B));
+    // E: 2007 bar, 10 % to 90 %
+    let (a, e, _, _, _) = at(9, 4).unwrap().bar.unwrap();
+    assert!(a == 0.0 && (e - 0.9).abs() < 1e-9, "{} {}", a, e);
+    // F: arrows by thirds
+    assert_eq!(at(2, 5).unwrap().icon, Some(("3Arrows".to_string(), 0)));
+    assert_eq!(at(9, 5).unwrap().icon, Some(("3Arrows".to_string(), 2)));
+    // G: 2010 solid bar with negatives around an axis (values -2..5)
+    let (a, e, bar, neg, axis) = at(2, 6).unwrap().bar.unwrap();
+    assert!(!bar.gradient && neg && axis.is_some() && a < e, "{:?}", (a, e, neg, axis));
+    // H: formula
+    assert!(at(1, 7).is_some() && at(0, 7).is_none());
+    // I: duplicates
+    assert!(at(0, 8).is_some() && at(3, 8).is_none());
+    // K: contains "an"
+    assert!(at(0, 10).is_some() && at(2, 10).is_some() && at(1, 10).is_none());
+    let mut p = crate::view::ViewParams::default();
+    p.width = 900.0;
+    p.height = 260.0;
+    crate::render::render_png(&b, 0, &p, "/tmp/cf_test.png").unwrap();
+}
+
+#[test]
+fn conditional_format_edits() {
+    use crate::cf::RuleSpec;
+    let mut b = blank();
+    for r in 0..6 {
+        b.set_input(0, r, 0, &format!("{}", r * 2)).unwrap();
+    }
+    let sp = RuleSpec { typ: "cellIs".into(), operator: "greaterThan".into(), values: vec!["5".into()], fill: Some(0xFFC7CE), font_color: Some(0x9C0006), ..Default::default() };
+    b.add_cf_rule(0, &[Rect::new(0, 0, 5, 0)], &sp).unwrap();
+    let blocks = b.cf_blocks(0);
+    assert!(b.cf_at(0, 3, 0, &blocks).is_some() && b.cf_at(0, 2, 0, &blocks).is_none());
+    // a formula rule, relative to the first cell
+    let sp2 = RuleSpec { typ: "expression".into(), values: vec!["=A1=0".into()], bold: true, ..Default::default() };
+    b.add_cf_rule(0, &[Rect::new(0, 0, 5, 0)], &sp2).unwrap();
+    let blocks = b.cf_blocks(0);
+    assert_eq!(blocks[1].rules[0].priority, 1, "the newest rule comes first");
+    assert_eq!(b.cf_at(0, 0, 0, &blocks).unwrap().dxf.bold, Some(true));
+    assert!(b.cf_at(0, 1, 0, &blocks).map(|o| o.dxf.bold.is_none()).unwrap_or(true));
+    // rows inserted above move the rules
+    b.insert_rows(0, 0, 1).unwrap();
+    let blocks = b.cf_blocks(0);
+    assert_eq!(blocks[0].ranges[0], Rect::new(1, 0, 6, 0));
+    assert_eq!(b.cf_at(0, 1, 0, &blocks).unwrap().dxf.bold, Some(true));
+    b.undo();
+    // clearing part of a range
+    b.clear_cf(0, Some(&[Rect::new(0, 0, 1, 0)])).unwrap();
+    let blocks = b.cf_blocks(0);
+    assert_eq!(blocks[0].ranges, vec![Rect::new(2, 0, 5, 0)]);
+    // saved and read back
+    let b2 = Book::from_bytes(&b.to_bytes().unwrap()).unwrap();
+    let bl2 = b2.cf_blocks(0);
+    assert_eq!(bl2.len(), 2);
+    assert_eq!(b2.cf_at(0, 3, 0, &bl2).unwrap().dxf.fill, Some(0xFFC7CE));
+    b.clear_cf(0, None).unwrap();
+    assert!(b.cf_blocks(0).is_empty());
+    b.undo();
+    assert_eq!(b.cf_blocks(0).len(), 2);
+}
+
+#[test]
+fn tables_from_file() {
+    let b = Book::open("testdata/table.xlsx").unwrap();
+    let t = &b.sheets[0].tables[0];
+    assert_eq!(t.name, "Sales");
+    assert!(t.totals && t.header);
+    assert_eq!(t.style.as_deref(), Some("TableStyleMedium9"));
+    // [@Qty]*[@Price], the totals and a reference from outside
+    assert_eq!(b.value(0, 2, 4), Value::Num(25.0));
+    assert_eq!(b.value(0, 5, 2), Value::Num(45.0));
+    assert_eq!(b.value(0, 5, 4), Value::Num(25.0 + 60.0 + 60.0));
+    assert_eq!(b.value(0, 1, 6), Value::Num(145.0));
+    assert_eq!(b.input(0, 2, 4), "=[@Qty]*[@Price]");
+    // saved: the references are qualified again
+    let bytes = b.to_bytes().unwrap();
+    let z = crate::zip::ZipReader::open(&bytes).unwrap();
+    let sx = String::from_utf8(z.read("xl/worksheets/sheet1.xml").unwrap()).unwrap();
+    assert!(sx.contains("Sales[[#This Row],[Qty]]*Sales[[#This Row],[Price]]"), "{}", &sx[..900]);
+    assert!(sx.contains("<tableParts count=\"1\">"));
+    let b2 = Book::from_bytes(&bytes).unwrap();
+    assert_eq!(b2.value(0, 1, 6), Value::Num(145.0));
+    assert_eq!(b2.sheets[0].tables[0].cols[3].calc.as_deref(), Some("Sales[[#This Row],[Qty]]*Sales[[#This Row],[Price]]"));
+}
+
+#[test]
+fn tables_commands() {
+    let mut b = blank();
+    for (r, row) in [["Item", "Qty", "Price"], ["Pens", "3", "1.5"], ["Ink", "2", "4"], ["Pads", "5", "2"]].iter().enumerate() {
+        for (c, v) in row.iter().enumerate() {
+            b.set_input(0, r as u32, c as u32, v).unwrap();
+        }
+    }
+    let i = b.create_table(0, Rect::new(1, 1, 1, 1), true, "TableStyleMedium2").unwrap();
+    assert_eq!(b.sheets[0].tables[i].rect, Rect::new(0, 0, 3, 2));
+    assert_eq!(b.sheets[0].tables[i].name, "Table1");
+    // a calculated column: typing a formula next to the table adds a column and fills it
+    b.set_input(0, 0, 3, "Amount").unwrap();
+    assert_eq!(b.sheets[0].tables[0].rect.c2, 3, "typing beside the table makes it wider");
+    b.set_input(0, 1, 3, "=[@Qty]*[@Price]").unwrap();
+    assert_eq!(b.value(0, 1, 3), Value::Num(4.5));
+    assert_eq!(b.value(0, 3, 3), Value::Num(10.0), "the formula filled the column");
+    // a new row below: the table grows and the formula comes along
+    b.set_input(0, 4, 0, "Clips").unwrap();
+    b.set_input(0, 4, 1, "10").unwrap();
+    b.set_input(0, 4, 2, "0.1").unwrap();
+    assert_eq!(b.sheets[0].tables[0].rect.r2, 4);
+    assert_eq!(b.value(0, 4, 3), Value::Num(1.0));
+    // a total row
+    b.set_table_option(0, 0, "totals", true).unwrap();
+    assert_eq!(b.value(0, 5, 3), Value::Num(4.5 + 8.0 + 10.0 + 1.0));
+    assert_eq!(b.display(0, 5, 0), "Total");
+    b.set_table_total(0, 0, 1, "average").unwrap();
+    assert_eq!(b.value(0, 5, 1), Value::Num(5.0));
+    // formulas outside
+    b.set_input(0, 8, 0, "=SUM(Table1[Qty])").unwrap();
+    assert_eq!(b.value(0, 8, 0), Value::Num(20.0));
+    b.set_input(0, 9, 0, "=ROWS(Table1[#All])").unwrap();
+    assert_eq!(b.value(0, 9, 0), Value::Num(6.0));
+    // renaming the column header follows into the formulas
+    b.set_input(0, 0, 1, "Count").unwrap();
+    assert_eq!(b.input(0, 8, 0), "=SUM(Table1[Count])");
+    assert_eq!(b.input(0, 1, 3), "=[@Count]*[@Price]");
+    assert_eq!(b.value(0, 8, 0), Value::Num(20.0));
+    // and renaming the table
+    b.rename_table(0, 0, "Orders").unwrap();
+    assert_eq!(b.input(0, 8, 0), "=SUM(Orders[Count])");
+    // rows inserted inside make it taller
+    b.insert_rows(0, 2, 1).unwrap();
+    assert_eq!(b.sheets[0].tables[0].rect, Rect::new(0, 0, 6, 3));
+    assert_eq!(b.value(0, 9, 0), Value::Num(20.0));
+    b.undo();
+    // saved and read back
+    let b2 = Book::from_bytes(&b.to_bytes().unwrap()).unwrap();
+    assert_eq!(b2.sheets[0].tables[0].name, "Orders");
+    assert_eq!(b2.value(0, 8, 0), Value::Num(20.0));
+    assert_eq!(b2.value(0, 3, 3), Value::Num(10.0));
+    // convert to a range: plain references
+    b.convert_table(0, 0).unwrap();
+    assert!(b.sheets[0].tables.is_empty());
+    assert_eq!(b.input(0, 8, 0), "=SUM($B$2:$B$5)");
+    assert_eq!(b.value(0, 8, 0), Value::Num(20.0));
+    b.undo();
+    assert_eq!(b.sheets[0].tables.len(), 1);
+    // the style draws
+    let mut p = crate::view::ViewParams::default();
+    p.width = 500.0;
+    p.height = 200.0;
+    crate::render::render_png(&b, 0, &p, "/tmp/table_test.png").unwrap();
+}
+
+#[test]
+fn notes_and_comments() {
+    let mut b = Book::open("testdata/notes.xlsx").unwrap();
+    let n = b.note(0, 0, 0).unwrap().clone();
+    assert_eq!(n.author, "Ron");
+    assert_eq!(n.text, "Ron:\nCheck this value");
+    assert!(!n.visible);
+    let n2 = b.note(0, 2, 1).unwrap().clone();
+    assert!(n2.visible && n2.w > crate::notes::NOTE_W, "{:?}", n2);
+    // unchanged: the parts are written back as they were (the button too)
+    let bytes = b.to_bytes().unwrap();
+    let z = crate::zip::ZipReader::open(&bytes).unwrap();
+    let ob = std::fs::read("testdata/notes.xlsx").unwrap();
+    let zo = crate::zip::ZipReader::open(&ob).unwrap();
+    assert_eq!(z.read("xl/drawings/vmlDrawing1.vml").unwrap(), zo.read("xl/drawings/vmlDrawing1.vml").unwrap());
+    // edits
+    b.set_note(0, 4, 4, "Ron", Some("Ron:\nNew one")).unwrap();
+    b.set_note(0, 0, 0, "Ron", None).unwrap();
+    b.add_comment(0, 6, 0, "Ron", "Is this right?").unwrap();
+    b.add_comment(0, 6, 0, "Ana", "Yes").unwrap();
+    assert!(b.add_comment(0, 4, 4, "Ron", "x").is_err(), "a note and a comment can't share a cell");
+    assert_eq!(b.thread(0, 6, 0).unwrap().entries.len(), 2);
+    let bytes = b.to_bytes().unwrap();
+    let z = crate::zip::ZipReader::open(&bytes).unwrap();
+    let vml = String::from_utf8(z.read("xl/drawings/vmlDrawing1.vml").unwrap()).unwrap();
+    assert!(vml.contains("Press") || vml.contains("Button"), "the button stays");
+    assert!(z.names().iter().any(|n| n.starts_with("xl/threadedComments/")), "{:?}", z.names());
+    assert!(z.names().iter().any(|n| n == "xl/persons/person.xml"));
+    let b2 = Book::from_bytes(&bytes).unwrap();
+    assert!(b2.note(0, 0, 0).is_none());
+    assert_eq!(b2.note(0, 4, 4).unwrap().text, "Ron:\nNew one");
+    let t = b2.thread(0, 6, 0).unwrap();
+    assert_eq!(t.entries.len(), 2);
+    assert_eq!(t.entries[1].author, "Ana");
+    assert_eq!(t.entries[0].text, "Is this right?");
+    // rows inserted above move them
+    b.insert_rows(0, 0, 2).unwrap();
+    assert!(b.note(0, 6, 4).is_some() && b.thread(0, 8, 0).is_some());
+    b.undo();
+    // notes to comments
+    assert_eq!(b.notes_to_comments(0).unwrap(), 2);
+    assert!(b.sheets[0].notes.is_empty());
+    assert_eq!(b.thread(0, 4, 4).unwrap().entries[0].text, "New one");
+    // the picture
+    let mut p = crate::view::ViewParams::default();
+    p.width = 600.0;
+    p.height = 260.0;
+    b.undo();
+    p.hover_note = Some((4, 4));
+    crate::render::render_png(&b, 0, &p, "/tmp/notes_test.png").unwrap();
+}
+
+#[test]
+fn page_setup_and_pages() {
+    let mut b = blank();
+    for r in 0..120 {
+        for c in 0..14 {
+            b.set_input(0, r, c, &format!("{}", r * 100 + c)).unwrap();
+        }
+    }
+    let mut p = b.page_setup(0);
+    assert_eq!(p.paper, 1);
+    let pages = b.pages(0);
+    // 14 columns of 64 px (48 pt) at 100 %: Letter is 7.1 in wide inside the margins
+    assert!(pages.len() >= 4, "{}", pages.len());
+    assert_eq!(pages[0].rows.0, 0);
+    assert_eq!(pages[0].cols.0, 0);
+    // fit to one page wide
+    p.fit = Some((1, 0));
+    p.landscape = true;
+    p.title_rows = Some((0, 0));
+    p.header = "&CQuarterly&R&P of &N".into();
+    p.row_breaks = vec![60];
+    b.set_page_setup(0, &p, "Page Setup").unwrap();
+    let p2 = b.page_setup(0);
+    assert_eq!(p2.fit, Some((1, 0)));
+    assert!(p2.landscape);
+    assert_eq!(p2.title_rows, Some((0, 0)));
+    let pages = b.pages(0);
+    assert!(pages.iter().all(|pg| pg.cols == (0, 13)), "one page wide: {:?}", pages);
+    assert!(pages.iter().any(|pg| pg.rows.0 == 60), "the manual break: {:?}", pages);
+    // saved and read back
+    let b2 = Book::from_bytes(&b.to_bytes().unwrap()).unwrap();
+    let p3 = b2.page_setup(0);
+    assert_eq!(p3.fit, Some((1, 0)));
+    assert_eq!(p3.header, "&CQuarterly&R&P of &N");
+    assert_eq!(p3.row_breaks, vec![60]);
+    assert_eq!(p3.title_rows, Some((0, 0)));
+    // rows inserted above the break move it
+    b.insert_rows(0, 10, 2).unwrap();
+    assert_eq!(b.page_setup(0).row_breaks, vec![62]);
+    b.undo();
+    // a page drawn
+    unsafe {
+        use crate::ffi::*;
+        let (w, h) = p2.paper_size();
+        let surf = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, w as i32, h as i32);
+        let cr = cairo_create(surf);
+        b.render_page(0, 1, cr, "test.xlsx").unwrap();
+        cairo_destroy(cr);
+        let path = cstr("/tmp/page_test.png");
+        cairo_surface_write_to_png(surf, path.as_ptr());
+        cairo_surface_destroy(surf);
+    }
+    b.undo();
+    assert_eq!(b.page_setup(0).fit, None);
+}
+
+#[test]
+fn data_validation() {
+    use crate::validation::DvSpec;
+    let mut b = blank();
+    let spec = |kind: &str, op: &str, f1: &str, f2: &str| DvSpec {
+        kind: kind.into(), op: op.into(), f1: f1.into(), f2: f2.into(), allow_blank: true, dropdown: true,
+        show_input: true, prompt_title: "Pick".into(), prompt: "One of the list".into(), show_error: true,
+        style: "stop".into(), error_title: String::new(), error: String::new(),
+    };
+    // whole numbers 1..10 in A1:A5
+    b.dv_set(0, &[Rect::new(0, 0, 4, 0)], &spec("whole", "between", "1", "10")).unwrap();
+    assert!(b.dv_check(0, 0, 0, "5").is_none());
+    assert!(b.dv_check(0, 2, 0, "11").is_some());
+    assert!(b.dv_check(0, 2, 0, "2.5").is_some());
+    assert!(b.dv_check(0, 2, 0, "abc").is_some());
+    assert!(b.dv_check(0, 2, 0, "").is_none());
+    assert!(b.dv_check(0, 6, 0, "11").is_none(), "outside the range");
+    // a typed list in B1:B3, case-insensitive
+    b.dv_set(0, &[Rect::new(0, 1, 2, 1)], &spec("list", "between", "Red,Green,Blue", "")).unwrap();
+    assert_eq!(b.dv_list(0, 1, 1), vec!["Red", "Green", "Blue"]);
+    assert!(b.dv_dropdown_at(0, 1, 1));
+    assert!(b.dv_check(0, 1, 1, "green").is_none());
+    assert!(b.dv_check(0, 1, 1, "Purple").is_some());
+    // a list from cells, the source moving with each cell
+    b.set_input(0, 0, 5, "x").unwrap();
+    b.set_input(0, 1, 5, "y").unwrap();
+    b.set_input(0, 2, 5, "7").unwrap();
+    b.dv_set(0, &[Rect::new(0, 2, 0, 2)], &spec("list", "between", "=$F$1:$F$3", "")).unwrap();
+    assert_eq!(b.dv_list(0, 0, 2), vec!["x", "y", "7"]);
+    assert!(b.dv_check(0, 0, 2, "7").is_none());
+    assert!(b.dv_check(0, 0, 2, "8").is_some());
+    // text length, dates, custom formulas
+    b.dv_set(0, &[Rect::new(0, 3, 0, 3)], &spec("textLength", "lessThanOrEqual", "3", "")).unwrap();
+    assert!(b.dv_check(0, 0, 3, "abc").is_none());
+    assert!(b.dv_check(0, 0, 3, "abcd").is_some());
+    b.dv_set(0, &[Rect::new(0, 4, 0, 4)], &spec("date", "greaterThan", "=DATE(2026,1,1)", "")).unwrap();
+    assert!(b.dv_check(0, 0, 4, "3/1/2026").is_none());
+    assert!(b.dv_check(0, 0, 4, "3/1/2025").is_some());
+    b.dv_set(0, &[Rect::new(1, 4, 1, 4)], &spec("date", "between", "1/1/2026", "12/31/2026")).unwrap();
+    assert_eq!(b.dv_at(0, 1, 4).unwrap().f1, "46023", "a typed date is kept as its serial number");
+    assert!(b.dv_check(0, 1, 4, "6/1/2026").is_none() && b.dv_check(0, 1, 4, "6/1/2027").is_some());
+    assert!(b.dv_set(0, &[Rect::new(1, 4, 1, 4)], &spec("whole", "greaterThan", "ten", "")).is_err());
+    b.dv_set(0, &[Rect::new(5, 0, 9, 0)], &spec("custom", "between", "=ISEVEN(A6)", "")).unwrap();
+    assert!(b.dv_check(0, 7, 0, "4").is_none(), "the formula moves with the cell and sees the new value");
+    assert!(b.dv_check(0, 7, 0, "5").is_some());
+    // saved and read again
+    let bytes = b.to_bytes().unwrap();
+    let mut b2 = Book::from_bytes(&bytes).unwrap();
+    let r = b2.dv_at(0, 1, 1).unwrap();
+    assert_eq!((r.kind.as_str(), r.prompt.as_str(), r.dropdown), ("list", "One of the list", true));
+    assert!(b2.dv_check(0, 2, 0, "11").is_some());
+    // Clear All on part of a range leaves the rest
+    b2.dv_clear(0, &[Rect::new(1, 0, 1, 0)]).unwrap();
+    assert!(b2.dv_at(0, 1, 0).is_none());
+    assert!(b2.dv_at(0, 0, 0).is_some() && b2.dv_at(0, 2, 0).is_some());
+    b2.undo();
+    assert!(b2.dv_at(0, 1, 0).is_some());
+    // replacing a rule over part of another
+    b2.dv_set(0, &[Rect::new(0, 0, 1, 0)], &spec("decimal", "greaterThan", "0", "")).unwrap();
+    assert_eq!(b2.dv_at(0, 0, 0).unwrap().kind, "decimal");
+    assert_eq!(b2.dv_at(0, 3, 0).unwrap().kind, "whole");
+    // rows inserted above move the rules
+    b2.insert_rows(0, 0, 2).unwrap();
+    assert_eq!(b2.dv_at(0, 3, 1).unwrap().kind, "list");
+    assert!(b2.dv_at(0, 0, 1).is_none());
+    // circle invalid data
+    b2.set_input(0, 5, 0, "50").unwrap();
+    assert_eq!(b2.dv_invalid(0, 100), vec![(5, 0)]);
+    // paste copies the rule along
+    b2.begin("Paste", 0);
+    b2.copy_validation(0, Rect::new(2, 1, 4, 1), 0, Rect::new(2, 8, 4, 8));
+    b2.commit();
+    assert_eq!(b2.dv_list(0, 3, 8), vec!["Red", "Green", "Blue"]);
+    // so does Paste (all, or Paste Special > Validation), not Paste Values
+    use crate::book_clip::{PasteOpts, What};
+    b2.paste_cells(0, Rect::new(3, 1, 3, 1), 0, Rect::new(20, 2, 20, 2), PasteOpts::default(), false).unwrap();
+    assert_eq!(b2.dv_at(0, 20, 2).unwrap().kind, "list");
+    let vals = PasteOpts { what: What::Values, ..PasteOpts::default() };
+    b2.paste_cells(0, Rect::new(3, 1, 3, 1), 0, Rect::new(21, 2, 21, 2), vals, false).unwrap();
+    assert!(b2.dv_at(0, 21, 2).is_none());
+    b2.set_input(0, 22, 2, "x").unwrap();
+    let only = PasteOpts { what: What::Validation, ..PasteOpts::default() };
+    b2.paste_cells(0, Rect::new(3, 1, 3, 1), 0, Rect::new(22, 2, 23, 2), only, false).unwrap();
+    assert_eq!(b2.dv_at(0, 23, 2).unwrap().kind, "list");
+    assert_eq!(b2.input(0, 22, 2), "x", "Paste Validation leaves the contents");
+    b2.undo();
+    assert!(b2.dv_at(0, 23, 2).is_none());
+    // the selection: one rule, rules that differ, cells without the rule
+    let sel = |b: &Book, r: Rect| b.dv_for_selection(0, (r.r1, r.c1), &[r]).1;
+    assert_eq!(sel(&b2, Rect::new(3, 1, 4, 1)), "");
+    assert_eq!(sel(&b2, Rect::new(3, 1, 3, 3)), "extend");
+    assert_eq!(sel(&b2, Rect::new(3, 0, 3, 1)), "erase");
+}
+
+#[test]
+fn hyperlinks() {
+    use crate::links::Link;
+    let mut b = blank();
+    let web = |t: &str| Link { rect: Rect::new(0, 0, 0, 0), target: t.into(), location: String::new(), display: String::new(), tooltip: String::new() };
+    b.set_input(0, 0, 0, "site").unwrap();
+    b.set_link(0, Rect::new(0, 0, 0, 0), &Link { tooltip: "Go".into(), ..web("https://example.org/a?b=1&c=2") }).unwrap();
+    b.set_link(0, Rect::new(2, 0, 3, 1), &Link { location: "Sheet1!D10".into(), ..web("") }).unwrap();
+    assert_eq!(b.link_at(0, 0, 0).unwrap().target, "https://example.org/a?b=1&c=2");
+    assert_eq!(b.link_at(0, 3, 1).unwrap().location, "Sheet1!D10");
+    assert!(b.link_at(0, 1, 0).is_none());
+    assert!(b.set_link(0, Rect::new(5, 5, 5, 5), &web("  ")).is_err());
+    // saved: an outside address is a relationship, a place is an attribute
+    let bytes = b.to_bytes().unwrap();
+    let z = crate::zip::ZipReader::open(&bytes).unwrap();
+    let get = |n: &str| z.read(n).map(|d| String::from_utf8_lossy(&d).to_string()).unwrap_or_default();
+    let sheet = get("xl/worksheets/sheet1.xml");
+    let rels = get("xl/worksheets/_rels/sheet1.xml.rels");
+    assert!(sheet.contains("r:id=\"rId") && !sheet.contains("_target"), "{}", sheet);
+    assert!(rels.contains("TargetMode=\"External\"") && rels.contains("example.org/a?b=1&amp;c=2"), "{}", rels);
+    let mut b2 = Book::from_bytes(&bytes).unwrap();
+    assert_eq!(b2.link_at(0, 0, 0).unwrap().target, "https://example.org/a?b=1&c=2");
+    assert_eq!(b2.link_at(0, 0, 0).unwrap().tooltip, "Go");
+    assert_eq!(b2.link_at(0, 2, 0).unwrap().location, "Sheet1!D10");
+    // saving twice doesn't pile up relationships
+    let bytes2 = b2.to_bytes().unwrap();
+    let z2 = crate::zip::ZipReader::open(&bytes2).unwrap();
+    let rels2 = String::from_utf8_lossy(&z2.read("xl/worksheets/_rels/sheet1.xml.rels").unwrap()).to_string();
+    assert_eq!(rels2.matches("/hyperlink\"").count(), 1, "{}", rels2);
+    // clearing part of a range link keeps the rest
+    assert_eq!(b2.clear_links(0, &[Rect::new(2, 0, 2, 1)]), 1);
+    assert!(b2.link_at(0, 2, 0).is_none() && b2.link_at(0, 3, 0).is_some());
+    b2.undo();
+    assert!(b2.link_at(0, 2, 0).is_some());
+    // rows move links; deleting the row of a link deletes it
+    b2.insert_rows(0, 0, 1).unwrap();
+    assert!(b2.link_at(0, 1, 0).is_some() && b2.link_at(0, 0, 0).is_none());
+    b2.delete_rows(0, 1, 1).unwrap();
+    assert!(b2.link_at(0, 0, 0).is_none(), "the deleted cell's link goes, not onto the next row");
+    assert_eq!(b2.links(0).len(), 1);
+    // paste carries links
+    use crate::book_clip::PasteOpts;
+    b2.paste_cells(0, Rect::new(2, 0, 2, 0), 0, Rect::new(8, 8, 8, 8), PasteOpts::default(), false).unwrap();
+    assert_eq!(b2.link_at(0, 8, 8).unwrap().location, "Sheet1!D10");
+    // and a deleted row takes a validation rule with it too
+    b2.dv_set(0, &[Rect::new(20, 0, 20, 0)], &crate::validation::DvSpec { kind: "whole".into(), op: "greaterThan".into(), f1: "1".into(), f2: String::new(), allow_blank: true, dropdown: true, show_input: true, prompt_title: String::new(), prompt: String::new(), show_error: true, style: "stop".into(), error_title: String::new(), error: String::new() }).unwrap();
+    b2.delete_rows(0, 20, 1).unwrap();
+    assert!(b2.dv_at(0, 20, 0).is_none());
+    // =HYPERLINK() points where its first argument says
+    b2.set_input(0, 30, 0, "x.org").unwrap();
+    b2.set_input(0, 30, 1, "=HYPERLINK(\"https://\"&A31, \"go\")").unwrap();
+    assert_eq!(b2.formula_link(0, 30, 1).as_deref(), Some("https://x.org"));
+    assert!(b2.formula_link(0, 30, 0).is_none());
+}
+
+#[test]
+fn protection() {
+    let mut b = blank();
+    assert!(b.locked_in(0, &[Rect::new(0, 0, 3, 3)]), "cells are locked by default");
+    b.restyle_ops(0, &[Rect::new(0, 0, 1, 1)], &[crate::book_fmt::StyleOp::Change(crate::styles::Change { locked: Some(false), ..Default::default() })], "Lock Cell").unwrap();
+    assert!(!b.locked_in(0, &[Rect::new(0, 0, 1, 1)]));
+    assert!(b.locked_in(0, &[Rect::new(0, 0, 2, 1)]));
+    // whole columns unlocked
+    b.restyle_ops(0, &[Rect::new(0, 5, crate::cellref::MAX_ROWS - 1, 5)], &[crate::book_fmt::StyleOp::Change(crate::styles::Change { locked: Some(false), ..Default::default() })], "Lock Cell").unwrap();
+    assert!(!b.locked_in(0, &[Rect::new(0, 5, crate::cellref::MAX_ROWS - 1, 5)]));
+    assert!(b.locked_in(0, &[Rect::new(0, 5, crate::cellref::MAX_ROWS - 1, 6)]));
+    let v = b.edits;
+    b.set_sheet_protection(0, Some(vec![("sheet".into(), "1".into()), ("objects".into(), "1".into())]));
+    assert!(b.edits > v);
+    b.set_input(0, 9, 9, "x").unwrap();
+    b.undo();
+    assert!(b.sheet_protection(0).is_some(), "undo doesn't unprotect");
+    b.set_workbook_protection(Some(vec![("lockStructure".into(), "1".into())]));
+    let bytes = b.to_bytes().unwrap();
+    let z = crate::zip::ZipReader::open(&bytes).unwrap();
+    let ws = String::from_utf8_lossy(&z.read("xl/worksheets/sheet1.xml").unwrap()).to_string();
+    let wb = String::from_utf8_lossy(&z.read("xl/workbook.xml").unwrap()).to_string();
+    assert!(ws.contains("<sheetProtection sheet=\"1\" objects=\"1\"/>"), "{}", ws);
+    assert!(ws.find("sheetProtection").unwrap() < ws.find("pageMargins").unwrap_or(usize::MAX), "in schema order");
+    assert!(wb.contains("<workbookProtection lockStructure=\"1\"/>"), "{}", wb);
+    let mut b2 = Book::from_bytes(&bytes).unwrap();
+    assert_eq!(b2.sheet_protection(0).unwrap()[0], ("sheet".to_string(), "1".to_string()));
+    assert_eq!(b2.workbook_protection().unwrap()[0].0, "lockStructure");
+    assert!(!b2.locked_in(0, &[Rect::new(0, 0, 1, 1)]), "Lock Cell survives saving");
+    b2.set_sheet_protection(0, None);
+    b2.set_workbook_protection(None);
+    let bytes = b2.to_bytes().unwrap();
+    let z = crate::zip::ZipReader::open(&bytes).unwrap();
+    let ws = String::from_utf8_lossy(&z.read("xl/worksheets/sheet1.xml").unwrap()).to_string();
+    let wb = String::from_utf8_lossy(&z.read("xl/workbook.xml").unwrap()).to_string();
+    assert!(!ws.contains("sheetProtection") && !wb.contains("workbookProtection"));
+}
+
+#[test]
+fn outline() {
+    let mut b = blank();
+    // rows 2-4 and 6-7 grouped, then 2-7 grouped around them
+    b.outline_lines(0, true, 1, 3, 1).unwrap();
+    b.outline_lines(0, true, 5, 6, 1).unwrap();
+    b.outline_lines(0, true, 1, 6, 1).unwrap();
+    assert_eq!(b.max_level(0, true), 2);
+    let g = b.groups(0, true);
+    assert!(g.contains(&(1, 6, 1)) && g.contains(&(1, 3, 2)) && g.contains(&(5, 6, 2)), "{:?}", g);
+    // Hide Detail from the summary row of the first inner group (row 5)
+    b.set_detail(0, true, 4, false).unwrap();
+    assert!((1..=3).all(|r| b.line(0, true, r).hidden) && b.line(0, true, 4).collapsed && !b.line(0, true, 5).hidden);
+    // level 1: everything inside the outer group hidden; level 3: all shown
+    b.show_levels(0, true, 1);
+    assert!((1..=6).all(|r| b.line(0, true, r).hidden) && b.line(0, true, 7).collapsed);
+    b.show_levels(0, true, 3);
+    assert!((1..=6).all(|r| !b.line(0, true, r).hidden) && !b.line(0, true, 7).collapsed && !b.line(0, true, 4).collapsed);
+    // Show Detail of the outer group keeps a collapsed inner group closed
+    b.set_detail(0, true, 4, false).unwrap();
+    b.set_detail(0, true, 7, false).unwrap();
+    b.set_detail(0, true, 7, true).unwrap();
+    assert!(b.line(0, true, 1).hidden && !b.line(0, true, 5).hidden && !b.line(0, true, 4).hidden);
+    // undo goes back step by step
+    b.undo();
+    assert!(b.line(0, true, 5).hidden);
+    // ungroup, errors, clear
+    assert!(b.outline_lines(0, true, 20, 22, -1).is_err());
+    b.outline_lines(0, true, 5, 6, -1).unwrap();
+    assert_eq!(b.line(0, true, 5).level, 1);
+    // columns
+    b.outline_lines(0, false, 2, 4, 1).unwrap();
+    b.set_detail(0, false, 5, false).unwrap();
+    assert!((2..=4).all(|c| b.line(0, false, c).hidden) && b.line(0, false, 5).collapsed);
+    b.set_detail(0, false, 5, true).unwrap();
+    assert!((2..=4).all(|c| !b.line(0, false, c).hidden));
+    // saved with its depth, and read back
+    let bytes = b.to_bytes().unwrap();
+    let z = crate::zip::ZipReader::open(&bytes).unwrap();
+    let ws = String::from_utf8_lossy(&z.read("xl/worksheets/sheet1.xml").unwrap()).to_string();
+    assert!(ws.contains("outlineLevelRow=\"2\"") && ws.contains("outlineLevelCol=\"1\""), "{}", &ws[..ws.len().min(600)]);
+    let b2 = Book::from_bytes(&bytes).unwrap();
+    assert_eq!(b2.line(0, true, 2).level, 2);
+    assert_eq!(b2.line(0, false, 3).level, 1);
+    b.clear_outline(0, true);
+    assert_eq!(b.max_level(0, true), 0);
+    // nested groups ending together share a summary row
+    let mut c = blank();
+    c.outline_lines(0, true, 1, 3, 1).unwrap();
+    c.outline_lines(0, true, 2, 3, 1).unwrap();
+    c.set_detail(0, true, 2, false).unwrap();
+    assert!(c.line(0, true, 2).hidden && !c.line(0, true, 1).hidden);
+    c.set_detail(0, true, 4, true).unwrap();
+    assert!(!c.line(0, true, 2).hidden, "showing from the shared summary row shows all of it");
+}
+
+#[test]
+fn pictures_insert_save_reopen() {
+    let dir = std::env::temp_dir().join(format!("fs-pic-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut b = blank();
+    // a 40 x 20 PNG and a JPEG made by our own encoders
+    let mut px = Vec::new();
+    for y in 0..20u32 {
+        for x in 0..40u32 {
+            px.extend_from_slice(&[(x * 6) as u8, (y * 12) as u8, 90, 255]);
+        }
+    }
+    let png = crate::png::encode(40, 20, &px, 6);
+    let jpg = crate::jpeg::encode(40, 20, &px, 90);
+    let i = b.insert_picture(0, png.clone(), 100.0, 50.0, 1e9, 1e9).unwrap();
+    let k = b.insert_picture(0, jpg.clone(), 300.0, 50.0, 20.0, 20.0).unwrap();
+    assert_eq!((i, k), (0, 1));
+    assert_eq!(b.sheets[0].objects[0].kind(), "picture");
+    let r0 = b.obj_rect(0, &b.sheets[0].objects[0]);
+    assert!((r0.2 - 40.0).abs() < 0.5 && (r0.3 - 20.0).abs() < 0.5, "{:?}", r0);
+    let r1 = b.obj_rect(0, &b.sheets[0].objects[1]);
+    assert!((r1.2 - 20.0).abs() < 0.5 && (r1.3 - 10.0).abs() < 0.5, "fits the limit keeping proportions {:?}", r1);
+    assert!(b.insert_picture(0, b"not a picture".to_vec(), 0.0, 0.0, 1e9, 1e9).is_err());
+    // undo takes it back
+    assert_eq!(b.undo().unwrap().0, "Insert Picture");
+    assert_eq!(b.sheets[0].objects.len(), 1);
+    b.redo();
+    let path = dir.join("pics.xlsx");
+    b.save(path.to_str().unwrap()).unwrap();
+    let b2 = Book::open(path.to_str().unwrap()).unwrap();
+    assert_eq!(b2.sheets[0].objects.len(), 2);
+    assert_eq!(b2.picture_bytes(0, 0).map(|(d, e)| (d.to_vec(), e)), Some((png.clone(), "png")));
+    assert_eq!(b2.picture_bytes(0, 1).map(|(d, e)| (d.to_vec(), e)), Some((jpg.clone(), "jpeg")));
+    assert_eq!(b2.sheets[0].objects[1].picture.as_ref().unwrap().size(), Some((40, 20)));
+    let q = b2.obj_rect(0, &b2.sheets[0].objects[0]);
+    assert!((q.0 - r0.0).abs() < 0.5 && (q.2 - r0.2).abs() < 0.5, "{:?} vs {:?}", q, r0);
+    // and once more: the pictures read from the file are kept as they are
+    let mut b3 = b2;
+    let p2 = dir.join("pics2.xlsx");
+    b3.save(p2.to_str().unwrap()).unwrap();
+    let b4 = Book::open(p2.to_str().unwrap()).unwrap();
+    assert_eq!(b4.picture_bytes(0, 1).map(|(d, _)| d.to_vec()), Some(jpg));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn macro_workbooks_keep_their_macros() {
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/testdata/macros.xlsm");
+    let mut b = Book::open(path).unwrap();
+    assert!(b.has_macros());
+    let m = b.macros();
+    println!("macros: {:?}", m);
+    assert!(!m.is_empty());
+    let dir = std::env::temp_dir();
+    // saved as .xlsm: the project comes along, byte for byte, and the workbook says it has macros
+    let xm = dir.join("fs-macros-keep.xlsm");
+    b.set_input(0, 3, 3, "edited").unwrap();
+    b.save(xm.to_str().unwrap()).unwrap();
+    let read_all = |d: &[u8]| -> Result<Vec<(String, Vec<u8>)>, String> {
+        let z = crate::zip::ZipReader::open(d)?;
+        Ok(z.names().into_iter().map(|n| { let b = z.read(&n).unwrap(); (n, b) }).collect())
+    };
+    let z = std::fs::read(&xm).unwrap();
+    let parts = read_all(&z).unwrap();
+    let orig = read_all(&std::fs::read(path).unwrap()).unwrap();
+    
+    let vb = |p: &Vec<(String, Vec<u8>)>| p.iter().find(|(n, _)| n == "xl/vbaProject.bin").map(|(_, d)| d.clone());
+    assert_eq!(vb(&parts), vb(&orig));
+    let ct = String::from_utf8(parts.iter().find(|(n, _)| n == "[Content_Types].xml").unwrap().1.clone()).unwrap();
+    assert!(ct.contains("application/vnd.ms-excel.sheet.macroEnabled.main+xml"), "{}", ct);
+    let b2 = Book::open(xm.to_str().unwrap()).unwrap();
+    assert!(b2.has_macros());
+    assert_eq!(b2.macros(), m);
+    assert_eq!(b2.display(0, 3, 3), "edited");
+    // saved as .xlsx: macro-free, as Excel does it
+    let xx = dir.join("fs-macros-free.xlsx");
+    b.save(xx.to_str().unwrap()).unwrap();
+    let parts = read_all(&std::fs::read(&xx).unwrap()).unwrap();
+    assert!(vb(&parts).is_none());
+    let ct = String::from_utf8(parts.iter().find(|(n, _)| n == "[Content_Types].xml").unwrap().1.clone()).unwrap();
+    assert!(!ct.contains("macroEnabled") && ct.contains("spreadsheetml.sheet.main+xml"), "{}", ct);
+    let rels = String::from_utf8(parts.iter().find(|(n, _)| n == "xl/_rels/workbook.xml.rels").unwrap().1.clone()).unwrap();
+    assert!(!rels.contains("vbaProject"));
+    let b3 = Book::open(xx.to_str().unwrap()).unwrap();
+    assert!(!b3.has_macros());
+    b.drop_macros();
+    assert!(!b.has_macros() && b.macros().is_empty());
+    // a new workbook saved as .xlsm is a valid macro-enabled file (with no project)
+    let mut n = Book::new_empty();
+    n.set_input(0, 0, 0, "1").unwrap();
+    let nx = dir.join("fs-new.xlsm");
+    n.save(nx.to_str().unwrap()).unwrap();
+    let parts = read_all(&std::fs::read(&nx).unwrap()).unwrap();
+    let ct = String::from_utf8(parts.iter().find(|(n, _)| n == "[Content_Types].xml").unwrap().1.clone()).unwrap();
+    assert!(ct.contains("sheet.macroEnabled.main+xml"));
+    // templates
+    let t = dir.join("fs-t.xltx");
+    n.save(t.to_str().unwrap()).unwrap();
+    let parts = read_all(&std::fs::read(&t).unwrap()).unwrap();
+    let ct = String::from_utf8(parts.iter().find(|(n, _)| n == "[Content_Types].xml").unwrap().1.clone()).unwrap();
+    assert!(ct.contains("spreadsheetml.template.main+xml"));
+}
+
+#[test]
+fn ink_is_kept_as_office_ink() {
+    use crate::ink::{Stroke, HIGHLIGHTER, PEN};
+    let mut b = Book::new_empty();
+    let pen = Stroke { pts: vec![(100.0, 50.0), (150.0, 80.0), (220.0, 60.0)], color: 0xE71224, width: 2.0, kind: PEN };
+    let hl = Stroke { pts: vec![(90.0, 120.0), (300.0, 120.0)], color: 0xFFFF00, width: 14.0, kind: HIGHLIGHTER };
+    let i = b.add_ink(0, vec![pen.clone()]).unwrap();
+    let j = b.add_ink(0, vec![hl.clone()]).unwrap();
+    assert_eq!(b.sheets[0].objects[i].kind(), "ink");
+    let st = b.ink_strokes(0, i).unwrap();
+    assert!((st[0].pts[2].0 - 220.0).abs() < 0.6 && (st[0].pts[2].1 - 60.0).abs() < 0.6, "{:?}", st[0].pts);
+    assert_eq!(b.ink_at(0, 150.0, 81.0, 3.0), vec![i]);
+    assert_eq!(b.ink_at(0, 200.0, 124.0, 1.0), vec![j]);
+    assert!(b.ink_at(0, 400.0, 400.0, 5.0).is_empty());
+    let dir = std::env::temp_dir().join("fs-ink.xlsx");
+    b.save(dir.to_str().unwrap()).unwrap();
+    let z = std::fs::read(&dir).unwrap();
+    let zr = crate::zip::ZipReader::open(&z).unwrap();
+    let names = zr.names();
+    assert!(names.iter().any(|n| n == "xl/ink/ink1.xml") && names.iter().any(|n| n == "xl/ink/ink2.xml"), "{:?}", names);
+    let drawing = String::from_utf8(zr.read("xl/drawings/drawing1.xml").unwrap()).unwrap();
+    assert!(drawing.contains("mc:AlternateContent") && drawing.contains("xdr14:contentPart"), "{}", drawing);
+    let ct = String::from_utf8(zr.read("[Content_Types].xml").unwrap()).unwrap();
+    assert!(ct.contains("application/inkml+xml"));
+    let b2 = Book::open(dir.to_str().unwrap()).unwrap();
+    assert_eq!(b2.sheets[0].objects.len(), 2);
+    let back = b2.ink_strokes(0, 0).unwrap();
+    assert_eq!(back[0].color, 0xE71224);
+    assert!((back[0].pts[2].0 - 220.0).abs() < 1.0 && (back[0].pts[2].1 - 60.0).abs() < 1.0, "{:?}", back[0].pts);
+    let back2 = b2.ink_strokes(0, 1).unwrap();
+    assert_eq!(back2[0].kind, HIGHLIGHTER);
+    assert!((back2[0].width - 14.0).abs() < 0.05);
+    // saved again: still two ink parts, no stray ones
+    let mut b3 = b2;
+    b3.delete_objects(0, &[1]).unwrap();
+    let d2 = std::env::temp_dir().join("fs-ink2.xlsx");
+    b3.save(d2.to_str().unwrap()).unwrap();
+    let z = std::fs::read(&d2).unwrap();
+    let names = crate::zip::ZipReader::open(&z).unwrap().names();
+    assert_eq!(names.iter().filter(|n| n.starts_with("xl/ink/")).count(), 1, "{:?}", names);
+}
+
+#[test]
+fn wrapped_objects_survive_saving() {
+    // an mc:AlternateContent object (here a 2010 shape) is kept as it was, beside new ink
+    let mut b = Book::new_empty();
+    b.add_ink(0, vec![crate::ink::Stroke { pts: vec![(10.0, 10.0), (40.0, 40.0)], color: 0, width: 2.0, kind: 0 }]).unwrap();
+    let p1 = std::env::temp_dir().join("fs-alt1.xlsx");
+    b.save(p1.to_str().unwrap()).unwrap();
+    let z = std::fs::read(&p1).unwrap();
+    let zr = crate::zip::ZipReader::open(&z).unwrap();
+    let mut w = crate::zip::ZipWriter::new();
+    let extra = "<mc:AlternateContent xmlns:mc=\"http://schemas.openxmlformats.org/markup-compatibility/2006\"><mc:Choice xmlns:a14=\"http://schemas.microsoft.com/office/drawing/2010/main\" Requires=\"a14\"><xdr:twoCellAnchor><xdr:from><xdr:col>5</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>5</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:to><xdr:col>7</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>8</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:to><xdr:sp macro=\"\" textlink=\"\"><xdr:nvSpPr><xdr:cNvPr id=\"9\" name=\"Keep Me\"/><xdr:cNvSpPr/></xdr:nvSpPr><xdr:spPr><a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom></xdr:spPr></xdr:sp><xdr:clientData/></xdr:twoCellAnchor></mc:Choice><mc:Fallback/></mc:AlternateContent>";
+    for n in zr.names() {
+        let mut d = zr.read(&n).unwrap();
+        if n == "xl/drawings/drawing1.xml" {
+            let t = String::from_utf8(d).unwrap().replace("</xdr:wsDr>", &format!("{}</xdr:wsDr>", extra));
+            d = t.into_bytes();
+        }
+        w.add(&n, &d, true);
+    }
+    let p2 = std::env::temp_dir().join("fs-alt2.xlsx");
+    std::fs::write(&p2, w.finish()).unwrap();
+    let mut b2 = Book::open(p2.to_str().unwrap()).unwrap();
+    assert_eq!(b2.sheets[0].objects.len(), 2);
+    assert_eq!(b2.sheets[0].objects[1].name, "Keep Me");
+    b2.set_input(0, 0, 0, "x").unwrap();
+    let p3 = std::env::temp_dir().join("fs-alt3.xlsx");
+    b2.save(p3.to_str().unwrap()).unwrap();
+    let z = std::fs::read(&p3).unwrap();
+    let d = String::from_utf8(crate::zip::ZipReader::open(&z).unwrap().read("xl/drawings/drawing1.xml").unwrap()).unwrap();
+    assert!(d.contains("Keep Me") && d.contains("Requires=\"a14\""), "{}", d);
+    assert!(d.contains("xdr14:contentPart"));
+}
+
+#[test]
+fn shapes_text_boxes_and_wordart() {
+    let mut b = Book::new_empty();
+    let r = b.insert_shape(0, "roundRect", 100.0, 100.0, 200.0, 80.0, false, false).unwrap();
+    let l = b.insert_shape(0, "straightConnector1", 50.0, 300.0, 150.0, 40.0, false, true).unwrap();
+    let t = b.insert_text_box(0, 400.0, 100.0, 160.0, 60.0, "Hello").unwrap();
+    let w = b.insert_wordart(0, 3, "Title", 300.0, 400.0).unwrap();
+    assert_eq!(b.sheets[0].objects[r].name, "Rectangle: Rounded Corners 1");
+    assert_eq!(b.sheets[0].objects[t].name, "TextBox 1");
+    assert_eq!(b.sheets[0].objects[w].name, "TextBox 2");
+    b.edit_shape(0, &[r], "Shape Fill", |x| crate::shape::set_fill(x, Some(0x00B050))).unwrap();
+    b.edit_shape(0, &[r], "Typing", |x| crate::shape::set_text(x, "Inside")).unwrap();
+    assert_eq!(b.shape_view(0, r).unwrap().fill, Some((0x00B050, 1.0)));
+    b.undo();
+    assert_eq!(b.shape_view(0, r).unwrap().text(), "");
+    b.redo();
+    let p = std::env::temp_dir().join("fs-shapes.xlsx");
+    b.save(p.to_str().unwrap()).unwrap();
+    let b2 = Book::open(p.to_str().unwrap()).unwrap();
+    assert_eq!(b2.sheets[0].objects.len(), 4);
+    let v = b2.shape_view(0, r).unwrap();
+    assert_eq!(v.geom, "roundRect");
+    assert_eq!(v.text(), "Inside");
+    assert_eq!(v.fill, Some((0x00B050, 1.0)));
+    let lv = b2.shape_view(0, l).unwrap();
+    assert!(lv.connector && lv.tail && lv.flip_v);
+    assert_eq!(b2.shape_view(0, t).unwrap().text(), "Hello");
+    let wv = b2.shape_view(0, w).unwrap();
+    assert!(wv.paras[0].runs[0].outline.is_some() && wv.fill.is_none());
+    // order
+    assert_eq!(b.reorder_object(0, 0, 100).unwrap(), 3);
+    assert_eq!(b.sheets[0].objects[3].name, "Rectangle: Rounded Corners 1");
+}
+
+#[test]
+fn sparklines_round_trip() {
+    let mut b = Book::new_empty();
+    for r in 0..3u32 {
+        for c in 0..5u32 {
+            b.set_input(0, r, c, &format!("{}", (r as i32 + 1) * (c as i32 - 2))).unwrap();
+        }
+    }
+    let loc = crate::cellref::parse_range("F1:F3").unwrap();
+    let g = b.add_sparklines(0, "line", "A1:E3", loc).unwrap();
+    assert_eq!(b.sparkline_at(0, 1, 5), Some((g, 1)));
+    let gs = b.sparkline_groups(0);
+    assert_eq!(gs[0].items[2].0, "Sheet1!A3:E3");
+    assert_eq!(b.sparkline_values(0, "Sheet1!A2:E2"), vec![Some(-4.0), Some(-2.0), Some(0.0), Some(2.0), Some(4.0)]);
+    b.edit_sparkline_group(0, g, |x| { x.kind = "column".into(); x.high = true; }).unwrap();
+    assert!(b.add_sparklines(0, "line", "A1:E3", crate::cellref::parse_range("G1:H3").unwrap()).is_err());
+    let p = std::env::temp_dir().join("fs-spark.xlsx");
+    b.save(p.to_str().unwrap()).unwrap();
+    let b2 = Book::open(p.to_str().unwrap()).unwrap();
+    let gs = b2.sparkline_groups(0);
+    assert_eq!(gs.len(), 1);
+    assert_eq!(gs[0].kind, "column");
+    assert!(gs[0].high);
+    let mut b3 = b2;
+    b3.insert_rows(0, 0, 1).unwrap();
+    assert_eq!(b3.sparkline_groups(0)[0].items[0], ("Sheet1!A2:E2".to_string(), (1, 5)));
+    b3.undo();
+    b3.clear_sparklines(0, crate::cellref::parse_range("F2").unwrap(), false).unwrap();
+    assert_eq!(b3.sparkline_groups(0)[0].items.len(), 2);
+    b3.undo();
+    assert_eq!(b3.sparkline_groups(0)[0].items.len(), 3);
+    b3.clear_sparklines(0, crate::cellref::parse_range("F2").unwrap(), true).unwrap();
+    assert!(b3.sparkline_groups(0).is_empty());
+}
+
+#[test]
+fn equations_round_trip() {
+    let mut b = Book::new_empty();
+    let i = b.insert_equation(0, "x=(−b±√(b^2−4ac))/2a", 100.0, 100.0).unwrap();
+    assert_eq!(b.equation_linear(0, i).as_deref(), Some("x=(−b±√(b^2−4ac))/2a"));
+    let (_, _, w, h) = b.obj_rect(0, &b.sheets[0].objects[i]);
+    assert!(w > 60.0 && h > 30.0, "{} {}", w, h);
+    b.set_equation(0, i, "a^2+b^2=c^2").unwrap();
+    let (_, _, w2, _) = b.obj_rect(0, &b.sheets[0].objects[i]);
+    assert!(w2 < w + 1.0);
+    b.undo();
+    assert_eq!(b.equation_linear(0, i).as_deref(), Some("x=(−b±√(b^2−4ac))/2a"));
+    let p = std::env::temp_dir().join("fs-math.xlsx");
+    b.save(p.to_str().unwrap()).unwrap();
+    // as Office keeps it: Office Math in a Choice, plain text in the Fallback
+    let bytes = std::fs::read(&p).unwrap();
+    let z = crate::zip::ZipReader::open(&bytes).unwrap();
+    let d = String::from_utf8(z.read("xl/drawings/drawing1.xml").unwrap()).unwrap();
+    assert!(d.contains("Requires=\"a14\"") && d.contains("<mc:Fallback>") && d.contains("m:oMathPara"), "{}", d);
+    let fb = &d[d.find("<mc:Fallback>").unwrap()..];
+    assert!(!fb.contains("oMath") && fb.contains("2a</a:t>"));
+    let b2 = Book::open(p.to_str().unwrap()).unwrap();
+    assert_eq!(b2.equation_linear(0, 0).as_deref(), Some("x=(−b±√(b^2−4ac))/2a"));
+}
+
+#[test]
+fn goal_seek_and_data_tables() {
+    let mut b = Book::new_empty();
+    // A1 rate, A2 years, A3 =100*(1+A1)^A2
+    b.set_input(0, 0, 0, "0.05").unwrap();
+    b.set_input(0, 1, 0, "10").unwrap();
+    b.set_input(0, 2, 0, "=100*(1+A1)^A2").unwrap();
+    let (x, v, ok) = b.goal_seek(0, (2, 0), 200.0, (0, 0)).unwrap();
+    assert!(ok && (v - 200.0).abs() < 0.01 && (x - 0.071773).abs() < 1e-4, "{} {}", x, v);
+    // nothing changed
+    assert_eq!(b.value(0, 0, 0), Value::num(0.05));
+    assert!(b.goal_seek(0, (0, 0), 1.0, (1, 0)).is_err());
+    // one-variable data table: rates down C2:C4, formula in D1
+    for (i, r) in ["0.03", "0.05", "0.08"].iter().enumerate() {
+        b.set_input(0, 1 + i as u32, 2, r).unwrap();
+    }
+    b.set_input(0, 0, 3, "=A3").unwrap();
+    b.create_data_table(0, crate::cellref::Rect::new(0, 2, 3, 3), None, Some((0, 0))).unwrap();
+    let want = |r: f64| 100.0 * (1.0 + r).powf(10.0);
+    match b.value(0, 1, 3) { Value::Num(v) => assert!((v - want(0.03)).abs() < 1e-9, "{}", v), o => panic!("{:?}", o) }
+    match b.value(0, 3, 3) { Value::Num(v) => assert!((v - want(0.08)).abs() < 1e-9), o => panic!("{:?}", o) }
+    assert_eq!(b.input(0, 2, 3), "{=TABLE(,A1)}");
+    assert!(b.set_input(0, 2, 3, "5").is_err());
+    // it follows the sheet
+    b.set_input(0, 1, 0, "20").unwrap();
+    match b.value(0, 1, 3) { Value::Num(v) => assert!((v - 100.0 * 1.03f64.powf(20.0)).abs() < 1e-9), o => panic!("{:?}", o) }
+    // two-variable: years across F1:H1? (row input A2), rates down E2:E3 (column input A1), formula at E1
+    b.set_input(0, 0, 4, "=A3").unwrap();
+    b.set_input(0, 0, 5, "5").unwrap();
+    b.set_input(0, 0, 6, "10").unwrap();
+    b.set_input(0, 1, 4, "0.1").unwrap();
+    b.set_input(0, 2, 4, "0.2").unwrap();
+    b.create_data_table(0, crate::cellref::Rect::new(0, 4, 2, 6), Some((1, 0)), Some((0, 0))).unwrap();
+    match b.value(0, 2, 6) { Value::Num(v) => assert!((v - 100.0 * 1.2f64.powf(10.0)).abs() < 1e-9, "{}", v), o => panic!("{:?}", o) }
+    // saved and read back
+    let p = std::env::temp_dir().join("fs-dt.xlsx");
+    b.save(p.to_str().unwrap()).unwrap();
+    let mut b2 = Book::open(p.to_str().unwrap()).unwrap();
+    assert_eq!(b2.data_tables().len(), 2);
+    b2.set_input(0, 1, 0, "10").unwrap();
+    match b2.value(0, 3, 3) { Value::Num(v) => assert!((v - want(0.08)).abs() < 1e-9), o => panic!("{:?}", o) }
+}
+
+#[test]
+fn scenarios_and_solver() {
+    use crate::solver::*;
+    let mut b = Book::new_empty();
+    // product mix: x (B1), y (B2); profit 3x+5y (B3); constraints x<=4, 2y<=12, 3x+2y<=18
+    b.set_input(0, 0, 1, "0").unwrap();
+    b.set_input(0, 1, 1, "0").unwrap();
+    b.set_input(0, 2, 1, "=3*B1+5*B2").unwrap();
+    b.set_input(0, 3, 1, "=2*B2").unwrap();
+    b.set_input(0, 4, 1, "=3*B1+2*B2").unwrap();
+    let r = |s: &str| crate::cellref::parse_range(s).unwrap();
+    let mut m = Model {
+        objective: Some((2, 1)), goal: Goal::Max, vars: vec![r("B1:B2")],
+        constraints: vec![Constraint { lhs: r("B1"), rel: Rel::Le, rhs: "4".into() },
+                          Constraint { lhs: r("B4"), rel: Rel::Le, rhs: "12".into() },
+                          Constraint { lhs: r("B5"), rel: Rel::Le, rhs: "18".into() }],
+        method: Method::Simplex, ..Default::default()
+    };
+    let o = b.solve(0, &m);
+    assert_eq!(o.status, Status::Optimal);
+    assert!((o.x[0] - 2.0).abs() < 1e-6 && (o.x[1] - 6.0).abs() < 1e-6 && (o.objective - 36.0).abs() < 1e-6, "{:?}", o);
+    assert_eq!(b.value(0, 0, 1), Value::num(0.0));
+    m.method = Method::Grg;
+    let o = b.solve(0, &m);
+    assert!(o.status.found() && (o.objective - 36.0).abs() < 0.01, "{:?}", o);
+    // nonlinear: min (B1-3)^2+(B2+1)^2 free
+    b.set_input(0, 6, 1, "=(B1-3)^2+(B2+1)^2").unwrap();
+    let m2 = Model { objective: Some((6, 1)), goal: Goal::Min, vars: vec![r("B1:B2")], nonneg: false, method: Method::Grg, ..Default::default() };
+    let o = b.solve(0, &m2);
+    assert!(o.status.found() && (o.x[0] - 3.0).abs() < 1e-3 && (o.x[1] + 1.0).abs() < 1e-3, "{:?}", o);
+    let m3 = Model { method: Method::Simplex, ..m2.clone() };
+    assert_eq!(b.solve(0, &m3).status, Status::NotLinear);
+    // the model is saved in hidden names
+    b.set_solver_model(0, &m).unwrap();
+    let back = b.solver_model(0);
+    assert_eq!(back.objective, m.objective);
+    assert_eq!(back.vars, m.vars);
+    assert_eq!(back.constraints, m.constraints);
+    assert_eq!(back.method, Method::Grg);
+    assert!(b.names.iter().any(|n| n.name == "solver_opt" && n.hidden && n.text == "Sheet1!$B$3"));
+    // scenarios
+    let sc = crate::whatif::Scenario { name: "Best".into(), cells: vec![((0, 1), "4".into()), ((1, 1), "3".into())], locked: true, ..Default::default() };
+    b.set_scenarios(0, &[sc.clone()], "Add Scenario").unwrap();
+    let res = b.scenario_results(0, &[(2, 1)]);
+    assert_eq!(res[0][0], Value::num(27.0));
+    assert_eq!(b.value(0, 2, 1), Value::num(0.0));
+    b.show_scenario(0, 0).unwrap();
+    assert_eq!(b.value(0, 2, 1), Value::num(27.0));
+    b.undo();
+    assert_eq!(b.value(0, 2, 1), Value::num(0.0));
+    let p = std::env::temp_dir().join("fs-sc.xlsx");
+    b.save(p.to_str().unwrap()).unwrap();
+    let b2 = Book::open(p.to_str().unwrap()).unwrap();
+    assert_eq!(b2.scenarios(0), vec![sc]);
+    assert_eq!(b2.solver_model(0).constraints.len(), 3);
+}

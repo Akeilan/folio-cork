@@ -1,0 +1,9 @@
+[package]
+name = "folio-sheet-engine"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+folio-canvas = { path = "../folio-canvas" }
+folio-kit = { path = "../folio-kit" }
+folio-math = { path = "../folio-math" }

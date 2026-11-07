@@ -1,0 +1,17 @@
+[Desktop Entry]
+Type=Application
+Name=Folio Sheet
+GenericName=Spreadsheet
+Comment=Work with numbers, formulas and tables
+Exec=folio-sheet %F
+Icon=folio-sheet
+Terminal=false
+Categories=Office;Spreadsheet;
+MimeType=application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;application/vnd.ms-excel;text/csv;
+Keywords=spreadsheet;numbers;formula;xlsx;budget;table;
+StartupWMClass=folio-sheet
+Actions=new-window;
+
+[Desktop Action new-window]
+Name=New Workbook
+Exec=folio-sheet
