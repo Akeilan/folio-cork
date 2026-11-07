@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 mod backend;
 #[cfg(feature = "audio")]
 pub mod audio;
+pub mod media;
 pub mod services;
 pub mod sys;
 

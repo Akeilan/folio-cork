@@ -1,0 +1,9 @@
+Folio Reel — part of Folio Studio.
+All code (the interface, the project, the edits and the renderer) written from
+scratch for this project.
+License: MIT
+
+Reel calls ffmpeg, when the computer has it, to read and write video. ffmpeg is
+not part of this package and is not redistributed with it; it is used as any
+program on the computer is used. ffmpeg is licensed separately (LGPL or GPL,
+depending on how it was built).

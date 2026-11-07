@@ -1042,6 +1042,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "folio-reel"
+version = "3.0.0"
+dependencies = [
+ "folio-canvas",
+ "folio-kit",
+ "folio-math",
+ "folio-platform",
+ "folio-reel-engine",
+]
+
+[[package]]
+name = "folio-reel-engine"
+version = "0.3.0"
+dependencies = [
+ "folio-canvas",
+ "folio-kit",
+ "folio-math",
+]
+
+[[package]]
 name = "folio-sheet"
 version = "3.0.0"
 dependencies = [

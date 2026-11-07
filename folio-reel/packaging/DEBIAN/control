@@ -1,0 +1,20 @@
+Package: folio-reel
+Version: 3.0.0
+Section: video
+Priority: optional
+Architecture: amd64
+Installed-Size: 18000
+Depends: libc6 (>= 2.35), libgcc-s1, libx11-6, libx11-xcb1, libxcursor1, libxi6, libxcb1, libxkbcommon0, libxkbcommon-x11-0, libwayland-client0, libasound2, folio-fonts
+Recommends: ffmpeg, xdg-utils, fonts-dejavu-core, wl-clipboard
+Maintainer: Ron Shillings <ron.shillings@gmail.com>
+Description: video editor with four tracks and no fuss
+ Folio Reel cuts video the way a person would: a bin of files, four tracks
+ (titles, video, sound and music), and clips you drag, trim, split and join.
+ Crossfades, wipes and fades to black; speed, volume points and a music bed
+ that dips under the voice; titles, lower thirds and captions; green screen,
+ crop, colour and pan-and-zoom; markers and groups. It writes MP4 and WebM.
+ .
+ Reel uses ffmpeg, which it does not ship, to read and write video: H.264 and
+ AAC are not ours to write. Install ffmpeg and Reel reads your files; without
+ it Reel says so plainly rather than pretending. Everything else — the project,
+ the edits, the window — is ours, and everything stays on this computer.
