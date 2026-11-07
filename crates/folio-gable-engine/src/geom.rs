@@ -1,6 +1,7 @@
 //! Geometry over the model: cutting a loop into triangles, telling inside from
 //! outside, and what a ray hits.
 
+use folio_math::Det;
 use crate::math::{Plane, V2, V3, TOL};
 use crate::model::{Entities, Kind, Ref};
 use crate::view::Proj;
@@ -161,7 +162,7 @@ pub fn pick(ents: &Entities, proj: &Proj, x: f64, y: f64, grab: f64) -> Option<(
         if !s.infront {
             continue;
         }
-        let dd = ((s.x - x).powi(2) + (s.y - y).powi(2)).sqrt();
+        let dd = ((s.x - x).dpowi(2) + (s.y - y).dpowi(2)).dsqrt();
         if dd <= grab && best_near.as_ref().map(|(b, _, _)| dd < *b).unwrap_or(true) {
             best_near = Some((dd, Ref::new(Kind::Vertex, i), v.p));
         }
@@ -192,11 +193,11 @@ fn seg_dist(px: f64, py: f64, ax: f64, ay: f64, bx: f64, by: f64) -> (f64, f64) 
     let (dx, dy) = (bx - ax, by - ay);
     let l2 = dx * dx + dy * dy;
     if l2 < 1e-9 {
-        return (((px - ax).powi(2) + (py - ay).powi(2)).sqrt(), 0.0);
+        return (((px - ax).dpowi(2) + (py - ay).dpowi(2)).dsqrt(), 0.0);
     }
     let t = (((px - ax) * dx + (py - ay) * dy) / l2).clamp(0.0, 1.0);
     let (qx, qy) = (ax + dx * t, ay + dy * t);
-    ((((px - qx).powi(2)) + ((py - qy).powi(2))).sqrt(), t)
+    ((((px - qx).dpowi(2)) + ((py - qy).dpowi(2))).dsqrt(), t)
 }
 
 /// Is the point inside the loop, in the plane's own axes?
