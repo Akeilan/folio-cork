@@ -4,6 +4,7 @@ mod app;
 mod bench;
 mod collab;
 mod commands;
+mod datalink;
 mod editor;
 mod export;
 mod files;

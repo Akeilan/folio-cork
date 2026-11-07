@@ -260,7 +260,7 @@ pub fn draw_shape(pm: &mut dyn Surface, doc: &Document, s: &Shape, text: &mut Te
                     pm.fill(&p, st.color, op, xf.pre_translate(0.0, y));
                 }
             }
-            draw_votes(pm, s, text, view);
+            draw_badges(pm, s, text, view);
             return;
         }
         "lane" => {
@@ -293,7 +293,7 @@ pub fn draw_shape(pm: &mut dyn Surface, doc: &Document, s: &Shape, text: &mut Te
                     pm.fill(&p, ts.color, op, inner);
                 }
             }
-            draw_votes(pm, s, text, view);
+            draw_badges(pm, s, text, view);
             return;
         }
         "frame" => {
@@ -349,7 +349,7 @@ pub fn draw_shape(pm: &mut dyn Surface, doc: &Document, s: &Shape, text: &mut Te
     if !s.text.is_empty() && !hide_text {
         draw_text(pm, s, text, xf, op);
     }
-    draw_votes(pm, s, text, view);
+    draw_badges(pm, s, text, view);
 }
 
 pub fn draw_text(pm: &mut dyn Surface, s: &Shape, text: &mut Text, xf: sk::Transform, op: f32) {
@@ -359,6 +359,41 @@ pub fn draw_text(pm: &mut dyn Surface, s: &Shape, text: &mut Text, xf: sk::Trans
     for p in text.outlines(&s.text, &st, Some(tb.2)) {
         pm.fill(&p, st.color, op, txf);
     }
+}
+
+/// The small marks drawn on top of a shape: its link (K4-04) and its votes.
+fn draw_badges(pm: &mut dyn Surface, s: &Shape, text: &mut Text, view: sk::Transform) {
+    draw_link_mark(pm, s, view);
+    draw_votes(pm, s, text, view);
+}
+
+/// Where the link mark sits on a shape, in page coordinates (K4-04).
+pub fn link_mark(s: &Shape) -> (f32, f32, f32, f32) {
+    let (bx, by, bw, bh) = geom::bounds(s);
+    let size = 18.0;
+    (bx + bw - size - 3.0, by + bh - size - 3.0, size, size)
+}
+
+/// A shape that points somewhere wears a small "opens this" mark in its corner; clicking the
+/// mark follows the link.
+fn draw_link_mark(pm: &mut dyn Surface, s: &Shape, view: sk::Transform) {
+    if s.link().is_none() {
+        return;
+    }
+    let (x, y, w, h) = link_mark(s);
+    let pad = 2.0;
+    let plate = [Seg::M(x, y), Seg::L(x + w, y), Seg::L(x + w, y + h), Seg::L(x, y + h), Seg::Z];
+    fill_segs(pm, &plate, Color::rgba(255, 255, 255, 225), 1.0, view);
+    let ink = Color::hex(0x2F5597);
+    stroke_segs(pm, &plate, ink.with_alpha(90), 1.0, &stroke(1.0, Dash::Solid), view);
+    // a small box with an arrow leaving it, as desktops draw "this opens somewhere else"
+    let (bx, by) = (x + pad + 0.5, y + pad + 2.5);
+    let (bw, bh) = (w - 2.0 * pad - 3.0, h - 2.0 * pad - 3.0);
+    let box_ = [Seg::M(bx, by + bh * 0.35), Seg::L(bx, by + bh), Seg::L(bx + bw, by + bh), Seg::L(bx + bw, by + bh * 0.55)];
+    stroke_segs(pm, &box_, ink, 1.0, &stroke(1.2, Dash::Solid), view);
+    let (ax, ay) = (x + w - pad - 1.0, y + pad + 1.0);
+    let arrow = [Seg::M(bx + bw * 0.45, ay + bh * 0.55), Seg::L(ax, ay), Seg::M(ax - 4.0, ay), Seg::L(ax, ay), Seg::L(ax, ay + 4.0)];
+    stroke_segs(pm, &arrow, ink, 1.0, &stroke(1.2, Dash::Solid), view);
 }
 
 fn draw_votes(pm: &mut dyn Surface, s: &Shape, text: &mut Text, view: sk::Transform) {

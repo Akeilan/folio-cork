@@ -4,7 +4,7 @@ use folio_kit::math::Det;
 use crate::editor::{handle_points, Drag, Editor, Tool};
 use crate::model::*;
 use crate::render::{self, Images, View};
-use crate::{export, files, icons, layout, mood, ribbon_defs, settings::Settings, stencils, templates};
+use crate::{datalink, export, files, icons, layout, mood, ribbon_defs, settings, settings::Settings, stencils, templates};
 use folio_kit::chrome::{self, TitleAction, TitleBar, TITLE_H};
 use folio_kit::files::{FileAction, FilePane};
 use folio_kit::gfx::{self, sk, Color, Rect};
@@ -113,6 +113,19 @@ pub struct CorkApp {
     pub flash: Option<(String, Duration)>,
     last_click_tab: Option<(usize, Duration)>,
     pub crop: Option<Id>,
+    /// What Find and Replace (K4-05) was last asked to look for.
+    pub find: Find,
+    /// The file picked for Link to Data, while the box asks about its columns (K4-03).
+    pub link_file: Option<PathBuf>,
+}
+
+/// What Find and Replace is looking for, kept so the box opens where it was left (K4-05).
+#[derive(Clone, Default)]
+pub struct Find {
+    pub q: String,
+    pub with: String,
+    pub case: bool,
+    pub whole: bool,
 }
 
 impl CorkApp {
@@ -176,6 +189,8 @@ impl CorkApp {
             flash: None,
             last_click_tab: None,
             crop: None,
+            find: Find::default(),
+            link_file: None,
         }
     }
 
@@ -371,6 +386,9 @@ impl CorkApp {
                     (Key::Char('c'), false) => Some("copy"),
                     (Key::Char('x'), _) => Some("cut"),
                     (Key::Char('v'), false) => Some("paste"),
+                    (Key::Char('f'), _) => Some("find"),
+                    (Key::Char('h'), _) => Some("replace"),
+                    (Key::Char('k'), _) => Some("hyperlink"),
                     _ => None,
                 };
                 if let Some(c) = cmd {
@@ -459,7 +477,14 @@ impl CorkApp {
                     }
                     if let Some((id, _)) = self.tiles.iter().find(|(_, rr)| rr.contains(x, y)).cloned() {
                         if *button == Button::Right && id.starts_with("my:") {
-                            self.menu = Some(Menu::new("myshape", Rect::new(x, y, 1.0, 1.0), vec![MenuItem::new(&format!("delete-my:{}", &id[3..]), "Remove from My Shapes").icon("delete")]));
+                            let name = id[3..].to_string();
+                            let group = self.settings.my_shapes().into_iter().find(|m| m.name == name).map(|m| m.group).unwrap_or_default();
+                            let mut items = vec![MenuItem::new(&format!("delete-my:{name}"), if group.is_empty() { "Remove from My Shapes" } else { "Remove This Shape" }).icon("delete")];
+                            if !group.is_empty() {
+                                // a shape out of an imported stencil: the whole stencil can go (K4-06)
+                                items.push(MenuItem::new(&format!("delete-stencil:{group}"), &format!("Remove the “{group}” Stencil")).icon("delete"));
+                            }
+                            self.menu = Some(Menu::new("myshape", Rect::new(x, y, 1.0, 1.0), items));
                             return true;
                         }
                         if *clicks >= 2 {
@@ -581,6 +606,14 @@ impl CorkApp {
                         }
                     }
                 }
+                // Clicking the link mark on a shape follows the link (K4-04).
+                if *button == Button::Left && self.ed.tool == Tool::Pointer && self.ed.edit.is_none() {
+                    let hit = self.link_mark_at(p);
+                    if let Some(id) = hit {
+                        self.follow_link(id);
+                        return;
+                    }
+                }
                 let was_edit = self.ed.edit.as_ref().map(|e| e.id);
                 self.ed.mouse_down(p, sp, self.mods.shift, self.mods.ctrl, *clicks, *button == Button::Middle, self.space);
                 if let Some(id) = was_edit {
@@ -687,6 +720,36 @@ impl CorkApp {
         }
     }
 
+    /// Shut the file picker without picking anything (used by the window test).
+    pub(crate) fn close_backstage_for_test(&mut self) {
+        self.backstage = None;
+        self.layout();
+    }
+
+    /// Where a tile sits in the Shapes pane, once it has been painted (used by the window test).
+    pub(crate) fn tile_rect_for_test(&self, id: &str) -> Option<Rect> {
+        self.tiles.iter().find(|(t, _)| t == id).map(|(_, r)| *r)
+    }
+
+    /// Whether a page point is on a shape's link mark (K4-04).
+    pub fn over_link_mark(&self, p: (f32, f32)) -> bool {
+        self.link_mark_at(p).is_some()
+    }
+
+    /// The shape whose link mark a page point is on, topmost first (K4-04).
+    pub fn link_mark_at(&self, p: (f32, f32)) -> Option<Id> {
+        let page = self.ed.pg();
+        page.shapes
+            .iter()
+            .rev()
+            .filter(|s| s.link().is_some() && page.visible(s))
+            .find(|s| {
+                let (mx, my, mw, mh) = crate::render::link_mark(s);
+                p.0 >= mx && p.0 <= mx + mw && p.1 >= my && p.1 <= my + mh
+            })
+            .map(|s| s.id)
+    }
+
     fn set_cursor(&mut self, host: &mut dyn Host, p: (f32, f32)) {
         let cur = match (&self.ed.tool, &self.ed.drag) {
             (_, Drag::Pan { .. }) => Cursor::Grabbing,
@@ -697,6 +760,9 @@ impl CorkApp {
             (Tool::Pointer, _) => {
                 if self.ed.edit.as_ref().map(|e| self.ed.pg().get(e.id).map(|s| crate::geom::hit_shape(s, p, 2.0)).unwrap_or(false)).unwrap_or(false) {
                     Cursor::Text
+                } else if self.over_link_mark(p) {
+                    // the mark that follows a shape's link (K4-04)
+                    Cursor::Pointer
                 } else if let Some(h) = self.ed.hit_handle(p) {
                     match h {
                         0 | 4 => Cursor::ResizeNWSE,
@@ -854,6 +920,35 @@ impl CorkApp {
             "print" => self.open_backstage(BackPage::Print),
             "undo" => self.ed.undo(),
             "redo" => self.ed.redo(),
+            "find" => self.find_dialog(false),
+            "replace" => self.find_dialog(true),
+            "hyperlink" => self.link_dialog(),
+            "data.link" => self.open_backstage_datalink(),
+            "stencil.import" => self.open_backstage_stencil(),
+            "data.refresh" => {
+                if self.ed.doc.links.is_empty() {
+                    self.flash("This drawing isn't linked to a file yet. Design › Link to Data picks one.");
+                } else {
+                    let (rep, trouble) = datalink::refresh(&mut self.ed);
+                    if let Some(t) = trouble.first() {
+                        self.flash(&format!("Couldn't read {t}"));
+                    } else {
+                        self.flash(&format!("Read again: {} shapes took their data from {} file(s).", rep.filled, self.ed.doc.links.len()));
+                    }
+                }
+            }
+            "link.open" => {
+                let ids: Vec<Id> = self.ed.selected().iter().filter(|s| s.link().is_some()).map(|s| s.id).collect();
+                match ids.first() {
+                    Some(id) => self.follow_link(*id),
+                    None => self.flash("The selected shape has no link."),
+                }
+            }
+            "link.remove" => {
+                if self.ed.clear_link() == 0 {
+                    self.flash("The selected shape has no link.");
+                }
+            }
             "lane.add" => {
                 self.ed.add_lane();
                 self.flash("Lane added. Type to name it; moving a lane moves what's in it.");
@@ -1127,6 +1222,200 @@ impl CorkApp {
         }
     }
 
+    // ---------------- Find and Replace (K4-05) ----------------
+
+    /// The Find and Replace box, opened where it was left off.
+    fn find_dialog(&mut self, replace: bool) {
+        if self.find.q.is_empty() {
+            // the selected shape's text is the obvious thing to look for
+            if let Some(s) = self.ed.selected().first() {
+                let t = s.text.trim();
+                if !t.is_empty() && t.len() < 80 && !t.contains('\n') {
+                    self.find.q = t.to_string();
+                }
+            }
+        }
+        let f = self.find.clone();
+        let mut d = Dialog::new(if replace { "replace" } else { "find" }, if replace { "Find and Replace" } else { "Find" })
+            .note("Searches the text of every shape on every page.")
+            .text("q", "Find what", &f.q);
+        if replace {
+            d = d.text("with", "Replace with", &f.with);
+        }
+        d = d.check("case", "Match case", f.case).check("whole", "Whole words only", f.whole).button("next", "Find Next");
+        if replace {
+            d = d.button("replace", "Replace").button("all", "Replace All");
+        }
+        self.dialog = Some(d.button("close", "Close").width(440.0));
+    }
+
+    /// Carry out one press of the Find and Replace box, which stays open for the next one.
+    fn find_done(&mut self, d: &Dialog, button: &str) {
+        let replace = d.id == "replace";
+        self.find = Find { q: d.value("q"), with: d.value("with"), case: d.checked("case"), whole: d.checked("whole") };
+        let (q, with, case, whole) = (self.find.q.clone(), self.find.with.clone(), self.find.case, self.find.whole);
+        if button == "close" {
+            return;
+        }
+        if q.trim().is_empty() {
+            self.flash("Type what to look for.");
+            self.find_dialog(replace);
+            return;
+        }
+        let (vw, vh) = (self.canvas.w, self.canvas.h);
+        match button {
+            "next" => match self.ed.find_next(&q, case, whole, self.mods.shift) {
+                Some(hit) => {
+                    self.ed.reveal(hit.shape, vw, vh);
+                    let n = self.ed.find_all(&q, case, whole).len();
+                    let page = self.ed.pg().name.clone();
+                    self.flash(&if n == 1 { format!("The only one, on {page}.") } else { format!("Found on {page}. {n} in the drawing.") });
+                }
+                None => self.flash(&format!("Nothing says “{q}”.")),
+            },
+            "replace" => {
+                let n = self.ed.replace_all(&q, &with, case, whole, true);
+                if n == 0 {
+                    // nothing in the selection: move to the next match instead, as Office does
+                    match self.ed.find_next(&q, case, whole, false) {
+                        Some(hit) => {
+                            self.ed.reveal(hit.shape, vw, vh);
+                            self.flash("Found. Press Replace to change it.");
+                        }
+                        None => self.flash(&format!("Nothing says “{q}”.")),
+                    }
+                } else {
+                    self.flash(&format!("Replaced {n}."));
+                    self.ed.find_next(&q, case, whole, false);
+                }
+            }
+            "all" => {
+                let n = self.ed.replace_all(&q, &with, case, whole, false);
+                if n == 0 {
+                    self.flash(&format!("Nothing says “{q}”."));
+                } else {
+                    self.flash(&format!("Replaced {n} across the drawing."));
+                }
+            }
+            _ => {}
+        }
+        self.find_dialog(replace);
+    }
+
+    // ---------------- Hyperlinks (K4-04) ----------------
+
+    /// The Hyperlink box for the selected shapes.
+    fn link_dialog(&mut self) {
+        if self.ed.selected().is_empty() {
+            self.flash("Select a shape to give it a link.");
+            return;
+        }
+        let here = self.ed.link_of_selection();
+        let kind = here.as_ref().map(|(k, _)| *k).unwrap_or(LinkKind::Address);
+        let target = here.map(|(_, t)| t).unwrap_or_default();
+        let sel = match kind {
+            LinkKind::Page => 0,
+            LinkKind::File => 1,
+            LinkKind::Address => 2,
+        };
+        let pages = self.ed.page_names().join(", ");
+        self.dialog = Some(
+            Dialog::new("hyperlink", "Hyperlink")
+                .note(&format!("Where the shape points. Pages in this drawing: {pages}."))
+                .choice("kind", "Points at", &["A page in this drawing", "A file on this computer", "An address"], sel)
+                .text("target", "Page, file or address", &target)
+                .button("ok", "OK")
+                .button("open", "Open")
+                .button("remove", "Remove")
+                .button("cancel", "Cancel")
+                .width(460.0),
+        );
+    }
+
+    /// Follow a shape's link: another page, a file, or an address.
+    pub fn follow_link(&mut self, id: Id) {
+        let Some((kind, target)) = self.ed.pg().get(id).and_then(|s| s.link()).map(|(k, t)| (k, t.to_string())) else { return };
+        self.open_link(kind, &target);
+    }
+
+    pub fn open_link(&mut self, kind: LinkKind, target: &str) {
+        let target = target.trim().to_string();
+        if target.is_empty() {
+            return;
+        }
+        match kind {
+            LinkKind::Page => {
+                if self.ed.goto_page_named(&target) {
+                    self.fit();
+                } else {
+                    self.flash(&format!("This drawing has no page called “{target}”."));
+                }
+            }
+            LinkKind::File => {
+                let path = if target.starts_with('~') { folio_kit::platform::home_dir().join(target.trim_start_matches("~/")) } else { PathBuf::from(&target) };
+                if !path.exists() {
+                    self.flash(&format!("There is no file at {}.", path.display()));
+                    return;
+                }
+                if crate::files::keeps_path(&path) || path.extension().map(|e| e.eq_ignore_ascii_case("vsdx")).unwrap_or(false) {
+                    // a drawing opens here
+                    self.after = Some(After::Open(path));
+                } else if let Err(e) = folio_kit::platform::open_path(&path) {
+                    self.flash(&e);
+                }
+            }
+            LinkKind::Address => {
+                let url = if target.to_lowercase().starts_with("www.") { format!("https://{target}") } else { target.clone() };
+                if let Err(e) = folio_kit::platform::open_address(&url) {
+                    self.flash(&e);
+                }
+            }
+        }
+    }
+
+    /// Pick the spreadsheet or CSV file the shapes take their data from (K4-03).
+    fn open_backstage_datalink(&mut self) {
+        let dir = self.ed.path.as_ref().and_then(|p| p.parent()).map(|p| p.to_path_buf()).unwrap_or_else(folio_kit::platform::documents_dir);
+        self.open_backstage(BackPage::Open);
+        if let Some(b) = self.backstage.as_mut() {
+            let mut f = FilePane::new(&dir, &["csv", "xlsx"], false, "");
+            f.button = "Choose".into();
+            b.files = Some(f);
+            b.msg = "datalink".into();
+        }
+    }
+
+    /// Pick a Visio stencil (.vssx) to read into the Shapes pane (K4-06).
+    fn open_backstage_stencil(&mut self) {
+        let dir = self.ed.path.as_ref().and_then(|p| p.parent()).map(|p| p.to_path_buf()).unwrap_or_else(folio_kit::platform::documents_dir);
+        self.open_backstage(BackPage::Open);
+        if let Some(b) = self.backstage.as_mut() {
+            let mut f = FilePane::new(&dir, &["vssx", "vssm", "vss"], false, "");
+            f.button = "Import".into();
+            b.files = Some(f);
+            b.msg = "stencil".into();
+        }
+    }
+
+    /// Read a stencil file and put its shapes in the pane under the file's own name (K4-06).
+    pub(crate) fn import_stencil(&mut self, path: &Path) -> Result<usize, String> {
+        let bytes = std::fs::read(path).map_err(|e| format!("Can't read {}: {e}", path.display()))?;
+        let masters = crate::vsdx::read_stencil(&bytes)?;
+        let group = path.file_stem().map(|x| x.to_string_lossy().to_string()).unwrap_or_else(|| "Stencil".into());
+        let group: String = group.chars().take(40).collect();
+        // reading the same file again replaces what it put there last time
+        self.settings.remove_group(&group);
+        let n = masters.len();
+        for (name, shapes) in masters {
+            self.settings.add_shape_to_group(&name, shapes, vec![], &group);
+        }
+        self.thumbs.retain(|k, _| !k.0.starts_with("my:"));
+        self.collapsed.remove(&group);
+        self.settings.shapes_pane = true;
+        self.settings.save();
+        Ok(n)
+    }
+
     fn crop_dialog(&mut self) {
         let Some(s) = self.ed.selected().into_iter().find(|s| s.kind == "image").cloned() else {
             self.flash("Select a picture to crop.");
@@ -1209,7 +1498,7 @@ impl CorkApp {
                 host.set_clipboard_image(&im);
             }
             crate::settings::store_clip(&shapes, &imgs, &im);
-            let mut d = Document { pages: vec![], images: self.ed.doc.images.clone(), next_id: self.ed.doc.next_id };
+            let mut d = Document { pages: vec![], images: self.ed.doc.images.clone(), next_id: self.ed.doc.next_id, ..Default::default() };
             for (k, v) in &imgs {
                 d.images.insert(k.clone(), v.clone());
             }
@@ -1373,6 +1662,44 @@ impl CorkApp {
             ("unsaved", "discard") => self.after = self.pending.take(),
             ("unsaved", _) => self.pending = None,
             ("page-rename", "ok") => self.ed.rename_page(&d.value("name")),
+            ("find", _) | ("replace", _) => self.find_done(&d, button),
+            ("hyperlink", "ok") | ("hyperlink", "open") => {
+                let target = d.value("target");
+                let kind = match d.choice_index("kind") {
+                    0 => LinkKind::Page,
+                    1 => LinkKind::File,
+                    // the list is left on "An address" by default, so a page name or a path
+                    // typed into it is taken for what it plainly is
+                    _ => link_kind_of(&target, &self.ed.page_names()),
+                };
+                if target.trim().is_empty() {
+                    self.ed.clear_link();
+                } else if self.ed.set_link(kind, &target) == 0 {
+                    self.flash("Select a shape to give it a link.");
+                } else if button == "open" {
+                    self.open_link(kind, &target);
+                }
+            }
+            ("hyperlink", "remove") => {
+                self.ed.clear_link();
+            }
+            ("datalink", "ok") => {
+                let Some(path) = self.link_file.take() else { return };
+                let key = d.value("key");
+                let on = d.value("on");
+                let on = if on == "The shape's text" { String::new() } else { on };
+                match datalink::link(&mut self.ed, &path, &key, &on) {
+                    Ok(rep) => {
+                        let left = if rep.unmatched == 0 { String::new() } else { format!(" {} row(s) matched no shape.", rep.unmatched) };
+                        if rep.filled == 0 {
+                            self.flash(&format!("No shape matched the {key} column.{left}"));
+                        } else {
+                            self.flash(&format!("{} shapes took {} column(s) of data.{left} View › Shape Data shows them.", rep.filled, rep.columns));
+                        }
+                    }
+                    Err(e) => self.flash(&e),
+                }
+            }
             ("prop-edit", "ok") => {
                 let (name, value, was) = (d.value("name"), d.value("value"), d.value("was"));
                 if !was.is_empty() && was != name {
@@ -1663,6 +1990,15 @@ impl CorkApp {
                 v.push(MenuItem::new("mood.palette", "Extract Palette").icon("palette"));
             }
             v.push(MenuItem::sep());
+            let linked = st.first.as_ref().map(|s| s.link().is_some()).unwrap_or(false);
+            if linked {
+                v.push(MenuItem::new("link.open", "Open Link").icon("link"));
+                v.push(MenuItem::new("hyperlink", "Edit Hyperlink…").icon("link").key("Ctrl+K"));
+                v.push(MenuItem::new("link.remove", "Remove Hyperlink"));
+            } else {
+                v.push(MenuItem::new("hyperlink", "Hyperlink…").icon("link").key("Ctrl+K"));
+            }
+            v.push(MenuItem::sep());
             v.push(MenuItem::new("comment-here", "Add Comment").icon("comment"));
             v.push(MenuItem::new("save-myshape", "Add to My Shapes").icon("myshapes"));
         } else {
@@ -1790,6 +2126,12 @@ impl CorkApp {
         if let Some(n) = id.strip_prefix("delete-my:") {
             self.settings.remove_my_shape(n);
             self.thumbs.retain(|k, _| !k.0.starts_with("my:"));
+            return;
+        }
+        if let Some(g) = id.strip_prefix("delete-stencil:") {
+            self.settings.remove_group(g);
+            self.thumbs.retain(|k, _| !k.0.starts_with("my:"));
+            self.flash(&format!("Took the “{g}” stencil out of the Shapes pane."));
             return;
         }
         match id {
@@ -2096,6 +2438,37 @@ impl CorkApp {
                             f.error = "Can't read that file.".into();
                         }
                     }
+                    (BackPage::Open, "stencil") => match self.import_stencil(&p) {
+                        Ok(n) => {
+                            let group = p.file_stem().map(|x| x.to_string_lossy().to_string()).unwrap_or_default();
+                            self.flash(&format!("{n} shapes from “{group}” are in the Shapes pane."));
+                            close = true;
+                        }
+                        Err(e) => f.error = e,
+                    },
+                    (BackPage::Open, "datalink") => match datalink::columns(&p) {
+                        Ok(cols) => {
+                            // the file's columns are known: ask which one says whose row it is
+                            let mut names = vec!["The shape's text".to_string()];
+                            names.extend(datalink::property_names(&self.ed));
+                            let shown: Vec<&str> = names.iter().map(|x| x.as_str()).collect();
+                            let colnames: Vec<&str> = cols.iter().map(|x| x.as_str()).collect();
+                            self.link_file = Some(p.clone());
+                            self.backstage = None;
+                            self.layout();
+                            self.dialog = Some(
+                                Dialog::new("datalink", "Link shapes to a spreadsheet")
+                                    .note("The key column holds the value that says which shape a row belongs to. Every other column becomes shape data on that shape.")
+                                    .choice("key", "Key column", &colnames, 0)
+                                    .choice("on", "Matched against", &shown, 0)
+                                    .button("ok", "Link")
+                                    .button("cancel", "Cancel")
+                                    .width(480.0),
+                            );
+                            return;
+                        }
+                        Err(e) => f.error = e,
+                    },
                     (BackPage::Open, "orgchart") => match layout::org_from_file(&mut self.ed, &p, &mut r.text) {
                         Ok(n) => {
                             self.flash(&format!("Org chart with {n} people."));
@@ -2836,8 +3209,22 @@ impl CorkApp {
         let mut y = -self.left_scroll;
         let mut groups: Vec<(String, Vec<(String, String)>)> = vec![];
         let my = self.settings.my_shapes();
-        if !my.is_empty() || q.is_empty() {
-            groups.push(("My Shapes".into(), my.iter().filter(|m| q.is_empty() || m.name.to_lowercase().contains(&q.to_lowercase())).map(|m| (format!("my:{}", m.name), m.name.clone())).collect()));
+        let ql = q.to_lowercase();
+        let mine: Vec<&settings::MyShape> = my.iter().filter(|m| m.group.is_empty()).collect();
+        if !mine.is_empty() || q.is_empty() {
+            groups.push(("My Shapes".into(), mine.iter().filter(|m| q.is_empty() || m.name.to_lowercase().contains(&ql)).map(|m| (format!("my:{}", m.name), m.name.clone())).collect()));
+        }
+        // stencils brought in from .vssx files, each under its own name (K4-06)
+        for g in self.settings.stencil_groups() {
+            let items: Vec<(String, String)> = my
+                .iter()
+                .filter(|m| m.group == g)
+                .filter(|m| q.is_empty() || m.name.to_lowercase().contains(&ql))
+                .map(|m| (format!("my:{}", m.name), m.name.clone()))
+                .collect();
+            if !items.is_empty() {
+                groups.push((g, items));
+            }
         }
         for cat in stencils::CATEGORIES {
             let items: Vec<(String, String)> = stencils::search(&q).into_iter().filter(|st| st.cat == *cat).map(|st| (st.id.to_string(), st.name.to_string())).collect();
@@ -3184,6 +3571,8 @@ impl CorkApp {
             BackPage::Open => match b.msg.as_str() {
                 "pictures" => "Insert Pictures",
                 "orgchart" => "Org Chart from a File",
+                "datalink" => "Link Shapes to a Spreadsheet",
+                "stencil" => "Import a Visio Stencil",
                 _ => "Open",
             },
             BackPage::SaveAs => "Save As",
@@ -3236,6 +3625,12 @@ impl CorkApp {
                     }
                 } else if b.msg == "orgchart" {
                     cx.label("A CSV or spreadsheet with columns Name, Title and Reports To (the manager's name).", Rect::new(body.x, fy, body.w, 22.0 * s), 12.5, t.muted, false, Align::Left);
+                    fy += 30.0 * s;
+                } else if b.msg == "stencil" {
+                    cx.label("A Visio stencil (.vssx). Its shapes go in the Shapes pane under the file's name.", Rect::new(body.x, fy, body.w, 22.0 * s), 12.5, t.muted, false, Align::Left);
+                    fy += 30.0 * s;
+                } else if b.msg == "datalink" {
+                    cx.label("A CSV or spreadsheet whose first row names the columns. One column says which shape each row belongs to.", Rect::new(body.x, fy, body.w, 22.0 * s), 12.5, t.muted, false, Align::Left);
                     fy += 30.0 * s;
                 }
                 if let Some(f) = b.files.as_mut() {

@@ -400,11 +400,24 @@ pub struct Document {
     pub pages: Vec<Page>,
     pub images: BTreeMap<String, ImageData>,
     pub next_id: Id,
+    /// Spreadsheets this drawing takes its shape data from (K4-03).
+    pub links: Vec<DataLink>,
+}
+
+/// A spreadsheet or CSV file the shapes take their data from (K4-03). The key column holds the
+/// value that says which shape a row belongs to; `match_on` is the shape's text (empty) or the
+/// name of a property on the shape.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct DataLink {
+    pub path: String,
+    pub key: String,
+    pub match_on: String,
 }
 
 impl Default for Document {
     fn default() -> Self {
-        let mut d = Document { pages: vec![], images: BTreeMap::new(), next_id: 1 };
+        let mut d = Document { pages: vec![], images: BTreeMap::new(), next_id: 1, links: vec![] };
         let mut p = Page::default();
         p.id = d.new_id();
         p.layers[0].id = d.new_id();
@@ -547,4 +560,67 @@ impl Shape {
             (self.x + LANE_BAND, self.y, (self.w - LANE_BAND).max(1.0), self.h)
         }
     }
+}
+
+// ---------------------------------------------------------------- hyperlinks (K4-04)
+/// Where a shape points: another page in this drawing, a file on this computer, or an address.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LinkKind {
+    Page,
+    File,
+    Address,
+}
+
+impl LinkKind {
+    pub fn tag(&self) -> &'static str {
+        match self {
+            LinkKind::Page => "page",
+            LinkKind::File => "file",
+            LinkKind::Address => "url",
+        }
+    }
+    pub fn from_tag(t: &str) -> LinkKind {
+        match t {
+            "page" => LinkKind::Page,
+            "file" => LinkKind::File,
+            _ => LinkKind::Address,
+        }
+    }
+}
+
+impl Shape {
+    /// The shape's link, as what it points at and where.
+    pub fn link(&self) -> Option<(LinkKind, &str)> {
+        let target = self.get("link");
+        if target.is_empty() {
+            return None;
+        }
+        Some((LinkKind::from_tag(self.get("linkto")), target))
+    }
+    pub fn set_link(&mut self, kind: LinkKind, target: &str) {
+        let target = target.trim();
+        if target.is_empty() {
+            self.clear_link();
+            return;
+        }
+        self.data.insert("link".into(), target.to_string());
+        self.data.insert("linkto".into(), kind.tag().to_string());
+    }
+    pub fn clear_link(&mut self) {
+        self.data.remove("link");
+        self.data.remove("linkto");
+    }
+}
+
+/// What a typed target looks like: a page of this drawing, an address, or a file.
+pub fn link_kind_of(target: &str, page_names: &[String]) -> LinkKind {
+    let t = target.trim();
+    if page_names.iter().any(|n| n.eq_ignore_ascii_case(t)) {
+        return LinkKind::Page;
+    }
+    let lower = t.to_lowercase();
+    if ["http://", "https://", "mailto:", "ftp://", "www."].iter().any(|p| lower.starts_with(p)) {
+        return LinkKind::Address;
+    }
+    LinkKind::File
 }

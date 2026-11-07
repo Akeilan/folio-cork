@@ -181,6 +181,22 @@ fn geometry_sections(s: &Shape) -> String {
     out
 }
 
+/// A shape's link, as Visio's own Hyperlink row (K4-04): a page of the drawing goes in the
+/// SubAddress, a file or an address in the Address.
+fn hyperlink_section(s: &Shape) -> String {
+    let Some((kind, target)) = s.link() else { return String::new() };
+    let (addr, sub) = match kind {
+        LinkKind::Page => (String::new(), target.to_string()),
+        _ => (target.to_string(), String::new()),
+    };
+    format!(
+        "<Section N='Hyperlink'><Row N='Link'>{}{}{}</Row></Section>",
+        format!("<Cell N='Address' V='{}' U='STR'/>", esc(&addr)),
+        format!("<Cell N='SubAddress' V='{}' U='STR'/>", esc(&sub)),
+        cell("Default", "1")
+    )
+}
+
 fn connection_section(s: &Shape) -> String {
     let g = geom::geometry(s);
     if g.points.is_empty() {
@@ -211,7 +227,7 @@ fn data_section(s: &Shape) -> String {
         .iter()
         // Cork's own fields ride along (so a lane is still a lane after another program has
         // touched the file), except the few that would only be noise in Visio.
-        .filter(|(k, _)| !matches!(k.as_str(), "frame" | "from" | "hl" | "lineart" | "tbox") && !k.starts_with(PROP) && k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
+        .filter(|(k, _)| !matches!(k.as_str(), "frame" | "from" | "hl" | "lineart" | "tbox" | "link" | "linkto") && !k.starts_with(PROP) && k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
         .map(|(k, v)| format!("<Row N='{}'>{}{}</Row>", esc(k), cell("Label", k), format!("<Cell N='Value' V='{}' U='STR'/>", esc(v))))
         .collect();
     // the shape data a person put on the shape, as Visio writes it
@@ -322,6 +338,7 @@ fn shape_xml(cx: &mut Ctx, s: &Shape, parent: Option<(f32, f32, f32, f32)>) -> S
     body += &text_cells(s);
     body += &connection_section(s);
     body += &data_section(s);
+    body += &hyperlink_section(s);
     body += &geometry_sections(s);
     let text = if s.kind == "swatch" && s.text.is_empty() { s.style.fill.to_hex().to_uppercase() } else { s.text.clone() };
     if !text.is_empty() {
@@ -989,6 +1006,22 @@ impl<'a> Reader<'a> {
                 }
             }
         }
+        // Hyperlinks (K4-04).
+        for sec in sh.sections("Hyperlink") {
+            for row in sec.children("Row") {
+                let addr = row.cell("Address").unwrap_or("").trim().to_string();
+                let sub = row.cell("SubAddress").unwrap_or("").trim().to_string();
+                if !addr.is_empty() {
+                    let kind = link_kind_of(&addr, &[]);
+                    s.set_link(kind, &addr);
+                } else if !sub.is_empty() {
+                    s.set_link(LinkKind::Page, &sub);
+                }
+                if s.link().is_some() {
+                    break;
+                }
+            }
+        }
         if ty == "Group" {
             s.kind = "group".into();
             page.shapes.push(s);
@@ -1324,3 +1357,95 @@ pub fn is_vsdx(bytes: &[u8]) -> bool {
 
 #[allow(dead_code)]
 fn unused(_: &Seg) {}
+
+// ---------------------------------------------------------------- Visio stencils (K4-06)
+/// Read a Visio stencil (.vssx or .vssm): every master in it becomes a named set of shapes,
+/// ready to go in the Shapes pane. Masters are laid out at their own size, top-left at (0, 0).
+pub fn read_stencil(bytes: &[u8]) -> Result<Vec<(String, Vec<Shape>)>, String> {
+    let pkg = Pkg::open(bytes).map_err(|_| "This isn't a Visio stencil (.vssx), or it's damaged.".to_string())?;
+    let mut root = HashMap::new();
+    if let Some(r) = pkg.xml("_rels/.rels") {
+        if let Some(rs) = r.child("Relationships") {
+            for x in rs.children("Relationship") {
+                root.insert(x.attr("Type").unwrap_or("").to_string(), resolve("", x.attr("Target").unwrap_or("")));
+            }
+        }
+    }
+    let doc_part = root.iter().find(|(t, _)| t.ends_with("/document")).map(|x| x.1.clone()).unwrap_or_else(|| "visio/document.xml".into());
+    let rels = pkg.rels(&doc_part);
+    let mpath = rels
+        .values()
+        .find(|(_, t)| t.ends_with("/masters"))
+        .map(|x| x.0.clone())
+        .or_else(|| pkg.files.keys().find(|k| k.ends_with("masters.xml")).cloned())
+        .ok_or("The stencil has no shapes in it.")?;
+    let mrels = pkg.rels(&mpath);
+    let root_xml = pkg.xml(&mpath).ok_or("The stencil has no shapes in it.")?;
+    let ms = root_xml.child("Masters").ok_or("The stencil has no shapes in it.")?;
+    let mut out = vec![];
+    for m in ms.children("Master") {
+        let name = m
+            .attr("Name")
+            .or(m.attr("NameU"))
+            .map(|x| x.trim().to_string())
+            .filter(|x| !x.is_empty())
+            .unwrap_or_else(|| format!("Shape {}", out.len() + 1));
+        let rid = m.child("Rel").and_then(|r| r.attr("id")).unwrap_or("");
+        let Some((path, _)) = mrels.get(rid) else { continue };
+        let Some(mx) = pkg.xml(path) else { continue };
+        let Some(shapes) = mx.child("MasterContents").and_then(|c| c.child("Shapes")) else { continue };
+        // the master's own box, which the shapes inside it are measured against
+        let sheet = m.child("PageSheet");
+        let mh = sheet
+            .and_then(|s| s.num("PageHeight"))
+            .or_else(|| shapes.child("Shape").and_then(|s| s.num("Height")))
+            .unwrap_or(1.0);
+        let mut rd = Reader::new(&pkg);
+        let mut page = Page { id: 1, name: name.clone(), ..Default::default() };
+        page.layers[0].id = 2;
+        let mut idmap = HashMap::new();
+        for s in shapes.children("Shape") {
+            rd.shape(s, None, Xf::id(), mh, &mrels, &mut page, &mut idmap, None);
+        }
+        let mut got = page.shapes;
+        if got.is_empty() {
+            continue;
+        }
+        // bring the set to the top-left corner, so it drops where it is put
+        let (mut x0, mut y0) = (f32::MAX, f32::MAX);
+        for s in &got {
+            let (bx, by, _, _) = geom::bounds(s);
+            x0 = x0.min(bx);
+            y0 = y0.min(by);
+            if let Some(c) = &s.conn {
+                x0 = x0.min(c.a.x).min(c.b.x);
+                y0 = y0.min(c.a.y).min(c.b.y);
+            }
+        }
+        if x0.is_finite() && y0.is_finite() {
+            for s in got.iter_mut() {
+                s.x -= x0;
+                s.y -= y0;
+                if let Some(c) = s.conn.as_mut() {
+                    c.a.x -= x0;
+                    c.a.y -= y0;
+                    c.b.x -= x0;
+                    c.b.y -= y0;
+                }
+            }
+        }
+        // the ids are renumbered when the set is dropped into a drawing; the glue between the
+        // shapes of one master is kept as it is
+        out.push((name, got));
+    }
+    if out.is_empty() {
+        return Err("The stencil has no shapes Cork can read.".into());
+    }
+    Ok(out)
+}
+
+/// Whether a file name is a Visio stencil (K4-06).
+pub fn is_stencil_name(name: &str) -> bool {
+    let n = name.to_lowercase();
+    n.ends_with(".vssx") || n.ends_with(".vssm") || n.ends_with(".vss")
+}

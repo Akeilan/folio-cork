@@ -54,10 +54,14 @@ impl Default for Settings {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
+#[serde(default)]
 pub struct MyShape {
     pub name: String,
     pub shapes: Vec<Shape>,
     pub images: Vec<(String, ImageData)>,
+    /// The stencil this came from (K4-06). Empty for a shape the person saved themselves, which
+    /// goes under My Shapes.
+    pub group: String,
 }
 
 impl Settings {
@@ -109,6 +113,11 @@ impl Settings {
     }
 
     pub fn add_my_shape(&mut self, name: &str, shapes: Vec<Shape>, images: Vec<(String, ImageData)>) {
+        self.add_shape_to_group(name, shapes, images, "");
+    }
+
+    /// Keep a set of shapes in the pane, under a stencil's name when it came from one (K4-06).
+    pub fn add_shape_to_group(&mut self, name: &str, shapes: Vec<Shape>, images: Vec<(String, ImageData)>, group: &str) {
         let mut v = self.my_shapes();
         let mut n = name.chars().take(40).collect::<String>();
         let base = n.clone();
@@ -117,7 +126,7 @@ impl Settings {
             n = format!("{base} {i}");
             i += 1;
         }
-        v.push(MyShape { name: n, shapes, images });
+        v.push(MyShape { name: n, shapes, images, group: group.to_string() });
         self.write_my(&v);
     }
 
@@ -125,6 +134,24 @@ impl Settings {
         let mut v = self.my_shapes();
         v.retain(|m| m.name != name);
         self.write_my(&v);
+    }
+
+    /// Take a whole imported stencil out of the pane (K4-06).
+    pub fn remove_group(&mut self, group: &str) {
+        let mut v = self.my_shapes();
+        v.retain(|m| m.group != group);
+        self.write_my(&v);
+    }
+
+    /// The stencils brought in from .vssx files, in the order they were added (K4-06).
+    pub fn stencil_groups(&self) -> Vec<String> {
+        let mut out: Vec<String> = vec![];
+        for m in self.my_shapes() {
+            if !m.group.is_empty() && !out.contains(&m.group) {
+                out.push(m.group.clone());
+            }
+        }
+        out
     }
 }
 

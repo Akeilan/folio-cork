@@ -184,7 +184,7 @@ impl Editor {
     pub fn break_merge(&mut self) {
         self.merge_key.clear();
     }
-    fn drop_checkpoint(&mut self) {
+    pub(crate) fn drop_checkpoint(&mut self) {
         self.undo.pop();
         self.merge_key.clear();
     }

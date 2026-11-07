@@ -79,6 +79,14 @@ fn ribbon_click(app: &mut CorkApp, host: &mut dyn Host, r: &mut Res, tab: &str, 
     Ok(())
 }
 
+/// Press a button in the open dialog by its id, painting first so its place is known.
+fn dialog_click(app: &mut CorkApp, host: &mut dyn Host, r: &mut Res, id: &str) -> Result<(), String> {
+    shot_into(app, r);
+    let br = app.dialog.as_ref().and_then(|d| d.button_rect(id)).ok_or(format!("no {id} button in the box"))?;
+    click(app, host, r, br.cx(), br.cy(), 1);
+    Ok(())
+}
+
 /// Paint the window so hit areas are current.
 fn shot_into(app: &mut CorkApp, r: &mut Res) -> sk::Pixmap {
     let mut pm = sk::Pixmap::new(app.w as u32, app.h as u32).unwrap();
@@ -311,6 +319,106 @@ impl UiTest {
             click(app, h, r, del.cx(), del.cy(), 1);
             check(app.ed.first().map(|s| s.props().is_empty()).unwrap_or(false), "the property is still there")
         });
+        step!("find and replace, across every page (K4-05)", |app: &mut CorkApp, h: &mut dyn Host, r: &mut Res| {
+            app.dialog = None;      // nothing left over from an earlier step
+            // two shapes with the same word, one on each of two pages
+            app.ed.add_page(false);
+            let a = app.ed.insert_kind_at("rect", 200.0, 200.0);
+            app.ed.pgm().get_mut(a).ok_or("no shape")?.text = "Draft plan".into();
+            app.ed.add_page(false);
+            let b = app.ed.insert_kind_at("rect", 200.0, 200.0);
+            app.ed.pgm().get_mut(b).ok_or("no shape")?.text = "second draft".into();
+            let second = app.ed.page;
+            app.ed.page = second - 1;
+            app.ed.sel.clear();
+            key(app, h, r, Key::Char('h'), ctrl());      // Ctrl+H opens Find and Replace
+            shot_into(app, r);
+            {
+                let d = app.dialog.as_mut().ok_or("no Find and Replace box")?;
+                d.set_text_for_test("q", "draft");
+                d.set_text_for_test("with", "final");
+            }
+            shot_into(app, r);
+            // Find Next walks to the shape and selects it; the box stays open for the next press
+            dialog_click(app, h, r, "next")?;
+            check(app.ed.sel == vec![a], &format!("Find Next selected {:?}", app.ed.sel))?;
+            save_shot(app, r, "ui-find.png");
+            // and again, which carries on to the next page
+            dialog_click(app, h, r, "next")?;
+            check(app.ed.page == second && app.ed.sel == vec![b], &format!("on page {} with {:?}", app.ed.page, app.ed.sel))?;
+            dialog_click(app, h, r, "all")?;
+            let texts: Vec<String> = app.ed.doc.pages.iter().flat_map(|p| p.shapes.iter()).map(|s| s.text.clone()).filter(|t| t.to_lowercase().contains("final")).collect();
+            check(texts.len() == 2, &format!("replaced: {texts:?}"))?;
+            dialog_click(app, h, r, "close")?;
+            check(app.dialog.is_none(), "the box stayed open")
+        });
+        step!("a hyperlink on a shape, and its mark follows it (K4-04)", |app: &mut CorkApp, h: &mut dyn Host, r: &mut Res| {
+            app.dialog = None;      // nothing left over from an earlier step
+            let pages = app.ed.doc.pages.len();
+            let here = app.ed.page;
+            let target = app.ed.doc.pages[0].name.clone();
+            let id = app.ed.insert_kind_at("rect", 420.0, 360.0);
+            app.ed.sel = vec![id];
+            key(app, h, r, Key::Char('k'), ctrl());      // Ctrl+K opens the Hyperlink box
+            shot_into(app, r);
+            {
+                let d = app.dialog.as_mut().ok_or("no Hyperlink box")?;
+                d.set_choice("kind", 0);
+                d.set_text_for_test("target", &target);
+            }
+            dialog_click(app, h, r, "ok")?;
+            check(app.ed.pg().get(id).and_then(|s| s.link()).is_some(), "the shape has no link")?;
+            app.fit();
+            save_shot(app, r, "ui-hyperlink.png");
+            // clicking the mark in the shape's corner goes to the page it points at
+            let (mx, my, mw, mh) = crate::render::link_mark(app.ed.pg().get(id).ok_or("gone")?);
+            let p = sp(app, (mx + mw / 2.0, my + mh / 2.0));
+            click(app, h, r, p.0, p.1, 1);
+            check(app.ed.page == 0 && app.ed.doc.pages.len() == pages, &format!("the link went to page {}", app.ed.page))?;
+            app.ed.page = here;
+            Ok(())
+        });
+        step!("shape data from a spreadsheet, and read again (K4-03)", |app: &mut CorkApp, h: &mut dyn Host, _r: &mut Res| {
+            let dir = PathBuf::from(folio_kit::platform::setting("FOLIO_UI_DIR").unwrap_or_else(|| "/tmp".into()));
+            let csv = dir.join("ui-stock.csv");
+            std::fs::write(&csv, "Part,Owner\nUI-1,Ron\n").map_err(|e| e.to_string())?;
+            let id = app.ed.insert_kind_at("rect", 600.0, 360.0);
+            app.ed.pgm().get_mut(id).ok_or("no shape")?.text = "UI-1".into();
+            let rep = crate::datalink::link(&mut app.ed, &csv, "Part", "").map_err(|e| e)?;
+            check(rep.filled == 1, &format!("filled {}", rep.filled))?;
+            check(app.ed.pg().get(id).map(|s| s.prop("Owner") == "Ron").unwrap_or(false), "the shape has no Owner")?;
+            std::fs::write(&csv, "Part,Owner\nUI-1,Mel\n").map_err(|e| e.to_string())?;
+            app.command("data.refresh", h, _r);
+            check(app.ed.pg().get(id).map(|s| s.prop("Owner") == "Mel").unwrap_or(false), "Refresh Data didn't read the file again")?;
+            let _ = std::fs::remove_file(&csv);
+            Ok(())
+        });
+        step!("a Visio stencil in the Shapes pane (K4-06)", |app: &mut CorkApp, h: &mut dyn Host, r: &mut Res| {
+            app.dialog = None;      // nothing left over from an earlier step
+            let dir = PathBuf::from(folio_kit::platform::setting("FOLIO_UI_DIR").unwrap_or_else(|| "/tmp".into()));
+            let path = dir.join("UI Stencil.vssx");
+            std::fs::write(&path, crate::uitest::sample_stencil()).map_err(|e| e.to_string())?;
+            // the ribbon button opens the file picker; the test reads the file itself
+            app.command("stencil.import", h, r);
+            let picking = app.backstage.as_ref().map(|b| b.msg == "stencil").unwrap_or(false);
+            check(picking, "Import Stencil didn't open the file picker")?;
+            app.close_backstage_for_test();
+            let n = app.import_stencil(&path)?;
+            check(n == 2, &format!("{n} shapes read"))?;
+            app.settings.shapes_pane = true;
+            app.collapsed.clear();
+            shot_into(app, r);
+            check(app.settings.stencil_groups().contains(&"UI Stencil".to_string()), "the stencil isn't in the pane")?;
+            let tile = app.tile_rect_for_test("my:Server").ok_or("the stencil's shape has no tile in the pane")?;
+            save_shot(app, r, "ui-stencil.png");
+            // drag the tile out onto the board
+            let before = app.ed.pg().shapes.len();
+            drag(app, h, r, (tile.cx(), tile.cy()), (app.canvas.cx(), app.canvas.cy()));
+            check(app.ed.pg().shapes.len() > before, "nothing was dropped on the board")?;
+            app.settings.remove_group("UI Stencil");
+            let _ = std::fs::remove_file(&path);
+            Ok(())
+        });
         step!("mood board: picture, palette, tidy", |app: &mut CorkApp, _h: &mut dyn Host, r: &mut Res| {
             app.ed.add_page(true);
             crate::templates::apply("mood", &mut app.ed);
@@ -426,4 +534,67 @@ impl UiTest {
     pub fn code(&self) -> i32 {
         if self.fails.is_empty() { 0 } else { 1 }
     }
+}
+
+/// A Visio stencil package built here, so the stencil reader (K4-06) is tested against a
+/// package of the shape Visio writes without anyone else's file.
+pub fn sample_stencil() -> Vec<u8> {
+    fn part(w: &mut zip::ZipWriter<&mut std::io::Cursor<Vec<u8>>>, name: &str, xml: &str) {
+        use std::io::Write;
+        w.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
+        w.write_all(xml.as_bytes()).unwrap();
+    }
+    let mut out = std::io::Cursor::new(Vec::new());
+    {
+        let mut w = zip::ZipWriter::new(&mut out);
+        part(
+            &mut w,
+            "_rels/.rels",
+            "<?xml version='1.0'?><Relationships xmlns='http://schemas.openxmlformats.org/package/2006/relationships'>\
+             <Relationship Id='rId1' Type='http://schemas.microsoft.com/visio/2010/relationships/document' Target='visio/document.xml'/></Relationships>",
+        );
+        part(&mut w, "visio/document.xml", "<?xml version='1.0'?><VisioDocument xmlns='http://schemas.microsoft.com/office/visio/2012/main'/>");
+        part(
+            &mut w,
+            "visio/_rels/document.xml.rels",
+            "<?xml version='1.0'?><Relationships xmlns='http://schemas.openxmlformats.org/package/2006/relationships'>\
+             <Relationship Id='rId1' Type='http://schemas.microsoft.com/visio/2010/relationships/masters' Target='masters/masters.xml'/></Relationships>",
+        );
+        part(
+            &mut w,
+            "visio/masters/masters.xml",
+            "<?xml version='1.0'?><Masters xmlns='http://schemas.microsoft.com/office/visio/2012/main'>\
+             <Master ID='2' NameU='Server' Name='Server'><PageSheet><Cell N='PageWidth' V='1'/><Cell N='PageHeight' V='1.5'/></PageSheet>\
+             <Rel xmlns:r='http://schemas.openxmlformats.org/officeDocument/2006/relationships' r:id='rId1'/></Master>\
+             <Master ID='3' NameU='Firewall' Name='Firewall'><PageSheet><Cell N='PageWidth' V='2'/><Cell N='PageHeight' V='1'/></PageSheet>\
+             <Rel xmlns:r='http://schemas.openxmlformats.org/officeDocument/2006/relationships' r:id='rId2'/></Master></Masters>",
+        );
+        part(
+            &mut w,
+            "visio/masters/_rels/masters.xml.rels",
+            "<?xml version='1.0'?><Relationships xmlns='http://schemas.openxmlformats.org/package/2006/relationships'>\
+             <Relationship Id='rId1' Type='http://schemas.microsoft.com/visio/2010/relationships/master' Target='master1.xml'/>\
+             <Relationship Id='rId2' Type='http://schemas.microsoft.com/visio/2010/relationships/master' Target='master2.xml'/></Relationships>",
+        );
+        let master = |name: &str, w_in: f32, h_in: f32| {
+            format!(
+                "<?xml version='1.0'?><MasterContents xmlns='http://schemas.microsoft.com/office/visio/2012/main'><Shapes>\
+                 <Shape ID='1' NameU='{name}' Type='Shape'><Cell N='PinX' V='{}'/><Cell N='PinY' V='{}'/>\
+                 <Cell N='Width' V='{w_in}'/><Cell N='Height' V='{h_in}'/><Cell N='FillForegnd' V='#4472C4'/><Cell N='LineColor' V='#203864'/>\
+                 <Section N='Geometry' IX='0'><Cell N='NoFill' V='0'/><Cell N='NoLine' V='0'/>\
+                 <Row T='RelMoveTo' IX='1'><Cell N='X' V='0'/><Cell N='Y' V='0'/></Row>\
+                 <Row T='RelLineTo' IX='2'><Cell N='X' V='1'/><Cell N='Y' V='0'/></Row>\
+                 <Row T='RelLineTo' IX='3'><Cell N='X' V='1'/><Cell N='Y' V='1'/></Row>\
+                 <Row T='RelLineTo' IX='4'><Cell N='X' V='0'/><Cell N='Y' V='1'/></Row>\
+                 <Row T='RelLineTo' IX='5'><Cell N='X' V='0'/><Cell N='Y' V='0'/></Row></Section>\
+                 <Text>{name}</Text></Shape></Shapes></MasterContents>",
+                w_in / 2.0,
+                h_in / 2.0
+            )
+        };
+        part(&mut w, "visio/masters/master1.xml", &master("Server", 1.0, 1.5));
+        part(&mut w, "visio/masters/master2.xml", &master("Firewall", 2.0, 1.0));
+        w.finish().unwrap();
+    }
+    out.into_inner()
 }

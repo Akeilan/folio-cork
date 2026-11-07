@@ -58,6 +58,14 @@ pub fn tabs() -> Vec<Tab> {
                     ],
                 ),
                 Group::new(
+                    "Editing",
+                    vec![
+                        I::large("find", "Find", "find").key("Ctrl+F").desc("Search the text of every shape on every page."),
+                        I::small("replace", "Replace", "replace").key("Ctrl+H"),
+                        I::small("hyperlink", "Hyperlink", "link").key("Ctrl+K").desc("Point the shape at another page, a file or an address."),
+                    ],
+                ),
+                Group::new(
                     "Arrange",
                     vec![
                         I::large("align-menu", "Align", "obj-center").menu().desc("Line the selected shapes up with each other."),
@@ -110,6 +118,13 @@ pub fn tabs() -> Vec<Tab> {
                     ],
                 ),
                 Group::new(
+                    "Links",
+                    vec![
+                        I::large("hyperlink", "Hyperlink", "link").key("Ctrl+K").desc("Point the shape at another page, a file or an address."),
+                        I::small("stencil.import", "Import Stencil", "stencil").desc("Read a Visio stencil (.vssx) into the Shapes pane."),
+                    ],
+                ),
+                Group::new(
                     "Comments",
                     vec![I::large("tool.comment", "Comment", "comment").desc("Pin a comment to the board or a shape.")],
                 ),
@@ -152,6 +167,14 @@ pub fn tabs() -> Vec<Tab> {
                     vec![
                         I::large("layout-menu", "Re-Layout", "tree").menu().desc("Lay out a flowchart, tree or mind map in one click."),
                         I::large("orgchart", "Org Chart from File", "org").desc("Build an org chart from a CSV file or a spreadsheet with Name, Title and Reports To columns."),
+                    ],
+                ),
+                Group::new(
+                    "Data",
+                    vec![
+                        I::large("data.link", "Link to Data", "data-link").desc("Fill shape data from a CSV file or a spreadsheet, matching a column against the shapes."),
+                        I::small("data.refresh", "Refresh Data", "refresh").desc("Read the linked file again."),
+                        I::small("pane.data", "Shape Data", "shape-data"),
                     ],
                 ),
             ],

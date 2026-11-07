@@ -1241,3 +1241,237 @@ impl Editor {
         out
     }
 }
+
+// ---------------------------------------------------------------- find and replace (K4-05)
+/// One shape whose text holds what was searched for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Hit {
+    pub page: usize,
+    pub shape: Id,
+}
+
+/// Where `needle` sits in `hay`, under the given rules, as positions in `hay` itself.
+fn finds(hay: &str, needle: &str, case: bool, whole: bool) -> Vec<(usize, usize)> {
+    if needle.is_empty() {
+        return vec![];
+    }
+    // A case-blind search works on the folded text. Lowercasing can make a character longer
+    // (Turkish I with a dot, say), so each byte of the folded text keeps the place it came from
+    // and the matches are reported in the original's own positions.
+    let (h, back): (String, Vec<usize>) = if case {
+        (hay.to_string(), (0..=hay.len()).collect())
+    } else {
+        let mut f = String::new();
+        let mut back = Vec::new();
+        for (i, c) in hay.char_indices() {
+            for lc in c.to_lowercase() {
+                let before = f.len();
+                f.push(lc);
+                for _ in before..f.len() {
+                    back.push(i);
+                }
+            }
+        }
+        back.push(hay.len());
+        (f, back)
+    };
+    let n = if case { needle.to_string() } else { needle.to_lowercase() };
+    let mut out = vec![];
+    let mut at = 0;
+    while let Some(i) = h[at..].find(&n) {
+        let s = at + i;
+        let e = s + n.len();
+        at = s + n.len().max(1);
+        if whole {
+            let before = h[..s].chars().next_back();
+            let after = h[e..].chars().next();
+            let wordish = |c: char| c.is_alphanumeric() || c == '_';
+            if before.map(wordish).unwrap_or(false) || after.map(wordish).unwrap_or(false) {
+                continue;
+            }
+        }
+        let (os, oe) = (back.get(s).copied().unwrap_or(hay.len()), back.get(e).copied().unwrap_or(hay.len()));
+        if os < oe && hay.is_char_boundary(os) && hay.is_char_boundary(oe) {
+            out.push((os, oe));
+        }
+    }
+    out
+}
+
+/// `hay` with every match replaced, and how many were replaced.
+fn replaced(hay: &str, needle: &str, with: &str, case: bool, whole: bool) -> (String, usize) {
+    let spans = finds(hay, needle, case, whole);
+    if spans.is_empty() {
+        return (hay.to_string(), 0);
+    }
+    let mut out = String::new();
+    let mut at = 0;
+    let mut n = 0;
+    for (s, e) in &spans {
+        if *s < at || *e > hay.len() || !hay.is_char_boundary(*s) || !hay.is_char_boundary(*e) {
+            continue;
+        }
+        out.push_str(&hay[at..*s]);
+        out.push_str(with);
+        at = *e;
+        n += 1;
+    }
+    out.push_str(&hay[at..]);
+    (out, n)
+}
+
+impl Editor {
+    /// Every shape whose text holds `q`, across all pages, page by page.
+    pub fn find_all(&self, q: &str, case: bool, whole: bool) -> Vec<Hit> {
+        let mut out = vec![];
+        for (pi, p) in self.doc.pages.iter().enumerate() {
+            for s in &p.shapes {
+                if s.is_group() {
+                    continue;
+                }
+                if !finds(&s.text, q, case, whole).is_empty() {
+                    out.push(Hit { page: pi, shape: s.id });
+                }
+            }
+        }
+        out
+    }
+
+    /// Go to the next shape holding `q` after the one shown now, wrapping round at the end.
+    /// Returns what was found, or nothing when the drawing has no match at all.
+    pub fn find_next(&mut self, q: &str, case: bool, whole: bool, back: bool) -> Option<Hit> {
+        let hits = self.find_all(q, case, whole);
+        if hits.is_empty() {
+            return None;
+        }
+        let here = hits.iter().position(|h| h.page == self.page && self.sel.contains(&h.shape));
+        let next = match (here, back) {
+            (Some(i), false) => (i + 1) % hits.len(),
+            (Some(i), true) => (i + hits.len() - 1) % hits.len(),
+            // nothing of the kind is selected: start from this page
+            (None, false) => hits.iter().position(|h| h.page >= self.page).unwrap_or(0),
+            (None, true) => hits.iter().rposition(|h| h.page <= self.page).unwrap_or(hits.len() - 1),
+        };
+        let hit = hits[next];
+        self.end_edit();
+        self.page = hit.page;
+        self.sel = vec![hit.shape];
+        self.version += 1;
+        Some(hit)
+    }
+
+    /// Replace the text of the shapes found by `q`: the selected ones only, or all of them.
+    pub fn replace_all(&mut self, q: &str, with: &str, case: bool, whole: bool, selection_only: bool) -> usize {
+        if q.is_empty() {
+            return 0;
+        }
+        let hits = self.find_all(q, case, whole);
+        let hits: Vec<Hit> = if selection_only { hits.into_iter().filter(|h| h.page == self.page && self.sel.contains(&h.shape)).collect() } else { hits };
+        if hits.is_empty() {
+            return 0;
+        }
+        self.end_edit();
+        self.checkpoint("Replace", "");
+        let mut n = 0;
+        for h in &hits {
+            let locked = self.doc.pages[h.page].get(h.shape).map(|s| s.locked).unwrap_or(true);
+            let layer_locked = self.doc.pages[h.page].get(h.shape).map(|s| self.doc.pages[h.page].layer_locked(s)).unwrap_or(true);
+            if locked || layer_locked {
+                continue;
+            }
+            if let Some(s) = self.doc.pages[h.page].get_mut(h.shape) {
+                let (t, c) = replaced(&s.text, q, with, case, whole);
+                if c > 0 {
+                    s.text = t;
+                    n += c;
+                }
+            }
+        }
+        if n == 0 {
+            self.drop_checkpoint();
+        } else {
+            self.changed();
+        }
+        n
+    }
+
+    /// Bring a shape into view, moving the page under the window if it is off the edge.
+    pub fn reveal(&mut self, id: Id, vw: f32, vh: f32) {
+        let Some(s) = self.pg().get(id).cloned() else { return };
+        let b = if s.is_connector() {
+            let r = crate::route::route(self.pg(), &s);
+            let (xs, ys): (Vec<f32>, Vec<f32>) = (r.pts.iter().map(|p| p.0).collect(), r.pts.iter().map(|p| p.1).collect());
+            let (x0, x1) = (xs.iter().cloned().fold(f32::MAX, f32::min), xs.iter().cloned().fold(f32::MIN, f32::max));
+            let (y0, y1) = (ys.iter().cloned().fold(f32::MAX, f32::min), ys.iter().cloned().fold(f32::MIN, f32::max));
+            (x0, y0, x1 - x0, y1 - y0)
+        } else {
+            crate::geom::bounds(&s)
+        };
+        if !b.0.is_finite() || !b.1.is_finite() {
+            return;
+        }
+        let mut v = self.view();
+        let (sx, sy) = v.to_screen(b.0, b.1);
+        let (ex, ey) = v.to_screen(b.0 + b.2, b.1 + b.3);
+        let pad = 40.0;
+        let inside = sx > pad && sy > pad && ex < vw - pad && ey < vh - pad;
+        if inside {
+            return;
+        }
+        v.ox = vw / 2.0 - (b.0 + b.2 / 2.0) * v.zoom;
+        v.oy = vh / 2.0 - (b.1 + b.3 / 2.0) * v.zoom;
+        self.set_view(v);
+        self.version += 1;
+    }
+}
+
+// ---------------------------------------------------------------- hyperlinks (K4-04)
+impl Editor {
+    /// Point every selected shape at a page, a file or an address.
+    pub fn set_link(&mut self, kind: LinkKind, target: &str) -> usize {
+        let target = target.trim().to_string();
+        let mut n = 0;
+        self.each_editable("Hyperlink", |s| {
+            s.set_link(kind, &target);
+            n += 1;
+        });
+        n
+    }
+
+    /// Take the link off every selected shape.
+    pub fn clear_link(&mut self) -> usize {
+        let mut n = 0;
+        self.each_editable("Remove hyperlink", |s| {
+            if s.link().is_some() {
+                s.clear_link();
+                n += 1;
+            }
+        });
+        n
+    }
+
+    /// The link of the selected shape, if just one is selected and it has one.
+    pub fn link_of_selection(&self) -> Option<(LinkKind, String)> {
+        let sel = self.selected();
+        if sel.len() != 1 {
+            return None;
+        }
+        sel[0].link().map(|(k, t)| (k, t.to_string()))
+    }
+
+    pub fn page_names(&self) -> Vec<String> {
+        self.doc.pages.iter().map(|p| p.name.clone()).collect()
+    }
+
+    /// Go to the page a link points at. Returns whether there is such a page.
+    pub fn goto_page_named(&mut self, name: &str) -> bool {
+        if let Some(i) = self.doc.pages.iter().position(|p| p.name.eq_ignore_ascii_case(name.trim())) {
+            self.end_edit();
+            self.page = i;
+            self.sel.clear();
+            self.version += 1;
+            return true;
+        }
+        false
+    }
+}

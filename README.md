@@ -13,6 +13,10 @@ Diagrams, whiteboards and mood boards for Folio Studio. Cork is written in Rust 
 - `folio-cork`: the app.
   - Swimlane diagrams (K4-01): Insert > Swimlane adds a lane for a team or a stage; moving a lane carries what's in it, Turn Lanes runs them down the page instead of across, and the Cross-functional flowchart template starts you off.
   - Shape data (K4-02): named properties on a shape — cost, owner, part number — in the Shape Data pane (View > Shape Data), saved in the drawing and written into the .vsdx the way Visio writes them.
+  - Shapes from a spreadsheet (K4-03): Design > Link to Data reads a CSV file or a spreadsheet, matches one column against the shapes' text or a property, and fills the rest in as shape data. Refresh Data reads the file again; the link is kept in the drawing.
+  - Hyperlinks (K4-04): Ctrl+K points a shape at another page of the drawing, a file on this computer or a web address. A linked shape wears a small mark in its corner; clicking the mark follows the link. Links travel in the .vsdx as Visio's own Hyperlink rows.
+  - Find and replace (K4-05): Ctrl+F and Ctrl+H search the text of every shape on every page, with Match case and Whole words, and replace in the selection or across the drawing in one undo step.
+  - Visio stencils (K4-06): Insert > Import Stencil reads a .vssx file; its shapes go in the Shapes pane under the file's own name, to drag out like any other.
   - Diagrams in Page, Sheet and Show: Copy in Cork and paste there. The picture carries the drawing, and double-clicking it opens it in Cork again. The format is in [docs/FORMATS.md](docs/FORMATS.md).
 - `folio-draw`: Folio Draw, on this base since 1.11.0 (D3-06). It replaced the GTK version, which it matches. Its own page is [folio-draw/README.md](folio-draw/README.md).
   - Its engine is `crates/folio-draw-engine`, with no dependencies beyond `crates/folio-math` (the deterministic maths every engine shares).
