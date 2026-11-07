@@ -1,0 +1,15 @@
+Package: folio-chord
+Version: 3.0.0
+Section: sound
+Priority: optional
+Architecture: amd64
+Installed-Size: 20000
+Depends: libc6 (>= 2.35), libgcc-s1, libx11-6, libx11-xcb1, libxcursor1, libxi6, libxcb1, libxkbcommon0, libxkbcommon-x11-0, libwayland-client0, libasound2, folio-fonts
+Recommends: xdg-utils, fonts-dejavu-core, wl-clipboard
+Maintainer: Ron Shillings <ron.shillings@gmail.com>
+Description: music player in the manner of the classic iTunes
+ Folio Chord keeps your music library, plays it, and stays out of the way:
+ the column browser, playlists and Smart Playlists, ratings and play counts,
+ shuffle and repeat, Sound Check, crossfade and a ten-band equaliser. It reads
+ MP3, AAC, Apple Lossless, FLAC, Ogg Vorbis, WAV and AIFF, and decodes them
+ itself. No account, no store, and nothing leaves this computer.

@@ -1,0 +1,10 @@
+[package]
+name = "folio-chord-engine"
+version = "0.3.0"
+edition = "2021"
+description = "Folio Chord's engine: the music library, playlists and playback"
+
+[dependencies]
+folio-kit = { version = "0.3.0", path = "../folio-kit" }
+folio-math = { version = "0.3.0", path = "../folio-math" }
+symphonia = { version = "0.5.5", default-features = false, features = ["mp3", "aac", "alac", "flac", "vorbis", "isomp4", "wav", "pcm", "ogg", "adpcm", "aiff"] }

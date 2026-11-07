@@ -1,0 +1,4 @@
+Folio Chord — part of Folio Studio.
+The interface, the library, the playlists and the sound path were written from
+scratch for this project. Decoding uses the symphonia crates (MIT).
+License: MIT
