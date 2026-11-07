@@ -221,6 +221,7 @@ pub fn tabs() -> Vec<Tab> {
                     "Tracking",
                     vec![I::large("track", "Track Changes", "track").desc("Record what is changed from now on.")],
                 ),
+                Group::new("Protect", vec![I::large("protect", "Protect", "protect")]),
                 Group::new(
                     "Changes",
                     vec![

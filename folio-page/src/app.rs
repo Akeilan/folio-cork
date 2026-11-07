@@ -100,6 +100,7 @@ pub struct PageApp {
     ref_targets: Vec<String>,
     pub merge: crate::mailmerge::Merge,
     pub spell: crate::spell::Spell,
+    protected: bool,
     /// the word a right-click landed on, for the suggestions menu
     word_hit: Option<(folio_page_editor::Pos, folio_page_editor::Pos, String)>,
     /// the headings in the navigation pane, with where each one sits
@@ -162,6 +163,7 @@ impl PageApp {
             ref_targets: Vec::new(),
             merge: crate::mailmerge::Merge::default(),
             spell: crate::spell::Spell::default(),
+            protected: false,
             word_hit: None,
             nav_rows: Vec::new(),
             nav_rect: Rect::default(),
@@ -216,6 +218,7 @@ impl PageApp {
                 self.path = Some(p.to_path_buf());
                 self.scroll = 0.0;
                 self.cache.clear();
+                self.protected = self.ed.protection().is_some();
                 self.flash(&format!("Opened {}", name_of(p)));
                 self.remember();
             }
@@ -560,6 +563,9 @@ impl PageApp {
         let page = self.ed.caret_rect(self.ed.caret).map(|(p, _, _, _)| p + 1).unwrap_or(1);
         let words = self.ed.word_count();
         let mut left = format!("Page {page} of {}    {words} words", self.ed.page_count().max(1));
+        if self.protected {
+            left.push_str("    Protected");
+        }
         if let Some(p) = self.merge.path.as_ref() {
             let name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
             let which = self.merge.preview.map(|r| format!(", recipient {}", r + 1)).unwrap_or_default();
@@ -1032,6 +1038,19 @@ impl PageApp {
         if d.id == "print" {
             if id == "ok" {
                 self.print_now(&d);
+            }
+            host.redraw();
+            return;
+        }
+        if d.id == "protect" {
+            if id == "ok" {
+                let how = [None, Some("readOnly"), Some("trackedChanges"), Some("comments")][d.choice_index("how").min(3)];
+                self.ed.set_protection(how);
+                self.protected = how.is_some();
+                self.flash(match how {
+                    None => "The document can be edited freely",
+                    Some(_) => "The document asks to be left as it is",
+                });
             }
             host.redraw();
             return;
@@ -1930,6 +1949,23 @@ impl PageApp {
                 self.spell.forget_results();
                 self.cache.clear();
                 self.flash(if self.spell.on { "Spelling is being checked" } else { "Spelling is not being checked" });
+            }
+            "protect" => {
+                let now = self.ed.protection();
+                let sel = match now.as_deref() {
+                    Some("readOnly") => 1,
+                    Some("trackedChanges") => 2,
+                    Some("comments") => 3,
+                    _ => 0,
+                };
+                self.dialog = Some(
+                    Dialog::new("protect", "Protect Document")
+                        .choice("how", "People may", &["Edit it freely", "Only read it", "Only make tracked changes",
+                                                       "Only leave comments"], sel)
+                        .note("This is what the document asks for, not a lock: it carries no password.")
+                        .button("ok", "OK")
+                        .button("cancel", "Cancel"),
+                );
             }
             "find" => {
                 self.dialog = Some(

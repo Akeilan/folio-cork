@@ -484,6 +484,16 @@ impl UiTest {
             }
             Ok(())
         });
+        step!("protecting the document is written into it", |app: &mut PageApp, h: &mut dyn Host, r: &mut Res| {
+            ribbon_click(app, h, r, "review", "protect")?;
+            check(app.dialog.is_some(), "the dialog didn't open")?;
+            app.press_dialog_button("cancel", h);
+            app.ed.set_protection(Some("readOnly"));
+            check(app.ed.protection().as_deref() == Some("readOnly"),
+                  &format!("protection reads {:?}", app.ed.protection()))?;
+            app.ed.set_protection(None);
+            check(app.ed.protection().is_none(), "it stayed protected")
+        });
         step!("the document saves and opens again", move |app: &mut PageApp, _h: &mut dyn Host, _r: &mut Res| {
             let p = d_save.join("typed.docx");
             app.save(&p);
