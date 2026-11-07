@@ -244,6 +244,41 @@ impl UiTest {
             ribbon_click(app, h, r, "view", "view-print")?;
             check(app.ed.text_of_document().contains("Hello"), &format!("in draft view: {:?}", app.ed.text_of_document()))
         });
+        step!("the ruler and the navigation pane take their room", |app: &mut PageApp, h: &mut dyn Host, r: &mut Res| {
+            let wide = app.canvas_rect().w;
+            ribbon_click(app, h, r, "view", "nav")?;
+            shot(app, r);
+            check(app.canvas_rect().w < wide, "the pages didn't make room for the pane")?;
+            ribbon_click(app, h, r, "view", "ruler")?;
+            shot(app, r);
+            check(app.ruler_rect_now().h > 0.0, "no ruler")?;
+            // a heading to jump to
+            app.command("style:Heading 1", h);
+            shot(app, r);
+            check(!app.nav_rows_now().is_empty(), "the pane shows no headings")?;
+            app.command("style:Normal", h);
+            ribbon_click(app, h, r, "view", "nav")?;
+            ribbon_click(app, h, r, "view", "ruler")?;
+            shot(app, r);
+            check((app.canvas_rect().w - wide).abs() < 0.5, "the room didn't come back")
+        });
+        step!("dragging the indent marker indents the paragraph", |app: &mut PageApp, h: &mut dyn Host, r: &mut Res| {
+            ribbon_click(app, h, r, "view", "ruler")?;
+            shot(app, r);
+            let before = app.ed.current_para_props().ind_left.unwrap_or(0);
+            let Some((_, hang, _)) = app.indent_marks_now() else { return Err("no markers".into()) };
+            // the hanging marker sits in the lower half of the ruler
+            let y = app.ruler_rect_now().bottom() - 4.0;
+            ev(app, h, Event::MouseDown { x: hang, y, button: Button::Left, clicks: 1 });
+            check(app.dragging_indent().is_some(), &format!("the click at {hang},{y} didn't catch a marker; ruler at {:?}", app.ruler_rect_now()))?;
+            ev(app, h, Event::MouseMove { x: hang + 40.0, y });
+            ev(app, h, Event::MouseUp { x: hang + 40.0, y, button: Button::Left });
+            let after = app.ed.current_para_props().ind_left.unwrap_or(0);
+            check(after > before, &format!("indent went from {before} to {after}"))?;
+            key(app, h, Key::Char('z'), ctrl());
+            ribbon_click(app, h, r, "view", "ruler")?;
+            Ok(())
+        });
         step!("a footnote goes under the page", |app: &mut PageApp, h: &mut dyn Host, r: &mut Res| {
             let before = ink_band(app, r, 0.75, 1.0);
             ribbon_click(app, h, r, "references", "footnote")?;
