@@ -1,0 +1,10 @@
+[package]
+name = "folio-reel-engine"
+version = "0.3.0"
+edition = "2021"
+description = "Folio Reel's engine: the project, the four tracks, the edits, and the commands that hand a file to ffmpeg"
+
+[dependencies]
+folio-canvas = { version = "0.1.0", path = "../folio-canvas" }
+folio-kit = { version = "0.3.0", path = "../folio-kit" }
+folio-math = { version = "0.3.0", path = "../folio-math" }

@@ -58,6 +58,11 @@ pub fn data_dirs(app: &str) -> Vec<PathBuf> {
 }
 
 /// A folder for this process's temporary files.
+/// Where the program was started. Used to make a bare file name absolute.
+pub fn cwd() -> Option<PathBuf> {
+    std::env::current_dir().ok()
+}
+
 pub fn temp_dir() -> PathBuf {
     std::env::temp_dir()
 }
