@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Folio Chord
+GenericName=Music Player
+Comment=Your music library, played
+Exec=folio-chord %F
+Icon=folio-chord
+Terminal=false
+Categories=AudioVideo;Audio;Player;Music;
+MimeType=audio/mpeg;audio/mp4;audio/flac;audio/ogg;audio/x-wav;audio/x-aiff;
+Keywords=music;player;library;playlist;itunes;
+StartupWMClass=folio-chord

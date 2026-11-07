@@ -1,0 +1,16 @@
+[package]
+name = "folio-chord"
+version = "3.0.0"
+edition = "2021"
+description = "Folio Chord: the music player, on the portable base"
+
+[[bin]]
+name = "folio-chord"
+path = "src/main.rs"
+
+[dependencies]
+folio-canvas = { version = "0.1.0", path = "../crates/folio-canvas" }
+folio-chord-engine = { version = "0.3.0", path = "../crates/folio-chord-engine" }
+folio-kit = { version = "0.3.0", path = "../crates/folio-kit" }
+folio-math = { version = "0.3.0", path = "../crates/folio-math" }
+folio-platform = { version = "0.3.0", path = "../crates/folio-platform", features = ["audio"] }
