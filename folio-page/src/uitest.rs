@@ -368,6 +368,27 @@ impl UiTest {
             key(app, h, Key::Char('z'), ctrl());
             Ok(())
         });
+        step!("Read Mode gives the page the whole window, Esc comes back", |app: &mut PageApp, h: &mut dyn Host, r: &mut Res| {
+            let before = app.canvas_rect().h;
+            ribbon_click(app, h, r, "view", "read-mode")?;
+            shot(app, r);
+            check(app.canvas_rect().h > before, "the page didn't get more room")?;
+            key(app, h, Key::Escape, Mods::NONE);
+            shot(app, r);
+            check((app.canvas_rect().h - before).abs() < 0.5, "Esc didn't bring the ribbon back")
+        });
+        step!("the accessibility check reports what it finds", |app: &mut PageApp, h: &mut dyn Host, _r: &mut Res| {
+            let issues = app.ed.accessibility_issues().len();
+            app.command("accessibility", h);
+            if issues == 0 {
+                check(app.dialog.is_none(), "it opened a list with nothing in it")?;
+            } else {
+                check(app.dialog.is_some(), &format!("{issues} to report, but nothing was shown"))?;
+                app.press_dialog_button("ok", h);
+                check(app.dialog.is_none(), "the list wouldn't close")?;
+            }
+            Ok(())
+        });
         step!("the document saves and opens again", move |app: &mut PageApp, _h: &mut dyn Host, _r: &mut Res| {
             let p = d_save.join("typed.docx");
             app.save(&p);
