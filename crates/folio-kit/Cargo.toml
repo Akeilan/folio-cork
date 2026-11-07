@@ -2,6 +2,7 @@
 name = "folio-kit"
 version = "0.3.0"
 edition = "2021"
+license.workspace = true
 
 [dependencies]
 cosmic-text = "0.19.0"

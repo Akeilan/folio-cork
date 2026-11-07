@@ -3,6 +3,7 @@ name = "folio-chord-engine"
 version = "0.3.0"
 edition = "2021"
 description = "Folio Chord's engine: the music library, playlists and playback"
+license.workspace = true
 
 [dependencies]
 folio-kit = { version = "0.3.0", path = "../folio-kit" }

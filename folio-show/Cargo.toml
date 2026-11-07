@@ -3,6 +3,7 @@ name = "folio-show"
 version = "3.0.0"
 edition = "2021"
 description = "Folio Show: the presentations app, on the portable base"
+license.workspace = true
 
 [[bin]]
 name = "folio-show"

@@ -3,6 +3,7 @@ name = "folio-draw"
 version = "1.12.0"
 edition = "2021"
 description = "Folio Draw on the portable base (D3-06): the Rust port of the drawing app"
+license.workspace = true
 
 [dependencies]
 folio-kit = { version = "0.3.0", path = "../crates/folio-kit" }

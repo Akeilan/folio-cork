@@ -3,6 +3,7 @@ name = "folio-page-editor"
 version = "0.1.0"
 edition = "2021"
 description = "Editing a Folio Page document: the caret, selections, commands and undo over the document engine"
+license.workspace = true
 
 [dependencies]
 folio-page-engine = { version = "0.1.0", path = "../folio-page-engine" }

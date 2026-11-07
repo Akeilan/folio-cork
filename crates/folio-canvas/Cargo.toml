@@ -3,6 +3,7 @@ name = "folio-canvas"
 version = "0.1.0"
 edition = "2021"
 description = "A drawing surface for Folio's document engines: paths, gradients, clipping and glyph outlines on the portable base"
+license.workspace = true
 
 [dependencies]
 folio-kit = { version = "0.3.0", path = "../folio-kit" }

@@ -37,3 +37,14 @@ Diagrams, whiteboards and mood boards for Folio Studio. Cork is written in Rust 
 | `folio-draw --embroider PICTURE -o DESIGN.pes` | A picture turned into a machine file, without a window. |
 | `tools/release.sh` | All of the above, the .deb built on 22.04, the installed tests on three machines, and the Wayland pass. |
 | `tools/release-draw.sh` | The same for Folio Draw. |
+
+## Licence
+
+MIT — see [LICENSE](LICENSE). Folio is free to use, read, change and pass on,
+including in your own products. The fonts in `folio-fonts` are not ours: Carlito
+and Liberation are under the SIL Open Font License 1.1, and their licences ship
+beside them.
+
+Folio Reel calls ffmpeg when the computer has it, as a separate program rather
+than a library, so ffmpeg's own licence does not reach this code. ffmpeg is not
+shipped with Folio.

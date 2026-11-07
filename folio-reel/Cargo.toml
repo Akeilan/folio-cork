@@ -3,6 +3,7 @@ name = "folio-reel"
 version = "3.0.0"
 edition = "2021"
 description = "Folio Reel: the video editor, on the portable base"
+license.workspace = true
 
 [[bin]]
 name = "folio-reel"

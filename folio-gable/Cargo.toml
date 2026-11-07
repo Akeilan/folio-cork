@@ -3,6 +3,7 @@ name = "folio-gable"
 version = "3.0.0"
 edition = "2021"
 description = "Folio Gable: the 3D modeller, on the portable base"
+license.workspace = true
 
 [[bin]]
 name = "folio-gable"

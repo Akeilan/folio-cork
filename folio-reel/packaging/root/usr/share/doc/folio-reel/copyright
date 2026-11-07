@@ -1,9 +1,32 @@
-Folio Reel — part of Folio Studio.
+Folio Reel
+Copyright 2026 Ron Shillings. Part of Folio Studio.
 All code (the interface, the project, the edits and the renderer) written from
 scratch for this project.
-License: MIT
 
 Reel calls ffmpeg, when the computer has it, to read and write video. ffmpeg is
 not part of this package and is not redistributed with it; it is used as any
 program on the computer is used. ffmpeg is licensed separately (LGPL or GPL,
 depending on how it was built).
+
+Licence
+-------
+MIT. Folio is free to use, read, change and pass on, including in your own
+products, as long as this notice goes with it.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

@@ -3,6 +3,7 @@ name = "folio-sheet"
 version = "3.0.0"
 edition = "2021"
 description = "Folio Sheet: the spreadsheet, on the portable base"
+license.workspace = true
 
 [[bin]]
 name = "folio-sheet"
