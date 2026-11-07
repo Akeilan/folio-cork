@@ -317,6 +317,57 @@ impl UiTest {
             ribbon_click(app, h, r, "review", "comment-delete")?;
             check(app.ed.comments().is_empty(), "the comment stayed")
         });
+        step!("the Paragraph dialog sets the spacing and the indents", |app: &mut PageApp, h: &mut dyn Host, r: &mut Res| {
+            ribbon_click(app, h, r, "home", "para-dialog")?;
+            let d = app.dialog.as_mut().ok_or("the dialog didn't open")?;
+            d.set_text_for_test("left", "0.50");
+            d.set_text_for_test("after", "12");
+            app.press_dialog_button("ok", h);
+            let pp = app.ed.current_para_props();
+            check(pp.ind_left == Some(720), &format!("indent is {:?}", pp.ind_left))?;
+            check(pp.after == Some(240), &format!("space after is {:?}", pp.after))?;
+            key(app, h, Key::Char('z'), ctrl());
+            key(app, h, Key::Char('z'), ctrl());
+            Ok(())
+        });
+        step!("the Font dialog sets the size", |app: &mut PageApp, h: &mut dyn Host, r: &mut Res| {
+            key(app, h, Key::Char('a'), ctrl());
+            ribbon_click(app, h, r, "home", "font-dialog")?;
+            let d = app.dialog.as_mut().ok_or("the dialog didn't open")?;
+            d.set_text_for_test("size", "18");
+            app.press_dialog_button("ok", h);
+            check(app.ed.current_size() == Some(18.0), &format!("size is {:?}", app.ed.current_size()))?;
+            key(app, h, Key::Char('z'), ctrl());
+            Ok(())
+        });
+        step!("Page Setup sets the margins", |app: &mut PageApp, h: &mut dyn Host, r: &mut Res| {
+            ribbon_click(app, h, r, "layout", "page-setup")?;
+            let d = app.dialog.as_mut().ok_or("the dialog didn't open")?;
+            d.set_text_for_test("left", "1.50");
+            app.press_dialog_button("ok", h);
+            let (left, _) = app.ed.page_margins(0);
+            check((left - 108.0).abs() < 1.0, &format!("left margin is {left} points"))?;
+            ribbon_click(app, h, r, "layout", "page-setup")?;
+            let d = app.dialog.as_mut().ok_or("the dialog didn't open again")?;
+            d.set_text_for_test("left", "1.00");
+            app.press_dialog_button("ok", h);
+            Ok(())
+        });
+        step!("the document's properties go into the PDF", move |app: &mut PageApp, h: &mut dyn Host, _r: &mut Res| {
+            app.command("properties", h);
+            let d = app.dialog.as_mut().ok_or("the dialog didn't open")?;
+            d.set_text_for_test("title", "A Folio Page document");
+            d.set_text_for_test("author", "Product Owner");
+            app.press_dialog_button("ok", h);
+            check(app.ed.doc_properties()[0] == "A Folio Page document", "the title didn't stick")?;
+            Ok(())
+        });
+        step!("a symbol goes in from the Insert menu", |app: &mut PageApp, h: &mut dyn Host, _r: &mut Res| {
+            app.command("sym:\u{2122}", h);
+            check(app.ed.text_of_document().contains('\u{2122}'), "the symbol isn't in the text")?;
+            key(app, h, Key::Char('z'), ctrl());
+            Ok(())
+        });
         step!("the document saves and opens again", move |app: &mut PageApp, _h: &mut dyn Host, _r: &mut Res| {
             let p = d_save.join("typed.docx");
             app.save(&p);
@@ -341,7 +392,10 @@ impl UiTest {
             check(p.is_file(), "no PDF was written")?;
             let bytes = std::fs::read(&p).map_err(|e| e.to_string())?;
             check(bytes.starts_with(b"%PDF-"), "that isn't a PDF")?;
-            check(bytes.len() > 1000, "the PDF is suspiciously small")
+            check(bytes.len() > 1000, "the PDF is suspiciously small")?;
+            let text = String::from_utf8_lossy(&bytes);
+            check(text.contains("/Title"), "the PDF carries no title")?;
+            check(text.contains("/Outlines") || text.contains("/FontFile2"), "the PDF has no fonts in it")
         });
         UiTest { steps, i: 0, done: false, fails: vec![], passed: 0, dir }
     }

@@ -32,6 +32,12 @@ pub const ZOOMS: [f32; 11] = [0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3
 pub const SIZES: [f32; 16] =
     [8.0, 9.0, 10.0, 10.5, 11.0, 12.0, 14.0, 16.0, 18.0, 20.0, 24.0, 28.0, 36.0, 48.0, 72.0, 96.0];
 /// The colours of the font-colour and highlight menus.
+/// The symbols the Insert menu offers.
+pub const SYMBOLS: [char; 24] = ['\u{a9}', '\u{ae}', '\u{2122}', '\u{b0}', '\u{b1}', '\u{d7}', '\u{f7}', '\u{2260}',
+                                 '\u{2264}', '\u{2265}', '\u{2248}', '\u{221e}', '\u{3bc}', '\u{3c0}', '\u{3a9}',
+                                 '\u{3b1}', '\u{3b2}', '\u{2211}', '\u{221a}', '\u{20ac}', '\u{a3}', '\u{a5}',
+                                 '\u{2026}', '\u{2014}'];
+
 pub const PALETTE: [u32; 20] = [
     0x000000, 0x404040, 0x7F7F7F, 0xBFBFBF, 0xFFFFFF, 0xC00000, 0xFF0000, 0xFFC000, 0xFFFF00, 0x92D050, 0x00B050,
     0x00B0F0, 0x0070C0, 0x002060, 0x7030A0, 0xE36C0A, 0x8064A2, 0x4BACC6, 0x9BBB59, 0x1F497D,
@@ -217,7 +223,8 @@ impl PageApp {
 
     pub fn export_pdf(&mut self, p: &Path) {
         let p = with_ext(p, "pdf");
-        match self.ed.export_pdf(&p.to_string_lossy()) {
+        let meta = self.ed.doc_properties();
+        match self.ed.export_pdf_opts(&p.to_string_lossy(), Vec::new(), true, meta) {
             Ok(()) => self.flash(&format!("Wrote {}", name_of(&p))),
             Err(e) => self.say("Can't write the PDF", &e),
         }
@@ -979,6 +986,13 @@ impl PageApp {
             host.redraw();
             return;
         }
+        if d.id == "para" || d.id == "font" || d.id == "pagesetup" || d.id == "props" {
+            if id == "ok" {
+                self.apply_dialog(&d);
+            }
+            host.redraw();
+            return;
+        }
         if d.id != "find" || id == "close" {
             host.redraw();
             return;
@@ -1101,6 +1115,84 @@ impl PageApp {
         self.cache.clear();
     }
 
+    /// What a dialog's OK does.
+    fn apply_dialog(&mut self, d: &Dialog) {
+        let inches = |v: String| (v.trim().parse::<f64>().unwrap_or(0.0) * 1440.0).round() as i64;
+        let points = |v: String| (v.trim().parse::<f64>().unwrap_or(0.0) * 20.0).round() as i64;
+        match d.id.as_str() {
+            "para" => {
+                let jc = ["left", "center", "right", "both"][d.choice_index("jc").min(3)];
+                self.ed.set_align(jc);
+                let (l, r, f) = (inches(d.value("left")), inches(d.value("right")), inches(d.value("first")));
+                let (ls, rs) = (l.to_string(), r.to_string());
+                self.ed.format_paras_attrs("w:ind", &[("w:left", Some(&ls)), ("w:right", Some(&rs)),
+                                                      ("w:firstLine", None), ("w:hanging", None)], "Paragraph");
+                if f != 0 {
+                    let (name, v) = if f < 0 { ("w:hanging", (-f).to_string()) } else { ("w:firstLine", f.to_string()) };
+                    self.ed.format_paras_attrs("w:ind", &[(name, Some(&v))], "Paragraph");
+                }
+                let before = points(d.value("before")).to_string();
+                let after = points(d.value("after")).to_string();
+                let line = ((d.value("line").trim().parse::<f64>().unwrap_or(1.0) * 240.0).round() as i64).to_string();
+                self.ed.format_paras_attrs(
+                    "w:spacing",
+                    &[("w:before", Some(&before)), ("w:after", Some(&after)), ("w:line", Some(&line)),
+                      ("w:lineRule", Some("auto"))],
+                    "Paragraph",
+                );
+            }
+            "font" => {
+                let family = d.value("family");
+                if !family.trim().is_empty() {
+                    self.ed.run_prop("w:rFonts", Some(&[("w:ascii", &family), ("w:hAnsi", &family)]), "Font");
+                }
+                if let Ok(sz) = d.value("size").trim().parse::<f64>() {
+                    let hp = format!("{}", (sz * 2.0).round() as i64);
+                    self.ed.run_prop("w:sz", Some(&[("w:val", &hp)]), "Font");
+                }
+                for (id, name) in [("bold", "w:b"), ("italic", "w:i"), ("underline", "w:u"), ("strike", "w:strike"),
+                                   ("caps", "w:caps")] {
+                    let on = d.checked(id);
+                    let attrs: Vec<(&str, &str)> = if name == "w:u" && on { vec![("w:val", "single")] } else { vec![] };
+                    if on {
+                        self.ed.run_prop(name, Some(&attrs), "Font");
+                    } else {
+                        self.ed.run_prop(name, Some(&[("w:val", "0")]), "Font");
+                    }
+                }
+            }
+            "pagesetup" => {
+                let sec = self.ed.current_section();
+                let (pw, ph) = match d.choice_index("paper") {
+                    0 => (12240, 15840),
+                    1 => (12240, 20160),
+                    2 => (11906, 16838),
+                    _ => {
+                        let (w, h) = self.ed.page_size(self.caret_page());
+                        ((w * 20.0).round() as i64, (h * 20.0).round() as i64)
+                    }
+                };
+                let land = d.choice_index("orient") == 1;
+                let (w, h) = if land { (pw.max(ph), pw.min(ph)) } else { (pw.min(ph), pw.max(ph)) };
+                self.ed.section_attr(sec, "w:pgSz", "w:w", Some(&w.to_string()), "Page Setup");
+                self.ed.section_attr(sec, "w:pgSz", "w:h", Some(&h.to_string()), "Page Setup");
+                self.ed.section_attr(sec, "w:pgSz", "w:orient",
+                                     Some(if land { "landscape" } else { "portrait" }), "Page Setup");
+                for (id, attr) in [("left", "w:left"), ("right", "w:right"), ("top", "w:top"), ("bottom", "w:bottom")] {
+                    let v = inches(d.value(id)).to_string();
+                    self.ed.section_attr(sec, "w:pgMar", attr, Some(&v), "Page Setup");
+                }
+                self.ed.relayout();
+            }
+            "props" => {
+                self.ed.set_doc_properties([d.value("title"), d.value("author"), d.value("subject"),
+                                            d.value("keywords")]);
+            }
+            _ => {}
+        }
+        self.cache.clear();
+    }
+
     /// The page the caret is on.
     fn caret_page(&self) -> usize {
         self.ed.caret_rect(self.ed.caret).map(|(p, _, _, _)| p).unwrap_or(0)
@@ -1161,6 +1253,11 @@ impl PageApp {
                 items.push(MenuItem::new("border:all", "All borders"));
                 items.push(MenuItem::new("border:outside", "Outside borders"));
                 items.push(MenuItem::new("border:none", "No borders"));
+            }
+            "symbol" => {
+                for ch in SYMBOLS {
+                    items.push(MenuItem::new(&format!("sym:{ch}"), &ch.to_string()));
+                }
             }
             "styles" => {
                 for s in self.ed.style_names().into_iter().take(40) {
@@ -1321,6 +1418,93 @@ impl PageApp {
                     self.ed.section_attr(sec, "w:pgSz", "w:h", Some(h), "Paper size");
                     self.ed.relayout();
                     self.cache.clear();
+                }
+            }
+            "para-dialog" => {
+                let pp = self.ed.current_para_props();
+                let jc = match pp.jc.as_deref() {
+                    Some("center") => 1,
+                    Some("right") | Some("end") => 2,
+                    Some("both") => 3,
+                    _ => 0,
+                };
+                let tw = |v: Option<i32>| format!("{:.2}", v.unwrap_or(0) as f64 / 1440.0);
+                let pt = |v: Option<i32>| format!("{}", (v.unwrap_or(0) as f64 / 20.0).round() as i64);
+                let line = pp.line.map(|l| l as f64 / 240.0).unwrap_or(1.0);
+                self.dialog = Some(
+                    Dialog::new("para", "Paragraph")
+                        .choice("jc", "Alignment", &["Left", "Centre", "Right", "Justified"], jc)
+                        .text("left", "Indent left (inches)", &tw(pp.ind_left))
+                        .text("right", "Indent right (inches)", &tw(pp.ind_right))
+                        .text("first", "First line (inches)", &tw(pp.ind_first))
+                        .text("before", "Space before (points)", &pt(pp.before))
+                        .text("after", "Space after (points)", &pt(pp.after))
+                        .text("line", "Line spacing", &format!("{line:.2}"))
+                        .button("ok", "OK")
+                        .button("cancel", "Cancel"),
+                );
+            }
+            "font-dialog" => {
+                let rp = self.ed.current_run_props();
+                let family = rp.font_ascii.clone().unwrap_or_default();
+                let size = rp.size.map(|h| h as f64 / 2.0).unwrap_or(11.0);
+                self.dialog = Some(
+                    Dialog::new("font", "Font")
+                        .text("family", "Font", &family)
+                        .text("size", "Size (points)", &format!("{size}"))
+                        .check("bold", "Bold", rp.bold.unwrap_or(false))
+                        .check("italic", "Italic", rp.italic.unwrap_or(false))
+                        .check("underline", "Underline", rp.underline.is_some())
+                        .check("strike", "Strikethrough", rp.strike.unwrap_or(false))
+                        .check("caps", "All caps", rp.caps.unwrap_or(false))
+                        .button("ok", "OK")
+                        .button("cancel", "Cancel"),
+                );
+            }
+            "page-setup" => {
+                let sec = self.ed.current_section();
+                let (pw, ph) = self.ed.page_size(self.caret_page());
+                let (left, right_edge) = self.ed.page_margins(self.caret_page());
+                let paper = if (pw - 612.0).abs() < 2.0 && (ph - 792.0).abs() < 2.0 {
+                    0
+                } else if (pw - 595.0).abs() < 3.0 {
+                    2
+                } else if (ph - 1008.0).abs() < 3.0 {
+                    1
+                } else {
+                    3
+                };
+                let _ = sec;
+                self.dialog = Some(
+                    Dialog::new("pagesetup", "Page Setup")
+                        .choice("paper", "Paper", &["Letter", "Legal", "A4", "As it is"], paper)
+                        .choice("orient", "Orientation", &["Portrait", "Landscape"], if pw > ph { 1 } else { 0 })
+                        .text("left", "Left margin (inches)", &format!("{:.2}", left / 72.0))
+                        .text("right", "Right margin (inches)", &format!("{:.2}", (pw - right_edge) / 72.0))
+                        .text("top", "Top margin (inches)", &format!("{:.2}", self.ed.page_vmargins(self.caret_page()).0 / 72.0))
+                        .text("bottom", "Bottom margin (inches)", &format!("{:.2}", (self.ed.page_size(self.caret_page()).1 - self.ed.page_vmargins(self.caret_page()).1) / 72.0))
+                        .button("ok", "OK")
+                        .button("cancel", "Cancel"),
+                );
+            }
+            "properties" => {
+                let [title, author, subject, keywords] = self.ed.doc_properties();
+                self.dialog = Some(
+                    Dialog::new("props", "Document Properties")
+                        .text("title", "Title", &title)
+                        .text("author", "Author", &author)
+                        .text("subject", "Subject", &subject)
+                        .text("keywords", "Keywords", &keywords)
+                        .note("These go into the document, and into the PDF it exports.")
+                        .button("ok", "OK")
+                        .button("cancel", "Cancel"),
+                );
+            }
+            "symbol" => {}
+            "sym" => {
+                if let Some(ch) = arg.and_then(|a| a.chars().next()) {
+                    self.ed.type_text(&ch.to_string());
+                    self.show_caret();
                 }
             }
             "find" => {

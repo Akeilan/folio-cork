@@ -24,6 +24,7 @@ pub fn tabs() -> Vec<Tab> {
                         vec![
                             I::combo("font", "Font", 150).desc("The font of the selected text."),
                             I::combo("size", "Font size", 56),
+                            I::icon("font-dialog", "More font settings", "font-dialog"),
                         ],
                         vec![
                             I::icon("bold", "Bold", "bold").key("Ctrl+B"),
@@ -53,6 +54,7 @@ pub fn tabs() -> Vec<Tab> {
                             I::icon("align-center", "Centre", "align-center"),
                             I::icon("align-right", "Align right", "align-right"),
                             I::icon("align-justify", "Justify", "align-justify"),
+                            I::icon("para-dialog", "More paragraph settings", "para-dialog"),
                         ],
                     ],
                 ),
@@ -85,6 +87,7 @@ pub fn tabs() -> Vec<Tab> {
                 ),
                 Group::new("Tables", vec![I::large("table", "Table", "table").desc("A table of three rows and three columns.")]),
                 Group::new("Illustrations", vec![I::large("picture", "Picture", "picture").desc("A picture from a file.")]),
+                Group::new("Symbols", vec![I::large("symbol", "Symbol", "symbol").menu()]),
                 Group::new(
                     "Header & Footer",
                     vec![
@@ -103,6 +106,7 @@ pub fn tabs() -> Vec<Tab> {
             vec![Group::new(
                 "Page Setup",
                 vec![
+                    I::large("page-setup", "Page Setup", "page-setup"),
                     I::large("margins", "Margins", "margins").menu(),
                     I::large("orientation", "Orientation", "orientation").menu(),
                     I::large("paper", "Size", "paper").menu(),
@@ -223,6 +227,7 @@ pub fn tabs() -> Vec<Tab> {
                     I::small("pdf", "Export PDF", "pdf").key("Ctrl+P"),
                     I::small("open", "Open", "open").key("Ctrl+O"),
                     I::small("new", "New", "new").key("Ctrl+N"),
+                    I::small("properties", "Properties", "properties"),
                 ],
             )],
         ),
