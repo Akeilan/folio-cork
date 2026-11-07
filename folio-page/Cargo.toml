@@ -3,6 +3,7 @@ name = "folio-page"
 version = "3.0.0"
 edition = "2021"
 description = "Folio Page: the word processor, on the portable base"
+license.workspace = true
 
 [[bin]]
 name = "folio-page"

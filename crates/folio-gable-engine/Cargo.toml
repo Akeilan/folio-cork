@@ -3,6 +3,7 @@ name = "folio-gable-engine"
 version = "0.3.0"
 edition = "2021"
 description = "Folio Gable's engine: the 3D model, the geometry and the software renderer"
+license.workspace = true
 
 [dependencies]
 folio-canvas = { version = "0.1.0", path = "../folio-canvas" }

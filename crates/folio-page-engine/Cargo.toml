@@ -3,6 +3,7 @@ name = "folio-page-engine"
 version = "0.1.0"
 edition = "2021"
 description = "Folio Page's document engine: the .docx model, Word-compatible layout and pagination, with no system calls and no drawing"
+license.workspace = true
 
 [dependencies]
 folio-math = { version = "0.3.0", path = "../folio-math" }

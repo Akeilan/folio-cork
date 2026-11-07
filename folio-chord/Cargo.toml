@@ -3,6 +3,7 @@ name = "folio-chord"
 version = "3.0.0"
 edition = "2021"
 description = "Folio Chord: the music player, on the portable base"
+license.workspace = true
 
 [[bin]]
 name = "folio-chord"

@@ -3,6 +3,7 @@ name = "folio-math"
 version = "0.3.0"
 edition = "2021"
 description = "Deterministic maths for Folio: the same bits on every CPU and OS (X3-12)"
+license.workspace = true
 
 [dependencies]
 libm = "0.2.16"

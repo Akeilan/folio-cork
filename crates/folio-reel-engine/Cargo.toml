@@ -3,6 +3,7 @@ name = "folio-reel-engine"
 version = "0.3.0"
 edition = "2021"
 description = "Folio Reel's engine: the project, the four tracks, the edits, and the commands that hand a file to ffmpeg"
+license.workspace = true
 
 [dependencies]
 folio-canvas = { version = "0.1.0", path = "../folio-canvas" }

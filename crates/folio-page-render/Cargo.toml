@@ -3,6 +3,7 @@ name = "folio-page-render"
 version = "0.1.0"
 edition = "2021"
 description = "Drawing Folio Page's laid-out documents: text, tables, shapes, pictures and equations on the portable base"
+license.workspace = true
 
 [dependencies]
 folio-canvas = { version = "0.1.0", path = "../folio-canvas" }
