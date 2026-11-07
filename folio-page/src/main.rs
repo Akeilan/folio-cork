@@ -6,6 +6,7 @@ mod icons;
 mod mailmerge;
 mod ribbon_defs;
 mod settings;
+mod spell;
 mod uitest;
 
 use folio_kit::platform::{run, Image, WindowSpec};

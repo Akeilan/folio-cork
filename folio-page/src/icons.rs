@@ -103,6 +103,7 @@ const ICONS: &[(&str, &str)] = &[
     ("properties", "<path d='M6 3h8l4 4v14H6zM14 3v4h4M9 12h6M9 16h4'/><circle cx='12' cy='9' r='.8' fill='currentColor'/>"),
     ("print", "<path d='M7 9V4h10v5M7 17h10v4H7z'/><rect x='4' y='9' width='16' height='8' rx='1'/><circle cx='17' cy='12' r='.9' fill='currentColor'/>"),
     ("read-mode", "<path d='M3 5h7a2 2 0 0 1 2 2v12a2 2 0 0 0-2-2H3zM21 5h-7a2 2 0 0 0-2 2v12a2 2 0 0 1 2-2h7z'/>"),
+    ("spelling", "<path d='M4 16L8 6l4 10M5.2 13h5.6'/><path d='M14 16v-6h2.5a2 2 0 0 1 0 4H14'/><path d='M3 20c1-1.2 2-1.2 3 0s2 1.2 3 0 2-1.2 3 0 2 1.2 3 0 2-1.2 3 0' stroke-width='1.2'/>"),
     ("accessibility", "<circle cx='12' cy='5' r='2'/><path d='M5 9h14M12 9v6M12 15l-3 6M12 15l3 6'/>"),
     ("ruler", "<rect x='2' y='8' width='20' height='8'/><path d='M6 8v4M10 8v3M14 8v4M18 8v3' stroke-width='1.2'/>"),
     ("nav", "<rect x='3' y='4' width='7' height='16' fill='var(--accent)' fill-opacity='.3'/><rect x='3' y='4' width='18' height='16'/><path d='M13 9h6M13 13h6M13 17h4' stroke-width='1.3'/>"),
