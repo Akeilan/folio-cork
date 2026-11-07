@@ -22,6 +22,9 @@ use std::time::Duration;
 /// Page's colour: the blue the GTK version used.
 pub const BLUE: Color = Color::hex(0x2B579A);
 const BAR_H: f32 = 26.0;
+/// The navigation pane's width and the ruler's height, in points at 100%.
+const NAV_W: f32 = 230.0;
+const RULER_H: f32 = 22.0;
 /// The space round and between the pages, in points at 100%.
 const GAP: f32 = 16.0;
 
@@ -83,6 +86,14 @@ pub struct PageApp {
     marks: bool,
     painter: bool,
     view_mode: u8,
+    nav: bool,
+    ruler: bool,
+    /// the headings in the navigation pane, with where each one sits
+    nav_rows: Vec<(folio_page_editor::eng::xml::NodeId, Rect)>,
+    nav_rect: Rect,
+    ruler_rect: Rect,
+    /// an indent marker being dragged: 0 first line, 1 hanging, 2 left, 3 right
+    drag_indent: Option<u8>,
     pub test: Option<crate::uitest::UiTest>,
     pub settings: crate::settings::Settings,
     /// a close that is waiting on "save first?"
@@ -130,6 +141,12 @@ impl PageApp {
             marks: false,
             painter: false,
             view_mode: 0,
+            nav: false,
+            ruler: false,
+            nav_rows: Vec::new(),
+            nav_rect: Rect::default(),
+            ruler_rect: Rect::default(),
+            drag_indent: None,
             test: None,
             settings: crate::settings::Settings::load(),
             closing: false,
@@ -152,6 +169,8 @@ impl PageApp {
     pub fn apply_settings(&mut self) {
         self.zoom = self.settings.zoom;
         self.marks = self.settings.marks;
+        self.nav = self.settings.nav;
+        self.ruler = self.settings.ruler;
         if self.settings.view_mode != 0 {
             self.view_mode = self.settings.view_mode;
             self.ed.set_view_mode(self.view_mode, 600.0);
@@ -161,6 +180,8 @@ impl PageApp {
     fn remember(&mut self) {
         self.settings.zoom = self.zoom;
         self.settings.marks = self.marks;
+        self.settings.nav = self.nav;
+        self.settings.ruler = self.ruler;
         self.settings.view_mode = self.view_mode;
         if let Some(p) = self.path.clone() {
             self.settings.remember(&p);
@@ -346,7 +367,14 @@ impl PageApp {
         let s = self.s;
         pm.fill(theme.window.to_sk());
         let ribbon_h = self.ribbon.height(s);
-        self.canvas = Rect::new(0.0, TITLE_H * s + ribbon_h, self.w, (self.h - TITLE_H * s - ribbon_h - BAR_H * s).max(1.0));
+        let top = TITLE_H * s + ribbon_h;
+        let nav_w = if self.nav { NAV_W * s } else { 0.0 };
+        let ruler_h = if self.ruler { RULER_H * s } else { 0.0 };
+        self.nav_rect = Rect::new(0.0, top, nav_w, (self.h - top - BAR_H * s).max(1.0));
+        self.ruler_rect = Rect::new(nav_w, top, (self.w - nav_w).max(1.0), ruler_h);
+        self.canvas = Rect::new(nav_w, top + ruler_h,
+                                (self.w - nav_w).max(1.0),
+                                (self.h - top - ruler_h - BAR_H * s).max(1.0));
 
         let title = self.window_title();
         {
@@ -363,6 +391,12 @@ impl PageApp {
             self.paint_backstage(pm, r);
         } else {
             self.paint_pages(pm, r);
+            if self.ruler {
+                self.paint_ruler(pm, r);
+            }
+            if self.nav {
+                self.paint_nav(pm, r);
+            }
             {
                 let st = self.state();
                 let mut cx = Ctx { pm, text: &mut r.text, icons: &mut r.icons, theme: &theme, s };
@@ -407,6 +441,85 @@ impl PageApp {
                 gfx::fill_rect(pm, rect, Color::WHITE);
             }
         }
+    }
+
+    /// The navigation pane: the document's headings, to jump by.
+    fn paint_nav(&mut self, pm: &mut sk::Pixmap, r: &mut Res) {
+        let theme = self.theme.clone();
+        let s = self.s;
+        let area = self.nav_rect;
+        gfx::fill_rect(pm, area, theme.panel);
+        gfx::vline(pm, area.right() - 0.5, area.y, area.bottom(), theme.border);
+        self.nav_rows.clear();
+        let heads: Vec<(folio_page_editor::eng::xml::NodeId, String, i32)> = self
+            .ed
+            .outline_paras()
+            .into_iter()
+            .filter(|(_, text, level, ..)| *level <= 9 && !text.trim().is_empty())
+            .map(|(n, text, level, ..)| (n, text, level))
+            .collect();
+        let here = self.ed.caret.para;
+        let mut cx = Ctx { pm, text: &mut r.text, icons: &mut r.icons, theme: &theme, s };
+        cx.label("Headings", Rect::new(area.x + 12.0 * s, area.y + 6.0 * s, area.w - 16.0 * s, 22.0 * s), 12.0,
+                 theme.muted, true, Align::Left);
+        let mut y = area.y + 30.0 * s;
+        if heads.is_empty() {
+            cx.label("No headings yet", Rect::new(area.x + 12.0 * s, y, area.w - 16.0 * s, 22.0 * s), 12.0,
+                     theme.muted, false, Align::Left);
+            return;
+        }
+        for (node, text, level) in heads {
+            if y > area.bottom() - 18.0 * s {
+                break;
+            }
+            let row = Rect::new(area.x, y, area.w, 22.0 * s);
+            if node == here {
+                gfx::fill_rect(cx.pm, row, theme.checked);
+            }
+            let indent = 12.0 * s + (level.max(1) - 1) as f32 * 12.0 * s;
+            let line: String = text.chars().take(60).collect();
+            cx.label(&line, Rect::new(row.x + indent, row.y, row.w - indent - 8.0 * s, row.h), 12.5, theme.text,
+                     level <= 1, Align::Left);
+            self.nav_rows.push((node, row));
+            y += 22.0 * s;
+        }
+    }
+
+    /// The ruler over the page: the margins, and the paragraph's own indents.
+    fn paint_ruler(&mut self, pm: &mut sk::Pixmap, r: &mut Res) {
+        let theme = self.theme.clone();
+        let s = self.s;
+        let area = self.ruler_rect;
+        gfx::fill_rect(pm, area, theme.panel);
+        gfx::hline(pm, area.x, area.right(), area.bottom() - 0.5, theme.border);
+        let Some(page) = self.page_rects.first().map(|(_, r)| *r) else { return };
+        let z = self.zoom * self.s;
+        let pp = self.ed.current_para_props();
+        let (left_m, right_edge) = self.ed.page_margins(0);
+        let band = Rect::new(page.x, area.y + 6.0 * s, page.w, area.h - 12.0 * s);
+        // the paper, then the part the text sits in
+        gfx::fill_rect(pm, band, if theme.dark { Color::hex(0x3A3A3A) } else { Color::hex(0xD9D9D9) });
+        let text_x = page.x + (left_m as f32) * z;
+        let text_w = ((right_edge - left_m) as f32 * z).max(1.0);
+        gfx::fill_rect(pm, Rect::new(text_x, band.y, text_w, band.h), if theme.dark { Color::hex(0x555555) } else { Color::WHITE });
+        // every inch, a mark
+        let inch = 72.0 * z;
+        let mut x = text_x;
+        while x < page.right() {
+            gfx::vline(pm, x.round(), band.y + band.h * 0.3, band.bottom() - band.h * 0.3, theme.muted);
+            x += inch;
+        }
+        let twip = |v: Option<i32>| v.unwrap_or(0) as f32 / 20.0 * z;
+        let first = text_x + twip(pp.ind_left) + twip(pp.ind_first);
+        let hang = text_x + twip(pp.ind_left);
+        let right = text_x + text_w - twip(pp.ind_right);
+        for (cx_pos, up) in [(first, true), (hang, false), (right, false)] {
+            let t = 5.0 * s;
+            let y = if up { band.y } else { band.bottom() - t };
+            let tri = Rect::new(cx_pos - t, y, t * 2.0, t);
+            gfx::fill_rect(pm, tri, theme.accent);
+        }
+        let _ = r;
     }
 
     fn paint_bar(&mut self, pm: &mut sk::Pixmap, r: &mut Res) {
@@ -568,6 +681,19 @@ impl PageApp {
         }
         match ev {
             Event::MouseDown { x, y, button: Button::Left, clicks } => {
+                if self.nav && self.nav_rect.contains(*x, *y) {
+                    if let Some((node, _)) = self.nav_rows.iter().find(|(_, r)| r.contains(*x, *y)).cloned() {
+                        let to = folio_page_editor::Pos { para: node, off: 0 };
+                        self.ed.move_to(to, false, false);
+                        self.show_caret();
+                        host.redraw();
+                    }
+                    return;
+                }
+                if self.ruler && self.ruler_rect.contains(*x, *y) {
+                    self.drag_indent = self.indent_handle_at(*x, *y);
+                    return;
+                }
                 if self.canvas.contains(*x, *y) {
                     self.layout_pages();
                     if let Some((pg, px, py)) = self.point_on_page(*x, *y) {
@@ -588,6 +714,11 @@ impl PageApp {
                 }
             }
             Event::MouseMove { x, y } => {
+                if let Some(which) = self.drag_indent {
+                    self.drag_indent_to(which, *x);
+                    host.redraw();
+                    return;
+                }
                 if self.dragging {
                     self.layout_pages();
                     if let Some((pg, px, py)) = self.point_on_page(*x, *y) {
@@ -599,7 +730,10 @@ impl PageApp {
                 }
                 host.set_cursor(if self.canvas.contains(*x, *y) { Cursor::Text } else { Cursor::Default });
             }
-            Event::MouseUp { button: Button::Left, .. } => self.dragging = false,
+            Event::MouseUp { button: Button::Left, .. } => {
+                self.dragging = false;
+                self.drag_indent = None;
+            }
             Event::Wheel { dy, .. } => {
                 self.scroll_by(-dy * 48.0 / self.zoom.max(0.1));
                 host.redraw();
@@ -896,6 +1030,75 @@ impl PageApp {
                 .button("discard", "Close without saving")
                 .button("cancel", "Keep working"),
         );
+    }
+
+    /// Which indent marker is under a point on the ruler. The first-line
+    /// marker sits on top and the hanging one underneath, as Word has them,
+    /// so the half of the ruler the click lands in tells them apart when they
+    /// are at the same place.
+    fn indent_handle_at(&self, x: f32, y: f32) -> Option<u8> {
+        let (first, hang, right) = self.indent_marks()?;
+        let near = 7.0 * self.s;
+        let lower = y > self.ruler_rect.cy();
+        let order: [(f32, u8); 3] =
+            if lower { [(hang, 1), (right, 3), (first, 0)] } else { [(first, 0), (right, 3), (hang, 1)] };
+        let mut best: Option<(f32, u8)> = None;
+        for (pos, which) in order {
+            let d = (pos - x).abs();
+            if d <= near && best.map(|(bd, _)| d < bd).unwrap_or(true) {
+                best = Some((d, which));
+            }
+        }
+        best.map(|(_, w)| w)
+    }
+
+    /// Where the three markers sit on the ruler, in window pixels.
+    fn indent_marks(&self) -> Option<(f32, f32, f32)> {
+        let page = self.page_rects.first().map(|(_, r)| *r)?;
+        let z = self.zoom * self.s;
+        let pp = self.ed.current_para_props();
+        let (left_m, right_edge) = self.ed.page_margins(0);
+        let text_x = page.x + left_m as f32 * z;
+        let text_w = ((right_edge - left_m) as f32 * z).max(1.0);
+        let twip = |v: Option<i32>| v.unwrap_or(0) as f32 / 20.0 * z;
+        Some((text_x + twip(pp.ind_left) + twip(pp.ind_first), text_x + twip(pp.ind_left),
+              text_x + text_w - twip(pp.ind_right)))
+    }
+
+    /// Dragging a marker sets the paragraph's indent, to the nearest 1/16 inch.
+    fn drag_indent_to(&mut self, which: u8, x: f32) {
+        let Some(page) = self.page_rects.first().map(|(_, r)| *r) else { return };
+        let z = (self.zoom * self.s).max(0.01);
+        let (left_m, right_edge) = self.ed.page_margins(0);
+        let text_x = page.x + left_m as f32 * z;
+        let text_w = ((right_edge - left_m) as f32 * z).max(1.0);
+        let step = 72.0 / 16.0; // points
+        let snap = |pts: f32| ((pts / step).round() * step).max(0.0);
+        let pp = self.ed.current_para_props();
+        let left = pp.ind_left.unwrap_or(0) as f32 / 20.0;
+        match which {
+            0 => {
+                let first = snap((x - text_x) / z) - left;
+                let v = format!("{}", (first * 20.0).round() as i64);
+                self.ed.format_paras_attrs("w:ind", &[("w:firstLine", None), ("w:hanging", None)], "Indent");
+                let (name, val) = if first < 0.0 {
+                    ("w:hanging", format!("{}", (-first * 20.0).round() as i64))
+                } else {
+                    ("w:firstLine", v)
+                };
+                self.ed.format_paras_attrs("w:ind", &[(name, Some(&val))], "Indent");
+            }
+            1 => {
+                let v = format!("{}", (snap((x - text_x) / z) * 20.0).round() as i64);
+                self.ed.format_paras_attrs("w:ind", &[("w:left", Some(&v))], "Indent");
+            }
+            _ => {
+                let right = snap((text_x + text_w - x) / z);
+                let v = format!("{}", (right * 20.0).round() as i64);
+                self.ed.format_paras_attrs("w:ind", &[("w:right", Some(&v))], "Indent");
+            }
+        }
+        self.cache.clear();
     }
 
     /// The page the caret is on.
@@ -1289,6 +1492,14 @@ impl PageApp {
                 self.view_mode = mode;
                 self.cache.clear();
             }
+            "nav" => {
+                self.nav = !self.nav;
+                self.cache.clear();
+            }
+            "ruler" => {
+                self.ruler = !self.ruler;
+                self.cache.clear();
+            }
             "marks" => {
                 self.marks = !self.marks;
                 self.cache.clear();
@@ -1327,6 +1538,8 @@ impl PageApp {
             italic: self.ed.toggle_state("w:i"),
             underline: self.ed.toggle_state("w:u"),
             marks: self.marks,
+            nav: self.nav,
+            ruler: self.ruler,
             track: self.ed.tracking(),
             painter: self.painter,
             view_mode: self.view_mode,
@@ -1345,6 +1558,8 @@ pub struct State {
     pub italic: bool,
     pub underline: bool,
     pub marks: bool,
+    pub nav: bool,
+    pub ruler: bool,
     pub track: bool,
     pub painter: bool,
     pub view_mode: u8,
@@ -1369,6 +1584,8 @@ impl CommandState for State {
             "italic" => self.italic,
             "underline" => self.underline,
             "marks" => self.marks,
+            "nav" => self.nav,
+            "ruler" => self.ruler,
             "track" => self.track,
             "painter" => self.painter,
             "view-print" => self.view_mode == 0,
@@ -1432,6 +1649,26 @@ impl PageApp {
     /// Whether the window is on its way out, for the tests.
     pub fn wants_exit_for_test(&self) -> bool {
         self.exit
+    }
+
+    /// The ruler's place, for the tests.
+    pub fn ruler_rect_now(&self) -> Rect {
+        self.ruler_rect
+    }
+
+    /// The headings the pane is showing, for the tests.
+    pub fn nav_rows_now(&self) -> Vec<Rect> {
+        self.nav_rows.iter().map(|(_, r)| *r).collect()
+    }
+
+    /// Whether a marker is being dragged, for the tests.
+    pub fn dragging_indent(&self) -> Option<u8> {
+        self.drag_indent
+    }
+
+    /// Where the indent markers sit, for the tests.
+    pub fn indent_marks_now(&self) -> Option<(f32, f32, f32)> {
+        self.indent_marks()
     }
 
     /// The part of the window the pages are drawn in.

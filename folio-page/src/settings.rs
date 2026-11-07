@@ -9,12 +9,14 @@ pub struct Settings {
     pub marks: bool,
     /// 0 Print Layout, 1 Draft, 2 Web Layout
     pub view_mode: u8,
+    pub nav: bool,
+    pub ruler: bool,
     pub recent: Vec<String>,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { zoom: 1.0, marks: false, view_mode: 0, recent: Vec::new() }
+        Settings { zoom: 1.0, marks: false, view_mode: 0, nav: false, ruler: false, recent: Vec::new() }
     }
 }
 
@@ -32,6 +34,8 @@ impl Settings {
                 "zoom" => s.zoom = v.trim().parse().unwrap_or(s.zoom).clamp(0.1, 4.0),
                 "marks" => s.marks = v.trim() == "1",
                 "view" => s.view_mode = v.trim().parse().unwrap_or(0).min(2),
+                "nav" => s.nav = v.trim() == "1",
+                "ruler" => s.ruler = v.trim() == "1",
                 "recent" => {
                     if !v.trim().is_empty() {
                         s.recent.push(v.trim().to_string());
@@ -49,6 +53,8 @@ impl Settings {
         out.push_str(&format!("zoom={}\n", self.zoom));
         out.push_str(&format!("marks={}\n", if self.marks { 1 } else { 0 }));
         out.push_str(&format!("view={}\n", self.view_mode));
+        out.push_str(&format!("nav={}\n", if self.nav { 1 } else { 0 }));
+        out.push_str(&format!("ruler={}\n", if self.ruler { 1 } else { 0 }));
         for r in self.recent.iter().take(10) {
             out.push_str(&format!("recent={r}\n"));
         }

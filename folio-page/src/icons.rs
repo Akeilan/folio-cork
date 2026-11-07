@@ -83,6 +83,8 @@ const ICONS: &[(&str, &str)] = &[
     ("accept-all", "<path d='M3 13l3 3 7-8M10 15l2 2 9-10' stroke-width='1.8'/>"),
     ("reject-all", "<path d='M4 7l8 8M12 7l-8 8M14 7l8 8M22 7l-8 8' stroke-width='1.6'/>"),
     ("find", "<circle cx='11' cy='11' r='6'/><path d='M15.5 15.5L21 21'/>"),
+    ("ruler", "<rect x='2' y='8' width='20' height='8'/><path d='M6 8v4M10 8v3M14 8v4M18 8v3' stroke-width='1.2'/>"),
+    ("nav", "<rect x='3' y='4' width='7' height='16' fill='var(--accent)' fill-opacity='.3'/><rect x='3' y='4' width='18' height='16'/><path d='M13 9h6M13 13h6M13 17h4' stroke-width='1.3'/>"),
     ("zoom", "<circle cx='11' cy='11' r='6'/><path d='M15.5 15.5L21 21M8 11h6'/>"),
     ("zoom-in", "<circle cx='11' cy='11' r='6'/><path d='M15.5 15.5L21 21M8 11h6M11 8v6'/>"),
     ("zoom-out", "<circle cx='11' cy='11' r='6'/><path d='M15.5 15.5L21 21M8 11h6'/>"),

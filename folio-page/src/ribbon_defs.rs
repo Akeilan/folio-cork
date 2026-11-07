@@ -193,7 +193,14 @@ pub fn tabs() -> Vec<Tab> {
                         I::small("zoom-100", "100%", "zoom-100").key("Ctrl+0"),
                     ],
                 ),
-                Group::new("Show", vec![I::large("marks", "Marks", "marks")]),
+                Group::new(
+                    "Show",
+                    vec![
+                        I::large("marks", "Marks", "marks"),
+                        I::small("ruler", "Ruler", "ruler"),
+                        I::small("nav", "Navigation", "nav"),
+                    ],
+                ),
                 Group::new(
                     "Views",
                     vec![

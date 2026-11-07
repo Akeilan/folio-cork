@@ -4,13 +4,34 @@
 use crate::eng;
 use crate::{Editor, PropEdit};
 
+/// A style's name as it is shown: "heading 1" is Word's spelling in the file
+/// for the style it calls "Heading 1".
+fn shown_name(name: &str) -> String {
+    if !name.chars().next().map(|c| c.is_ascii_lowercase()).unwrap_or(false) {
+        return name.to_string();
+    }
+    let mut out = String::with_capacity(name.len());
+    let mut start = true;
+    for c in name.chars() {
+        if start && c.is_ascii_lowercase() {
+            out.extend(c.to_uppercase());
+        } else {
+            out.push(c);
+        }
+        start = c == ' ';
+    }
+    out
+}
+
 impl Editor {
     /// Every font family the machine has, for the font box.
     pub fn families(&self) -> Vec<String> {
         self.fonts.families()
     }
 
-    /// The paragraph styles a document offers, the common ones first.
+    /// The paragraph styles a document offers, the common ones first and
+    /// named the way a person reads them: Word keeps "heading 1" in the file
+    /// and shows "Heading 1".
     pub fn style_names(&self) -> Vec<String> {
         let mut v: Vec<String> = self
             .doc
@@ -18,7 +39,7 @@ impl Editor {
             .styles
             .values()
             .filter(|s| s.kind == eng::styles::StyleKind::Paragraph)
-            .map(|s| s.name.clone())
+            .map(|s| shown_name(&s.name))
             .collect();
         v.sort_by_key(|n| {
             let order = ["Normal", "No Spacing", "Heading 1", "Heading 2", "Heading 3", "Title", "Subtitle", "Quote"];
@@ -85,7 +106,7 @@ impl Editor {
             .styles
             .styles
             .values()
-            .find(|s| s.name == name && s.kind == eng::styles::StyleKind::Paragraph)
+            .find(|s| s.name.eq_ignore_ascii_case(name) && s.kind == eng::styles::StyleKind::Paragraph)
             .map(|s| s.id.clone())
         else {
             return false;
@@ -101,6 +122,11 @@ impl Editor {
         }
         self.end_group();
         true
+    }
+
+    /// A page's left and right margins, in points.
+    pub fn page_margins(&self, page: usize) -> (f64, f64) {
+        self.layout.pages.get(page).map(|p| (p.left, p.width - p.right)).map(|(l, r)| (l, r)).unwrap_or((72.0, 540.0))
     }
 
     /// All the body text, paragraph by paragraph: what a reader would see.
