@@ -433,16 +433,18 @@ impl ReelApp {
     // ---------------------------------------------------------------- the preview
     fn want_frame(&mut self) {
         let t = self.playhead;
+        // the topmost clip that has a picture of its own; titles go over it
         let seen = render::visible_at(&self.p, t);
-        let Some((_, id)) = seen.last().copied() else {
+        let found = seen
+            .iter()
+            .rev()
+            .find(|(_, id)| self.p.clip(*id).map(|c| !c.kind.is_text()).unwrap_or(false))
+            .copied();
+        let Some((_, id)) = found else {
             self.frames.forget();
             return;
         };
         let Some(c) = self.p.clip(id) else { return };
-        if c.kind.is_text() {
-            self.frames.forget();
-            return;
-        }
         let Some(m) = self.p.media_by_uri(&c.media) else { return };
         let Some(path) = m.path() else { return };
         let at = render::media_time(c, t);

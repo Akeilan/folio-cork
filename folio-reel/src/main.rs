@@ -99,8 +99,9 @@ fn frame(out: &str, input: &str, at: f64) -> i32 {
     }
     let p = open_or_exit(input);
     let seen = render::visible_at(&p, at);
-    let Some((_, id)) = seen.last().copied() else {
-        eprintln!("There's nothing on the timeline at {at:.2}s.");
+    let found = seen.iter().rev().find(|(_, id)| p.clip(*id).map(|c| !c.kind.is_text()).unwrap_or(false)).copied();
+    let Some((_, id)) = found else {
+        eprintln!("There's nothing with a picture on the timeline at {at:.2}s.");
         return 1;
     };
     let Some(c) = p.clip(id) else { return 1 };
