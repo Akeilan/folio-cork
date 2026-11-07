@@ -3,6 +3,7 @@
 
 mod app;
 mod icons;
+mod mailmerge;
 mod ribbon_defs;
 mod settings;
 mod uitest;

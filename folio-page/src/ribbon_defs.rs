@@ -171,6 +171,31 @@ pub fn tabs() -> Vec<Tab> {
             ],
         ),
         Tab::new(
+            "mailings",
+            "Mailings",
+            "M",
+            vec![
+                Group::new(
+                    "Recipients",
+                    vec![I::large("recipients", "Select Recipients", "recipients")
+                        .desc("A comma- or tab-separated file: the first line names the columns.")],
+                ),
+                Group::new(
+                    "Write",
+                    vec![I::large("merge-field", "Insert Merge Field", "merge-field").menu()],
+                ),
+                Group::new(
+                    "Preview",
+                    vec![
+                        I::large("preview-merge", "Preview", "preview-merge"),
+                        I::small("merge-prev", "Previous", "merge-prev"),
+                        I::small("merge-next", "Next", "merge-next"),
+                    ],
+                ),
+                Group::new("Finish", vec![I::large("finish-merge", "Finish & Merge", "finish-merge")]),
+            ],
+        ),
+        Tab::new(
             "review",
             "Review",
             "R",
