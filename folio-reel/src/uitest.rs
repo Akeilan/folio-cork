@@ -275,6 +275,18 @@ impl UiTest {
             let pm = shot(app, r);
             let lit = pm.pixels().iter().filter(|px| px.red() > 200 && px.green() > 200 && px.blue() > 200).count();
             check(lit > 200, &format!("the words are on the preview ({lit} light pixels)"))?;
+            // a title over the film does not blank the film underneath it
+            app.seek(c.start + c.duration / 2.0);
+            for _ in 0..200 {
+                app.tick();
+                if app.frames.shot.is_some() {
+                    break;
+                }
+                folio_kit::platform::sleep(std::time::Duration::from_millis(10));
+            }
+            if media::have() {
+                check(app.frames.shot.is_some(), "the picture under the title is still being decoded")?;
+            }
             save_shot(app, r, "ui-title.png");
             Ok(())
         });
