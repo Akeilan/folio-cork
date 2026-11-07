@@ -214,6 +214,30 @@ impl Editor {
         ok
     }
 
+    /// How the document is protected, if it is: "readOnly",
+    /// "trackedChanges", "comments", "forms", or None.
+    pub fn protection(&mut self) -> Option<String> {
+        let xml = self.settings_xml("w:documentProtection")?;
+        if !xml.contains("w:enforcement=\"1\"") && !xml.contains("w:enforcement=\"true\"") {
+            return None;
+        }
+        let at = xml.find("w:edit=\"")? + 8;
+        let rest = &xml[at..];
+        let end = rest.find('"')?;
+        Some(rest[..end].to_string())
+    }
+
+    /// Protect the document, or with None let it be edited freely again.
+    pub fn set_protection(&mut self, how: Option<&str>) -> bool {
+        match how {
+            None => self.set_settings_xml("w:documentProtection", None),
+            Some(edit) => {
+                let xml = format!("<w:documentProtection w:edit=\"{edit}\" w:enforcement=\"1\"/>");
+                self.set_settings_xml("w:documentProtection", Some(&xml))
+            }
+        }
+    }
+
     /// Set or clear one run property across the selection.
     pub fn run_prop(&mut self, name: &str, attrs: Option<&[(&str, &str)]>, label: &str) {
         match attrs {

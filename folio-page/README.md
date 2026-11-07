@@ -29,24 +29,26 @@ page breaks the same way on every machine (deterministic maths throughout).
 
 Opening and saving .docx. Typing, selecting with the mouse and the keyboard,
 undo and redo. Fonts, size, bold, italic, underline, strikethrough, colour,
-highlight, case and clearing formatting, with the format painter. Alignment,
-bullets and numbering, indents, line spacing and paragraph styles. Page and
-column breaks, tables (rows, columns, merging, borders), pictures, headers and
-footers with page numbers. Margins, orientation and paper size. Find and
-replace. A contents list, fields, footnotes and endnotes. Comments, Track
-Changes, and accepting or rejecting changes. Print Layout, Draft and Web
-Layout, zoom, and the paragraph marks. Export PDF with the fonts embedded,
-searchable text and bookmarks. The last ten documents, and a question before
-closing a document with changes in it.
+highlight, case and clearing formatting, with the format painter and a Font
+dialog. Alignment, bullets and numbering, indents, line spacing and paragraph
+styles, with a Paragraph dialog and a ruler whose markers drag. Page and column
+breaks, tables (rows, columns, merging, borders), pictures, shapes, charts,
+symbols, headers and footers with page numbers. Margins, orientation, paper
+size and a Page Setup dialog. Find and replace. A contents list, fields,
+footnotes and endnotes, captions, cross-references, bookmarks, citations and a
+bibliography. Comments, Track Changes, accepting or rejecting changes, and
+protecting the document. Spelling, with a red wavy line and other spellings on
+a right-click. Mail merge from a comma- or tab-separated list, previewed
+recipient by recipient and written out one document each. The navigation pane,
+Print Layout, Draft, Web Layout and Read Mode, zoom, and the paragraph marks.
+Printing, and Export PDF with the fonts embedded, searchable text, bookmarks
+and the document's properties. The accessibility check. The last ten
+documents, and a question before closing a document with changes in it.
 
-22 window tests drive all of this as a person would, and pass in memory, in an
+36 window tests drive all of this as a person would, and pass in memory, in an
 X window and on Wayland.
 
 ## What is not here yet
 
-The Python version still ships, and still has what this one has not: the ruler
-and the navigation pane, mail merge, citations and the bibliography, captions
-and cross-reference dialogs, charts and drawings made in the document, the
-accessibility checker, read mode and read aloud, macros, document protection,
-and the dialogs behind many of the ribbon's launchers. This one takes over when
-it has them.
+Macros, and read aloud. The Python version still ships until the Product Owner
+says this one takes over.
