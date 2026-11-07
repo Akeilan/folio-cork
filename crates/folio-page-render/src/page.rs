@@ -686,17 +686,18 @@ impl Renderer {
                 // VML angles: 0 top to bottom... as Word writes them for the six styles
                 let a = f.angle.to_radians();
                 let (dx, dy) = (a.dsin() * w / 2.0, a.dcos() * h / 2.0);
-                cr.set_source(Source::Linear(
-                    (w / 2.0 - dx, h / 2.0 - dy),
-                    (w / 2.0 + dx, h / 2.0 + dy),
-                    vec![(0.0, f.c1, 1.0), (1.0, f.c2, 1.0)],
-                ));
+                // a source is in surface coordinates, so the ends go through the transform
+                let p0 = cr.user_to_surface(w / 2.0 - dx, h / 2.0 - dy);
+                let p1 = cr.user_to_surface(w / 2.0 + dx, h / 2.0 + dy);
+                cr.set_source(Source::Linear(p0, p1, vec![(0.0, f.c1, 1.0), (1.0, f.c2, 1.0)]));
                 cr.rectangle(0.0, 0.0, w, h);
                 cr.fill();
             }
             "gradientRadial" => {
                 let (cx, cy) = if f.focus.contains(".5") { (w / 2.0, h / 2.0) } else { (0.0, 0.0) };
-                cr.set_source(Source::Radial((cx, cy), w.max(h), vec![(0.0, f.c1, 1.0), (1.0, f.c2, 1.0)]));
+                let c = cr.user_to_surface(cx, cy);
+                let r = cr.user_to_surface_dist(w.max(h), 0.0).0.abs().max(0.01);
+                cr.set_source(Source::Radial(c, r, vec![(0.0, f.c1, 1.0), (1.0, f.c2, 1.0)]));
                 cr.rectangle(0.0, 0.0, w, h);
                 cr.fill();
             }
@@ -1212,7 +1213,8 @@ impl Renderer {
                     let edge = |c: &mut Cx, x0: f64, y0: f64, x1: f64, y1: f64, light: bool,
                                     pts: &[(f64, f64)]| {
                         let v = if light { 0xFFFFFF } else { 0x000000 };
-                        c.set_source(Source::Linear((x0, y0), (x1, y1),
+                        let (a, b) = (c.user_to_surface(x0, y0), c.user_to_surface(x1, y1));
+                        c.set_source(Source::Linear(a, b,
                             vec![(0.0, v, if light { 0.55 } else { 0.4 }), (1.0, v, 0.0)]));
                         c.move_to(pts[0].0, pts[0].1);
                         for p in &pts[1..] {

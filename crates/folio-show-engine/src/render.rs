@@ -1,0 +1,1293 @@
+//! Drawing slides: backgrounds, the master's and layout's own shapes, the slide's
+//! shapes with fills, outlines, pictures, tables, charts and text.
+
+use folio_math::Det;
+use crate::color::{Rgba, Scheme};
+use crate::model::{emu, path, Deck, EMU_PT};
+use crate::scene::{self, Context, Ph};
+use crate::text::{self, Env, Layout, Para, Seg};
+use folio_canvas::glyphs::FontRef;
+use folio_canvas::{Cx, Matrix, Source};
+use folio_kit::gfx::sk;
+use folio_page_engine::fonts::{Font, FontCache};
+use folio_page_render::fonts::Faces;
+use folio_page_engine::package::Package;
+use folio_page_engine::shapes::Shape;
+use folio_page_engine::xml::{NodeId, XmlDoc};
+use std::collections::HashMap;
+use std::f64::consts::PI;
+use std::sync::Arc;
+
+#[derive(Clone, Debug)]
+pub enum Fill {
+    None,
+    Solid(Rgba),
+    /// stops (pos 0..1, colour), angle in degrees, path kind ("circle", "rect", "shape") when radial
+    Grad(Vec<(f64, Rgba)>, f64, Option<String>),
+    /// image part, crop (l, t, r, b fractions), tiled
+    Pic(String, [f64; 4], bool, f64),
+    Patt(Rgba, Rgba, String),
+}
+
+#[derive(Clone, Debug)]
+pub struct Line {
+    pub w: f64,
+    pub fill: Fill,
+    pub dash: String,
+}
+
+/// A table cell laid out (table coordinates, points).
+#[derive(Clone, Debug)]
+pub struct CellBox {
+    pub index: usize,
+    pub row: usize,
+    pub col: usize,
+    pub node: NodeId,
+    pub x: f64,
+    pub y: f64,
+    pub w: f64,
+    pub h: f64,
+    pub lay: Layout,
+    pub bottom: f64,
+}
+
+/// The text style of a table cell: the presentation's defaults without bullets, bold and
+/// light text in a styled header row.
+pub fn cell_levels(levels: &[crate::scene::ParaP; 9], ctx: &Context, header: bool, first_col: bool, styled: bool) -> [crate::scene::ParaP; 9] {
+    let mut lv = levels.clone();
+    for l in lv.iter_mut() {
+        l.bullet = Some(crate::scene::Bullet::None);
+        l.mar_l = Some(0.0);
+        l.indent = Some(0.0);
+        if header || first_col {
+            l.def.b = Some(true);
+        }
+        if header {
+            l.def.color = Some(Rgba::new(ctx.scheme.named("lt1")));
+        } else if l.def.color.is_none() || styled {
+            l.def.color = Some(Rgba::new(ctx.scheme.named("dk1")));
+        }
+    }
+    lv
+}
+
+/// What the UI needs to know about each shape on a slide.
+#[derive(Clone, Debug)]
+pub struct ShapeInfo {
+    pub id: u32,
+    pub name: String,
+    pub kind: String,
+    pub x: f64,
+    pub y: f64,
+    pub w: f64,
+    pub h: f64,
+    pub rot: f64,
+    pub flip_h: bool,
+    pub flip_v: bool,
+    pub ph: Option<String>,
+    pub has_text: bool,
+    pub empty: bool,
+    pub group: u32,
+    pub geom: String,
+    pub descr: String,
+}
+
+/// How an animation shows a shape at one moment of a slide show.
+#[derive(Clone, Debug)]
+pub struct Anim {
+    pub alpha: f64,
+    pub dx: f64,
+    pub dy: f64,
+    pub sx: f64,
+    pub sy: f64,
+    pub rot: f64,
+    pub hidden: bool,
+    /// a wipe or shape reveal: direction ("up", "down", "left", "right", "in" circle,
+    /// "barnh" / "barnv" split) and how much shows (0..1)
+    pub clip: Option<(String, f64)>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct Opts {
+    pub anim: HashMap<u32, Anim>,
+    /// draw empty placeholders with their prompt and dashed edge
+    pub edit: bool,
+    /// a shape whose text is being edited is still drawn; this skips nothing
+    pub hide: Option<u32>,
+    /// 0 everything, 1 the slide's own shapes only (no background, master or layout),
+    /// 2 the background with the master's and layout's shapes only (for Morph)
+    pub layers: u8,
+}
+
+pub struct Painter {
+    pub fonts: FontCache,
+    faces: Faces,
+    pics: HashMap<String, Option<Pic>>,
+    pub max_px: u32,
+}
+
+/// A picture ready to draw.
+pub type Pic = std::sync::Arc<sk::Pixmap>;
+
+impl Default for Painter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// One shape found while drawing: where it is and how to draw it.
+struct Item<'a> {
+    part: &'a str,
+    dom: &'a XmlDoc,
+    node: NodeId,
+}
+
+pub fn prompt_for(kind: &str) -> &'static str {
+    match kind {
+        "title" | "ctrTitle" => "Click to add title",
+        "subTitle" => "Click to add subtitle",
+        "pic" => "Click icon to add picture",
+        "tbl" => "Click icon to add table",
+        "chart" => "Click icon to add chart",
+        "media" => "Click icon to add media",
+        "dt" | "ftr" | "sldNum" | "hdr" => "",
+        _ => "Click to add text",
+    }
+}
+
+impl Painter {
+    pub fn new() -> Painter {
+        Painter { fonts: FontCache::new(), faces: Faces::new(), pics: HashMap::new(), max_px: 2400 }
+    }
+
+    fn face(&mut self, f: &Font) -> Option<FontRef> {
+        self.faces.get(f, false, false)
+    }
+
+    pub fn picture(&mut self, pkg: &Package, part: &str) -> Option<Pic> {
+        if let Some(p) = self.pics.get(part) {
+            return p.clone();
+        }
+        let s = pkg.raw(part).and_then(|b| folio_page_render::pictures::decode(b, self.max_px));
+        self.pics.insert(part.to_string(), s.clone());
+        s
+    }
+
+    pub fn forget_pictures(&mut self) {
+        self.pics.clear();
+    }
+
+    /// Draw slide `part` with its top-left at the origin, in points (scale the context first).
+    pub fn draw(&mut self, deck: &mut Deck, part: &str, cr: &mut Cx, opts: &Opts) -> Vec<ShapeInfo> {
+        let ctx = scene::context(deck, part);
+        let (w, h) = deck.page_size(part);
+        let num = deck.slides.iter().position(|s| s == part).map(|i| i + 1).unwrap_or(0);
+        let env = Env { slide_num: num, date: today_text(), font_scale: 1.0, spc_reduction: 0.0 };
+        let mut parts: Vec<(String, XmlDoc)> = Vec::new();
+        for p in [ctx.master.clone(), ctx.layout.clone(), Some(part.to_string())].into_iter().flatten() {
+            if parts.iter().any(|(n, _)| *n == p) {
+                continue;
+            }
+            if let Ok(d) = deck.pkg.xml(&p) {
+                parts.push((p, d.clone()));
+            }
+        }
+        cr.save();
+        cr.rectangle(0.0, 0.0, w, h);
+        cr.clip();
+        // background: the slide's, the layout's or the master's
+        if opts.layers != 1 {
+            cr.set_source_rgb(1.0, 1.0, 1.0);
+            cr.paint();
+        }
+        for (p, dom) in parts.iter().rev() {
+            if opts.layers == 1 {
+                break;
+            }
+            if let Some(bg) = path(dom, dom.root, &["p:cSld", "p:bg"]) {
+                let fill = self.background(deck, &ctx, p, dom, bg);
+                cr.rectangle(0.0, 0.0, w, h);
+                self.paint_fill(deck, cr, &fill, w, h, (0.0, 0.0, w, h));
+                break;
+            }
+        }
+        // the master's and the layout's own shapes
+        let show = |dom: &XmlDoc| dom.attr(dom.root, "showMasterSp").map(|v| v != "0" && v != "false").unwrap_or(true);
+        let slide_shows = parts.iter().find(|(n, _)| n == part).map(|(_, d)| show(d)).unwrap_or(true);
+        let layout_shows = ctx.layout.as_ref().and_then(|l| parts.iter().find(|(n, _)| n == l)).map(|(_, d)| show(d)).unwrap_or(true);
+        let mut infos = Vec::new();
+        for (p, dom) in &parts {
+            let is_slide = p == part;
+            let is_master = p.contains("slideMasters/") && !part.contains("slideMasters/");
+            let is_layout = p.contains("slideLayouts/") && !part.contains("slideLayouts/");
+            if (is_master && (!slide_shows || !layout_shows)) || (is_layout && !slide_shows) {
+                continue;
+            }
+            if (opts.layers == 1 && !is_slide) || (opts.layers == 2 && is_slide) {
+                continue;
+            }
+            let Some(tree) = path(dom, dom.root, &["p:cSld", "p:spTree"]) else { continue };
+            for n in kids(dom, tree) {
+                if !is_slide && scene::ph_of(dom, n).is_some() {
+                    continue;
+                }
+                let item = Item { part: p, dom, node: n };
+                let anim = if is_slide { opts.anim.get(&scene::shape_id(dom, n).0).cloned() } else { None };
+                if let Some(a) = &anim {
+                    if a.hidden || a.alpha <= 0.0 {
+                        continue;
+                    }
+                    let (x, y, w, h, ..) = scene::shape_box(deck, &ctx, p, n);
+                    let (cx, cy) = (x + w / 2.0, y + h / 2.0);
+                    cr.save();
+                    cr.push_group();
+                    cr.translate(a.dx + cx, a.dy + cy);
+                    cr.rotate(a.rot.to_radians());
+                    cr.scale(a.sx.max(0.0001), a.sy.max(0.0001));
+                    cr.translate(-cx, -cy);
+                    self.draw_item(deck, &ctx, cr, &item, &env, opts, 0, false);
+                    cr.pop_group_to_source();
+                    if let Some((dir, f)) = &a.clip {
+                        let f = f.clamp(0.0, 1.0);
+                        let (bx, by) = (x + a.dx, y + a.dy);
+                        match dir.as_str() {
+                            "up" => cr.rectangle(bx - 2.0, by + h * (1.0 - f), w + 4.0, h * f + 2.0),
+                            "left" => cr.rectangle(bx + w * (1.0 - f), by - 2.0, w * f + 2.0, h + 4.0),
+                            "right" => cr.rectangle(bx - 2.0, by - 2.0, w * f + 2.0, h + 4.0),
+                            "barnh" => cr.rectangle(bx - 2.0, by + h / 2.0 * (1.0 - f), w + 4.0, h * f),
+                            "barnv" => cr.rectangle(bx + w / 2.0 * (1.0 - f), by - 2.0, w * f, h + 4.0),
+                            "in" => {
+                                let r = (w * w + h * h).sqrt() / 2.0 * f;
+                                cr.arc(bx + w / 2.0, by + h / 2.0, r.max(0.01), 0.0, 2.0 * PI);
+                            }
+                            _ => cr.rectangle(bx - 2.0, by - 2.0, w + 4.0, h * f + 2.0),
+                        }
+                        cr.clip();
+                    }
+                    cr.paint_with_alpha(a.alpha.min(1.0));
+                    cr.restore();
+                    continue;
+                }
+                let info = self.draw_item(deck, &ctx, cr, &item, &env, opts, 0, is_slide);
+                // a notes page's slide image
+                if is_slide && scene::ph_of(dom, n).map(|p| p.kind == "sldImg").unwrap_or(false) {
+                    let slide = if part.contains("notesSlide") { deck.pkg.related(part, "/slide") } else { deck.slides.first().cloned() };
+                    if let Some(sl) = slide {
+                        if sl != part && !sl.contains("notes") {
+                            let (x, y, bw, bh, ..) = scene::shape_box(deck, &ctx, p, n);
+                            let (sw, sh) = (deck.cx / EMU_PT, deck.cy / EMU_PT);
+                            let k = (bw / sw).min(bh / sh);
+                            cr.save();
+                            cr.translate(x + (bw - sw * k) / 2.0, y + (bh - sh * k) / 2.0);
+                            cr.scale(k, k);
+                            let sub = Opts { edit: false, hide: None, ..Default::default() };
+                            self.draw(deck, &sl, cr, &sub);
+                            cr.restore();
+                        }
+                    }
+                }
+                if is_slide {
+                    infos.extend(info);
+                }
+            }
+        }
+        cr.restore();
+        infos
+    }
+
+    fn background(&mut self, deck: &mut Deck, ctx: &Context, part: &str, dom: &XmlDoc, bg: NodeId) -> Fill {
+        if let Some(pr) = dom.child(bg, "p:bgPr") {
+            return fill_of(deck, &ctx.scheme, part, dom, pr, None).unwrap_or(Fill::Solid(Rgba::new(0xFFFFFF)));
+        }
+        if let Some(r) = dom.child(bg, "p:bgRef") {
+            let ph = ctx.scheme.color_in(dom, r, None);
+            let idx = emu(dom, r, "idx").unwrap_or(0.0) as usize;
+            if idx >= 1001 {
+                if let Some(f) = theme_style(deck, ctx, "a:bgFillStyleLst", idx - 1000, ph) {
+                    return f;
+                }
+            } else if idx > 0 {
+                if let Some(f) = theme_style(deck, ctx, "a:fillStyleLst", idx, ph) {
+                    return f;
+                }
+            }
+            return ph.map(Fill::Solid).unwrap_or(Fill::Solid(Rgba::new(0xFFFFFF)));
+        }
+        Fill::Solid(Rgba::new(0xFFFFFF))
+    }
+
+    /// Fill the current path with `fill`; `bbox` is the shape's box for gradients and pictures.
+    fn paint_fill(&mut self, deck: &mut Deck, cr: &mut Cx, fill: &Fill, w: f64, h: f64, bbox: (f64, f64, f64, f64)) {
+        let (bx, by, bw, bh) = bbox;
+        match fill {
+            Fill::None => {
+                cr.new_path();
+            }
+            Fill::Solid(c) => {
+                c.set(cr);
+                cr.fill();
+            }
+            Fill::Patt(fg, bg, prst) => {
+                if let Some(tile) = pattern_tile(fg, bg, prst, bw.max(1.0), bh.max(1.0)) {
+                    cr.set_source_pixmap(tile, bx, by, bw, bh);
+                } else {
+                    let mix = |a: f64, b: f64| (a * 0.5 + b * 0.5).clamp(0.0, 1.0);
+                    cr.set_source_rgba(mix(fg.r(), bg.r()), mix(fg.g(), bg.g()), mix(fg.b(), bg.b()), (fg.a + bg.a) / 2.0);
+                }
+                cr.fill();
+            }
+            Fill::Grad(stops, ang, kind) => {
+                let marks: Vec<(f32, u32, f64)> = stops.iter().map(|(pos, c)| (*pos as f32, c.rgb, c.a)).collect();
+                // the canvas takes a source in surface coordinates
+                match kind {
+                    Some(_) => {
+                        let r = (bw * bw + bh * bh).sqrt() / 2.0;
+                        let c = cr.user_to_surface(bx + bw / 2.0, by + bh / 2.0);
+                        let rr = cr.user_to_surface_dist(r, 0.0).0.abs().max(0.01);
+                        cr.set_source(Source::Radial(c, rr, marks));
+                    }
+                    None => {
+                        let a = ang.to_radians();
+                        let (dx, dy) = (a.dcos(), a.dsin());
+                        let half = (bw * dx.abs() + bh * dy.abs()) / 2.0;
+                        let (cx, cy) = (bx + bw / 2.0, by + bh / 2.0);
+                        let p0 = cr.user_to_surface(cx - dx * half, cy - dy * half);
+                        let p1 = cr.user_to_surface(cx + dx * half, cy + dy * half);
+                        cr.set_source(Source::Linear(p0, p1, marks));
+                    }
+                }
+                cr.fill();
+            }
+            Fill::Pic(name, crop, tile, alpha) => {
+                let Some(img) = self.picture(&deck.pkg, name) else {
+                    cr.set_source_rgb(0.85, 0.85, 0.85);
+                    cr.fill();
+                    return;
+                };
+                cr.save();
+                cr.clip();
+                let (iw, ih) = (img.width() as f64, img.height() as f64);
+                if *tile {
+                    cr.set_source_pixmap(img.clone(), bx, by, iw, ih);
+                } else {
+                    let (l, t, r, b) = (crop[0], crop[1], crop[2], crop[3]);
+                    let sw = iw * (1.0 - l - r);
+                    let shh = ih * (1.0 - t - b);
+                    cr.translate(bx, by);
+                    cr.scale(bw / sw.max(1e-6), bh / shh.max(1e-6));
+                    cr.translate(-iw * l, -ih * t);
+                    cr.set_source_pixmap(img.clone(), 0.0, 0.0, iw, ih);
+                }
+                cr.paint_with_alpha(*alpha);
+                cr.restore();
+                cr.new_path();
+            }
+        }
+        let _ = (w, h);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn draw_item(&mut self, deck: &mut Deck, ctx: &Context, cr: &mut Cx, it: &Item, env: &Env, opts: &Opts,
+                 group: u32, collect: bool) -> Vec<ShapeInfo> {
+        let dom = it.dom;
+        let n = it.node;
+        if scene::hidden(dom, n) {
+            return Vec::new();
+        }
+        let name = dom.name(n).to_string();
+        let mut out = Vec::new();
+        let (x, y, w, h, rot, fh, fv) = scene::shape_box(deck, ctx, it.part, n);
+        let (id, sname) = scene::shape_id(dom, n);
+        let ph = scene::ph_of(dom, n);
+        cr.save();
+        cr.translate(x + w / 2.0, y + h / 2.0);
+        cr.rotate(rot.to_radians());
+        let mut geom = String::new();
+        match name.as_str() {
+            "p:grpSp" => {
+                cr.translate(-w / 2.0, -h / 2.0);
+                if fh {
+                    cr.translate(w, 0.0);
+                    cr.scale(-1.0, 1.0);
+                }
+                if fv {
+                    cr.translate(0.0, h);
+                    cr.scale(1.0, -1.0);
+                }
+                if let Some(xf) = path(dom, n, &["p:grpSpPr", "a:xfrm"]) {
+                    let ch_off = dom.child(xf, "a:chOff");
+                    let ch_ext = dom.child(xf, "a:chExt");
+                    let cx = ch_off.and_then(|c| emu(dom, c, "x")).unwrap_or(0.0) / EMU_PT;
+                    let cy = ch_off.and_then(|c| emu(dom, c, "y")).unwrap_or(0.0) / EMU_PT;
+                    let cw = ch_ext.and_then(|c| emu(dom, c, "cx")).unwrap_or(w * EMU_PT) / EMU_PT;
+                    let chh = ch_ext.and_then(|c| emu(dom, c, "cy")).unwrap_or(h * EMU_PT) / EMU_PT;
+                    if cw > 0.0 && chh > 0.0 {
+                        cr.scale(w / cw, h / chh);
+                    }
+                    cr.translate(-cx, -cy);
+                }
+                for c in kids(dom, n) {
+                    let sub = Item { part: it.part, dom, node: c };
+                    self.draw_item(deck, ctx, cr, &sub, env, opts, id, false);
+                }
+            }
+            "p:pic" => {
+                cr.translate(-w / 2.0, -h / 2.0);
+                let sppr = dom.child(n, "p:spPr");
+                let mut sh = sppr.map(|s| Shape::parse_sppr(dom, s, &HashMap::new())).unwrap_or_else(rect_shape);
+                geom = sh.geom.clone();
+                if let Some(bf) = dom.child(n, "p:blipFill") {
+                    if let Some(f) = blip_fill(deck, it.part, dom, bf) {
+                        cr.save();
+                        if fh {
+                            cr.translate(w, 0.0);
+                            cr.scale(-1.0, 1.0);
+                        }
+                        if fv {
+                            cr.translate(0.0, h);
+                            cr.scale(1.0, -1.0);
+                        }
+                        folio_page_render::shapes::outline(cr, &sh, w, h);
+                        self.paint_fill(deck, cr, &f, w, h, (0.0, 0.0, w, h));
+                        cr.restore();
+                    }
+                }
+                self.outline(deck, ctx, cr, it, &mut sh, w, h);
+            }
+            "p:graphicFrame" => {
+                cr.translate(-w / 2.0, -h / 2.0);
+                let gd = path(dom, n, &["a:graphic", "a:graphicData"]);
+                let uri = gd.and_then(|g| dom.attr(g, "uri")).unwrap_or("");
+                if uri.ends_with("/table") {
+                    if let Some(tbl) = gd.and_then(|g| dom.child(g, "a:tbl")) {
+                        self.draw_table(deck, ctx, cr, it, tbl, env);
+                    }
+                    geom = "table".into();
+                } else if uri.ends_with("/chart") {
+                    let rid = gd.and_then(|g| dom.child(g, "c:chart")).and_then(|c| dom.attr(c, "r:id")).unwrap_or("").to_string();
+                    if let Some(target) = deck.pkg.rel_target(it.part, &rid).map(|t| Package::resolve(it.part, &t)) {
+                        if let Some(b) = deck.pkg.raw(&target) {
+                            let bytes = Arc::new(b.to_vec());
+                            let theme = folio_page_engine::pictures::theme_array(&ctx.scheme.colors);
+                            folio_page_render::chart::draw(cr, &bytes, w, h, &theme, &ctx.minor);
+                        }
+                    }
+                    geom = "chart".into();
+                } else if uri.ends_with("/chartex") {
+                    let rid = gd.and_then(|g| dom.child(g, "cx:chart")).and_then(|c| dom.attr(c, "r:id")).unwrap_or("").to_string();
+                    if let Some(target) = deck.pkg.rel_target(it.part, &rid).map(|t| Package::resolve(it.part, &t)) {
+                        if let Some(b) = deck.pkg.raw(&target) {
+                            let bytes = Arc::new(b.to_vec());
+                            let theme = folio_page_engine::pictures::theme_array(&ctx.scheme.colors);
+                            folio_page_render::chart::draw_ex(cr, &bytes, w, h, &theme, &ctx.minor);
+                        }
+                    }
+                    geom = "chart".into();
+                } else if uri.ends_with("/diagram") {
+                    self.draw_diagram(deck, ctx, cr, it, w, h, env);
+                    geom = "smartart".into();
+                } else {
+                    cr.rectangle(0.0, 0.0, w, h);
+                    cr.set_source_rgba(0.5, 0.5, 0.5, 0.15);
+                    cr.fill();
+                }
+            }
+            _ => {
+                // p:sp, p:cxnSp
+                cr.translate(-w / 2.0, -h / 2.0);
+                let chain = scene::sppr_chain(deck, ctx, it.part, n);
+                let mut sh = rect_shape();
+                let mut docs: Vec<(String, XmlDoc)> = Vec::new();
+                for (p, node) in &chain {
+                    let d = if p == it.part { dom.clone() } else { deck.pkg.xml(p).map(|d| d.clone()).unwrap_or_else(|_| dom.clone()) };
+                    docs.push((p.clone(), d));
+                    let _ = node;
+                }
+                // geometry: the first spPr that names one
+                for ((_, node), (_, d)) in chain.iter().zip(docs.iter()) {
+                    if let Some(sp) = d.child(*node, "p:spPr") {
+                        if d.child(sp, "a:prstGeom").is_some() || d.child(sp, "a:custGeom").is_some() {
+                            sh = Shape::parse_sppr(d, sp, &HashMap::new());
+                            break;
+                        }
+                    }
+                }
+                geom = sh.geom.clone();
+                // an equation's picture (the fallback of math the renderer doesn't draw itself)
+                if let Some(fb) = dom.parent(n).filter(|&p| dom.name(p) == "mc:Fallback") {
+                    if dom.parent(fb).and_then(|ac| dom.child(ac, "mc:Choice")).map(|ch| {
+                        let mut found = false;
+                        fn walk(d: &XmlDoc, n: NodeId, f: &mut bool) {
+                            for c in d.elements(n) {
+                                if d.name(c) == "a14:m" {
+                                    *f = true;
+                                }
+                                walk(d, c, f);
+                            }
+                        }
+                        walk(dom, ch, &mut found);
+                        found
+                    }).unwrap_or(false) {
+                        geom = "equation".into();
+                    }
+                }
+                let fill = self.shape_fill(deck, ctx, &chain, &docs);
+                if !matches!(fill, Fill::None) {
+                    cr.save();
+                    if fh {
+                        cr.translate(w, 0.0);
+                        cr.scale(-1.0, 1.0);
+                    }
+                    if fv {
+                        cr.translate(0.0, h);
+                        cr.scale(1.0, -1.0);
+                    }
+                    if self.shadow(ctx, dom, n, cr, &sh, w, h) {}
+                    cr.new_path();
+                    if folio_page_render::shapes::outline(cr, &sh, w, h) {
+                        self.paint_fill(deck, cr, &fill, w, h, (0.0, 0.0, w, h));
+                    }
+                    cr.new_path();
+                    cr.restore();
+                }
+                cr.save();
+                if fh {
+                    cr.translate(w, 0.0);
+                    cr.scale(-1.0, 1.0);
+                }
+                if fv {
+                    cr.translate(0.0, h);
+                    cr.scale(1.0, -1.0);
+                }
+                self.outline(deck, ctx, cr, it, &mut sh, w, h);
+                cr.restore();
+                // text
+                // a master's or layout's placeholders show their edges while editing
+                if collect && ph.is_some() && opts.edit && !it.part.contains("slides/") {
+                    cr.save();
+                    cr.rectangle(0.0, 0.0, w, h);
+                    cr.set_source_rgb(0.6, 0.6, 0.6);
+                    cr.set_line_width(0.75);
+                    cr.set_dash(&[3.0, 2.0], 0.0);
+                    cr.stroke();
+                    cr.restore();
+                }
+                if let Some(tb) = dom.child(n, "p:txBody") {
+                    let lay = self.layout_text(deck, ctx, it.part, dom, n, tb, w, h, env);
+                    let empty = lay.paras.iter().all(|p| p.is_empty());
+                    if empty && ph.is_some() && opts.edit && it.part.contains("slides/") {
+                        self.draw_prompt(deck, ctx, cr, it, w, h, env);
+                    } else {
+                        self.draw_text(cr, &lay, w, h, &scene::body_props(deck, ctx, it.part, n), fv);
+                    }
+                } else if ph.is_some() && opts.edit && it.part.contains("slides/") {
+                    self.draw_prompt(deck, ctx, cr, it, w, h, env);
+                }
+            }
+        }
+        cr.restore();
+        if collect {
+            let has_text = dom.child(n, "p:txBody").is_some();
+            let empty = has_text && text::plain_text(dom, dom.child(n, "p:txBody").unwrap()).iter().all(|s| s.is_empty());
+            out.push(ShapeInfo {
+                id, name: sname, kind: name.trim_start_matches("p:").to_string(), x, y, w, h, rot, flip_h: fh, flip_v: fv,
+                ph: ph.map(|p| p.kind), has_text, empty: empty || (!has_text && scene::ph_of(dom, n).is_some()), group, geom,
+                descr: dom.elements(n).find(|&c| dom.name(c).starts_with("p:nv")).and_then(|nv| dom.child(nv, "p:cNvPr"))
+                    .and_then(|c| dom.attr(c, "descr")).unwrap_or("").to_string(),
+            });
+        }
+        out
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn shadow(&mut self, ctx: &Context, dom: &XmlDoc, n: NodeId, cr: &mut Cx, sh: &Shape, w: f64, h: f64) -> bool {
+        let Some(s) = path(dom, n, &["p:spPr", "a:effectLst", "a:outerShdw"]) else { return false };
+        let dist = emu(dom, s, "dist").unwrap_or(0.0) / EMU_PT;
+        let dir = emu(dom, s, "dir").unwrap_or(0.0) / 60000.0;
+        let c = ctx.scheme.color_in(dom, s, None).unwrap_or(Rgba { rgb: 0, a: 0.4 });
+        cr.save();
+        cr.translate(dist * dir.to_radians().dcos(), dist * dir.to_radians().dsin());
+        cr.new_path();
+        if folio_page_render::shapes::outline(cr, &sh, w, h) {
+            c.set(cr);
+            cr.fill();
+        }
+        cr.restore();
+        true
+    }
+
+    fn shape_fill(&mut self, deck: &mut Deck, ctx: &Context, chain: &[(String, NodeId)], docs: &[(String, XmlDoc)]) -> Fill {
+        for ((p, node), (_, d)) in chain.iter().zip(docs.iter()) {
+            if let Some(sp) = d.child(*node, "p:spPr") {
+                if let Some(f) = fill_of(deck, &ctx.scheme, p, d, sp, None) {
+                    return f;
+                }
+            }
+        }
+        // the shape style's fill
+        for ((_, node), (_, d)) in chain.iter().zip(docs.iter()) {
+            if let Some(fr) = path(d, *node, &["p:style", "a:fillRef"]) {
+                let ph = ctx.scheme.color_in(d, fr, None);
+                let idx = emu(d, fr, "idx").unwrap_or(0.0) as usize;
+                if idx == 0 {
+                    return Fill::None;
+                }
+                return theme_style(deck, ctx, if idx >= 1001 { "a:bgFillStyleLst" } else { "a:fillStyleLst" },
+                                   if idx >= 1001 { idx - 1000 } else { idx }, ph)
+                    .unwrap_or(ph.map(Fill::Solid).unwrap_or(Fill::None));
+            }
+        }
+        Fill::None
+    }
+
+    fn outline(&mut self, deck: &mut Deck, ctx: &Context, cr: &mut Cx, it: &Item, sh: &mut Shape, w: f64, h: f64) {
+        let chain = scene::sppr_chain(deck, ctx, it.part, it.node);
+        let mut line: Option<Option<Line>> = None;
+        let mut width: Option<f64> = None;
+        let mut dash: Option<String> = None;
+        for (p, node) in &chain {
+            let d = if p == it.part { it.dom.clone() } else { match deck.pkg.xml(p) { Ok(d) => d.clone(), Err(_) => continue } };
+            let sp = d.child(*node, "p:spPr").or_else(|| d.child(*node, "p:grpSpPr"));
+            if let Some(ln) = sp.and_then(|s| d.child(s, "a:ln")) {
+                if width.is_none() {
+                    width = emu(&d, ln, "w").map(|v| v / EMU_PT);
+                }
+                if dash.is_none() {
+                    dash = d.child(ln, "a:prstDash").and_then(|x| d.attr(x, "val")).map(|s| s.to_string());
+                }
+                if line.is_none() {
+                    if d.child(ln, "a:noFill").is_some() {
+                        line = Some(None);
+                    } else if let Some(f) = fill_of(deck, &ctx.scheme, p, &d, ln, None) {
+                        line = Some(Some(Line { w: 0.75, fill: f, dash: "solid".into() }));
+                    }
+                }
+            }
+            if line.is_none() {
+                if let Some(lr) = path(&d, *node, &["p:style", "a:lnRef"]) {
+                    let idx = emu(&d, lr, "idx").unwrap_or(0.0) as usize;
+                    let ph = ctx.scheme.color_in(&d, lr, None);
+                    if idx == 0 {
+                        line = Some(None);
+                    } else if let Some((tw, tf, td)) = theme_line(deck, ctx, idx, ph) {
+                        if width.is_none() {
+                            width = Some(tw);
+                        }
+                        if dash.is_none() {
+                            dash = Some(td);
+                        }
+                        line = Some(Some(Line { w: tw, fill: tf, dash: "solid".into() }));
+                    }
+                }
+            }
+        }
+        let Some(Some(l)) = line else { return };
+        let color = match l.fill {
+            Fill::Solid(c) => c,
+            Fill::Grad(ref s, _, _) => s.first().map(|x| x.1).unwrap_or(Rgba::new(0)),
+            _ => Rgba::new(0),
+        };
+        if color.a <= 0.0 {
+            return;
+        }
+        sh.fill = None;
+        sh.line = Some((width.unwrap_or(l.w).max(0.1), color.rgb, dash.unwrap_or(l.dash)));
+        cr.save();
+        cr.push_group();
+        folio_page_render::shapes::draw(cr, &sh, w, h);
+        cr.pop_group_to_source();
+        cr.paint_with_alpha(color.a);
+        cr.restore();
+    }
+
+    /// Lay out a shape's text box.
+    #[allow(clippy::too_many_arguments)]
+    pub fn layout_text(&mut self, deck: &mut Deck, ctx: &Context, part: &str, dom: &XmlDoc, sp: NodeId, tb: NodeId,
+                       w: f64, h: f64, env: &Env) -> Layout {
+        let levels = scene::text_levels(deck, ctx, part, sp);
+        let body = scene::body_props(deck, ctx, part, sp);
+        let mut env = env.clone();
+        if let Some((fs, red)) = body.norm_autofit {
+            env.font_scale = fs;
+            env.spc_reduction = red;
+        }
+        let paras = text::read_paras(dom, tb, &levels, &ctx.scheme, &env);
+        let c = ctx.clone();
+        text::layout(paras, &body, w, h, &mut self.fonts, &move |f: &str| c.font(f), &env)
+    }
+
+    fn draw_prompt(&mut self, deck: &mut Deck, ctx: &Context, cr: &mut Cx, it: &Item, w: f64, h: f64, env: &Env) {
+        let Some(ph) = scene::ph_of(it.dom, it.node) else { return };
+        // dashed edge
+        cr.save();
+        cr.rectangle(0.0, 0.0, w, h);
+        cr.set_source_rgb(0.6, 0.6, 0.6);
+        cr.set_line_width(0.75);
+        cr.set_dash(&[3.0, 2.0], 0.0);
+        cr.stroke();
+        cr.restore();
+        // the layout's prompt text, else PowerPoint's
+        let inh = scene::inherit(deck, ctx, it.part, &ph);
+        let mut prompt = String::new();
+        if let Some((l, ln)) = &inh.layout {
+            if let Ok(d) = deck.pkg.xml(l) {
+                // only a layout placeholder marked with a custom prompt shows its own text
+                let custom = d.elements(*ln).find(|&c| d.name(c).starts_with("p:nv"))
+                    .and_then(|nv| path(d, nv, &["p:nvPr", "p:ph"]))
+                    .and_then(|p| d.attr(p, "hasCustomPrompt")).map(|v| v == "1" || v == "true").unwrap_or(false);
+                if custom {
+                    if let Some(tb) = d.child(*ln, "p:txBody") {
+                        prompt = text::plain_text(d, tb).join("\n");
+                    }
+                }
+            }
+        }
+        if prompt.trim().is_empty() {
+            prompt = prompt_for(&ph.kind).to_string();
+        }
+        if prompt.is_empty() {
+            return;
+        }
+        let levels = scene::text_levels(deck, ctx, it.part, it.node);
+        let body = scene::body_props(deck, ctx, it.part, it.node);
+        let paras: Vec<Para> = prompt.split('\n').map(|t| {
+            let mut props = levels[0].clone();
+            if matches!(ph.kind.as_str(), "pic" | "tbl" | "chart" | "media") {
+                props.bullet = Some(scene::Bullet::None);
+            }
+            Para { node: None, level: 0, props: props.clone(), end: props.def.clone(),
+                   pieces: vec![text::Piece { text: t.to_string(), props: props.def.clone(), node: None, kind: text::PieceKind::Run }] }
+        }).collect();
+        let c = ctx.clone();
+        let lay = text::layout(paras, &body, w, h, &mut self.fonts, &move |f: &str| c.font(f), env);
+        self.draw_text(cr, &lay, w, h, &body, false);
+    }
+
+    /// Draw laid-out text in a w x h box (the context at the box's top-left).
+    pub fn draw_text(&mut self, cr: &mut Cx, lay: &Layout, w: f64, h: f64, body: &scene::BodyP, flip_v: bool) {
+        cr.save();
+        if flip_v {
+            cr.translate(w, h);
+            cr.rotate(PI);
+        }
+        match body.vert.as_str() {
+            "vert" | "eaVert" => {
+                cr.translate(w, 0.0);
+                cr.rotate(PI / 2.0);
+            }
+            "vert270" => {
+                cr.translate(0.0, h);
+                cr.rotate(-PI / 2.0);
+            }
+            _ => {}
+        }
+        if body.rot != 0.0 {
+            cr.translate(w / 2.0, h / 2.0);
+            cr.rotate(body.rot.to_radians());
+            cr.translate(-w / 2.0, -h / 2.0);
+        }
+        for l in &lay.lines {
+            if let Some(b) = &l.bullet {
+                self.draw_seg(cr, b, lay.x, lay.y + l.baseline);
+            }
+            for s in &l.segs {
+                if let Some(hc) = s.highlight {
+                    hc.set(cr);
+                    cr.rectangle(lay.x + s.x0, lay.y + l.top, s.x1 - s.x0, l.height);
+                    cr.fill();
+                }
+                self.draw_seg(cr, s, lay.x, lay.y + l.baseline);
+            }
+        }
+        cr.restore();
+    }
+
+    fn draw_seg(&mut self, cr: &mut Cx, s: &Seg, x0: f64, base: f64) {
+        if s.no_fill {
+            return;
+        }
+        let y = base - s.rise;
+        let run: Vec<(u16, f64, f64)> = s.glyphs.iter().map(|g| (g.0 as u16, x0 + g.1, y - g.2)).collect();
+        let Some(face) = self.face(&s.font) else { return };
+        cr.save();
+        let size = s.size;
+        // a font without an italic of its own is slanted by hand, as cairo's font matrix did
+        if s.italic && s.font.synth_italic {
+            cr.translate(0.0, y);
+            cr.transform(Matrix::new(1.0, 0.0, -0.2, 1.0, 0.0, 0.0));
+            cr.translate(0.0, -y);
+        }
+        s.color.set(cr);
+        if s.bold && s.font.synth_bold {
+            cr.glyph_path(&face, size, &run);
+            cr.set_line_width(size / 28.0);
+            cr.fill_preserve();
+            cr.stroke();
+        } else {
+            cr.show_glyphs(&face, size, &run);
+        }
+        let upem = s.font.upem.max(1.0);
+        if s.underline {
+            let pos = -s.font.underline_pos / upem * size;
+            let th = (s.font.underline_thick / upem * size).max(size / 20.0);
+            cr.rectangle(x0 + s.x0, y + pos.max(size * 0.08), s.x1 - s.x0, th);
+            cr.fill();
+        }
+        if s.strike {
+            let pos = s.font.strike_pos / upem * size;
+            let th = (s.font.strike_thick / upem * size).max(size / 20.0);
+            let pos = if pos > 0.0 { pos } else { size * 0.3 };
+            cr.rectangle(x0 + s.x0, y - pos, s.x1 - s.x0, th);
+            cr.fill();
+        }
+        cr.restore();
+    }
+
+    /// A table's cells laid out: their boxes (table coordinates) and text.
+    pub fn table_cells(&mut self, deck: &mut Deck, ctx: &Context, dom: &XmlDoc, tbl: NodeId, env: &Env) -> Vec<CellBox> {
+        let cols: Vec<f64> = dom.child(tbl, "a:tblGrid").map(|g| dom.children_named(g, "a:gridCol")
+            .map(|c| emu(dom, c, "w").unwrap_or(0.0) / EMU_PT).collect()).unwrap_or_default();
+        let tpr = dom.child(tbl, "a:tblPr");
+        let flag = |k: &str| tpr.and_then(|t| dom.attr(t, k)).map(|v| v == "1" || v == "true").unwrap_or(false);
+        let (first_row, first_col, last_row) = (flag("firstRow"), flag("firstCol"), flag("lastRow"));
+        let styled = tpr.and_then(|t| dom.child(t, "a:tableStyleId")).is_some() || tpr.is_some_and(|t| dom.elements(t).next().is_none());
+        let rows: Vec<NodeId> = dom.children_named(tbl, "a:tr").collect();
+        let mut heights: Vec<f64> = rows.iter().map(|r| emu(dom, *r, "h").unwrap_or(0.0) / EMU_PT).collect();
+        let mut cells: Vec<CellBox> = Vec::new();
+        let levels = {
+            let mut lv: [crate::scene::ParaP; 9] = Default::default();
+            let pres = deck.pres.clone();
+            if let Ok(d) = deck.pkg.xml(&pres) {
+                if let Some(n) = d.child(d.root, "p:defaultTextStyle") {
+                    lv = crate::scene::read_levels(d, n, &ctx.scheme);
+                }
+            }
+            lv
+        };
+        let nrows = rows.len();
+        let mut index = 0usize;
+        for (ri, r) in rows.iter().enumerate() {
+            for (ci, c) in dom.children_named(*r, "a:tc").enumerate() {
+                let my_index = index;
+                index += 1;
+                if dom.attr(c, "hMerge").is_some() || dom.attr(c, "vMerge").is_some() {
+                    continue;
+                }
+                let span = emu(dom, c, "gridSpan").unwrap_or(1.0) as usize;
+                let cw: f64 = cols.iter().skip(ci).take(span.max(1)).sum();
+                let pr = dom.child(c, "a:tcPr");
+                let m = |k: &str, d: f64| pr.and_then(|p| emu(dom, p, k)).map(|v| v / EMU_PT).unwrap_or(d);
+                let mut body = crate::scene::default_body();
+                body.l = m("marL", 7.2);
+                body.r = m("marR", 7.2);
+                body.t = m("marT", 3.6);
+                body.b = m("marB", 3.6);
+                let lv = cell_levels(&levels, ctx, styled && ((first_row && ri == 0) || (last_row && ri + 1 == nrows)),
+                                     styled && first_col && ci == 0, styled);
+                let lay = match dom.child(c, "a:txBody") {
+                    Some(tb) => {
+                        let paras = text::read_paras(dom, tb, &lv, &ctx.scheme, env);
+                        let cc = ctx.clone();
+                        text::layout(paras, &body, cw, heights[ri], &mut self.fonts, &move |f: &str| cc.font(f), env)
+                    }
+                    None => {
+                        let paras = vec![Para { node: None, level: 0, props: lv[0].clone(), pieces: Vec::new(), end: lv[0].def.clone() }];
+                        let cc = ctx.clone();
+                        text::layout(paras, &body, cw, heights[ri], &mut self.fonts, &move |f: &str| cc.font(f), env)
+                    }
+                };
+                let need = lay.height + body.t + body.b;
+                let rspan = emu(dom, c, "rowSpan").unwrap_or(1.0) as usize;
+                if rspan <= 1 && need > heights[ri] {
+                    heights[ri] = need;
+                }
+                let x: f64 = cols.iter().take(ci).sum();
+                cells.push(CellBox { index: my_index, row: ri, col: ci, node: c, x, y: 0.0, w: cw, h: 0.0, lay, bottom: body.b });
+            }
+        }
+        let tops: Vec<f64> = heights.iter().scan(0.0, |acc, h| { let t = *acc; *acc += h; Some(t) }).collect();
+        for cb in cells.iter_mut() {
+            let rspan = emu(dom, cb.node, "rowSpan").unwrap_or(1.0) as usize;
+            cb.h = heights.iter().skip(cb.row).take(rspan.max(1)).sum();
+            cb.y = tops[cb.row];
+            let anchor = dom.child(cb.node, "a:tcPr").and_then(|p| dom.attr(p, "anchor")).unwrap_or("t");
+            let top = cb.lay.y;
+            cb.lay.y = match anchor {
+                "ctr" => (cb.h - cb.lay.height) / 2.0,
+                "b" => cb.h - cb.bottom - cb.lay.height,
+                _ => top,
+            };
+        }
+        cells
+    }
+
+    fn draw_table(&mut self, deck: &mut Deck, ctx: &Context, cr: &mut Cx, it: &Item, tbl: NodeId, env: &Env) {
+        let dom = it.dom;
+        let tpr = dom.child(tbl, "a:tblPr");
+        let flag = |k: &str| tpr.and_then(|t| dom.attr(t, k)).map(|v| v == "1" || v == "true").unwrap_or(false);
+        let (first_row, band_row, last_row) = (flag("firstRow"), flag("bandRow"), flag("lastRow"));
+        let styled = tpr.and_then(|t| dom.child(t, "a:tableStyleId")).is_some() || tpr.is_some_and(|t| dom.elements(t).next().is_none());
+        let accent = Rgba::new(ctx.scheme.named("accent1"));
+        let tint = |c: Rgba, t: f64| {
+            let f = |v: f64| v + (1.0 - v) * t;
+            Rgba { rgb: (((f(c.r()) * 255.0).round() as u32) << 16) | (((f(c.g()) * 255.0).round() as u32) << 8) | ((f(c.b()) * 255.0).round() as u32), a: 1.0 }
+        };
+        let nrows = dom.children_named(tbl, "a:tr").count();
+        let cells = self.table_cells(deck, ctx, dom, tbl, env);
+        for cb in &cells {
+            let (x, y, cw, ch, ri) = (cb.x, cb.y, cb.w, cb.h, cb.row);
+            let pr = dom.child(cb.node, "a:tcPr");
+            // the cell's fill, else the table style's
+            let own = pr.and_then(|p| fill_of(deck, &ctx.scheme, it.part, dom, p, None));
+            let fill = own.unwrap_or_else(|| {
+                if !styled {
+                    Fill::None
+                } else if (first_row && ri == 0) || (last_row && ri + 1 == nrows) {
+                    Fill::Solid(accent)
+                } else if band_row && (ri - usize::from(first_row)) % 2 == 0 {
+                    Fill::Solid(tint(accent, 0.6))
+                } else {
+                    Fill::Solid(tint(accent, 0.8))
+                }
+            });
+            cr.rectangle(x, y, cw, ch);
+            self.paint_fill(deck, cr, &fill, cw, ch, (x, y, cw, ch));
+            let mut any = false;
+            for (k, x0, y0, x1, y1) in [("a:lnL", x, y, x, y + ch), ("a:lnR", x + cw, y, x + cw, y + ch),
+                                         ("a:lnT", x, y, x + cw, y), ("a:lnB", x, y + ch, x + cw, y + ch)] {
+                if let Some(ln) = pr.and_then(|p| dom.child(p, k)) {
+                    any = true;
+                    if dom.child(ln, "a:noFill").is_some() {
+                        continue;
+                    }
+                    if let Some(Fill::Solid(col)) = fill_of(deck, &ctx.scheme, it.part, dom, ln, None) {
+                        col.set(cr);
+                        cr.set_line_width(emu(dom, ln, "w").unwrap_or(12700.0) / EMU_PT);
+                        cr.move_to(x0, y0);
+                        cr.line_to(x1, y1);
+                        cr.stroke();
+                    }
+                }
+            }
+            if !any && styled {
+                cr.set_source_rgb(1.0, 1.0, 1.0);
+                cr.set_line_width(1.0);
+                cr.rectangle(x, y, cw, ch);
+                cr.stroke();
+            } else if !any {
+                // an unstyled table shows faint gridlines while editing, as PowerPoint does
+                cr.set_source_rgba(0.6, 0.6, 0.6, 0.6);
+                cr.set_line_width(0.5);
+                cr.rectangle(x, y, cw, ch);
+                cr.stroke();
+            }
+            cr.save();
+            cr.translate(x, y);
+            self.draw_text(cr, &cb.lay, cw, ch, &crate::scene::default_body(), false);
+            cr.restore();
+        }
+    }
+
+    /// SmartArt: the drawing PowerPoint saved with it.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_diagram(&mut self, deck: &mut Deck, ctx: &Context, cr: &mut Cx, it: &Item, w: f64, h: f64, env: &Env) {
+        let rels = deck.pkg.rels(it.part);
+        let Some(r) = rels.iter().find(|r| r.kind.ends_with("/diagramDrawing")) else {
+            cr.rectangle(0.0, 0.0, w, h);
+            cr.set_source_rgba(0.5, 0.5, 0.5, 0.15);
+            cr.fill();
+            return;
+        };
+        let target = Package::resolve(it.part, &r.target);
+        let Ok(d) = deck.pkg.xml(&target) else { return };
+        let d = d.clone();
+        let Some(tree) = path(&d, d.root, &["dsp:spTree"]) else { return };
+        for sp in d.elements(tree).collect::<Vec<_>>() {
+            if d.name(sp) != "dsp:sp" {
+                continue;
+            }
+            let Some(sppr) = d.child(sp, "dsp:spPr") else { continue };
+            let Some(xf) = d.child(sppr, "a:xfrm") else { continue };
+            let off = d.child(xf, "a:off");
+            let ext = d.child(xf, "a:ext");
+            let (x, y) = (off.and_then(|o| emu(&d, o, "x")).unwrap_or(0.0) / EMU_PT, off.and_then(|o| emu(&d, o, "y")).unwrap_or(0.0) / EMU_PT);
+            let (sw, shh) = (ext.and_then(|o| emu(&d, o, "cx")).unwrap_or(0.0) / EMU_PT, ext.and_then(|o| emu(&d, o, "cy")).unwrap_or(0.0) / EMU_PT);
+            let rot = emu(&d, xf, "rot").unwrap_or(0.0) / 60000.0;
+            cr.save();
+            cr.translate(x + sw / 2.0, y + shh / 2.0);
+            cr.rotate(rot.to_radians());
+            cr.translate(-sw / 2.0, -shh / 2.0);
+            let mut sh = Shape::parse_sppr(&d, sppr, &HashMap::new());
+            let fill = fill_of(deck, &ctx.scheme, &target, &d, sppr, None).or_else(|| {
+                let fr = path(&d, sp, &["dsp:style", "a:fillRef"])?;
+                let ph = ctx.scheme.color_in(&d, fr, None);
+                let idx = emu(&d, fr, "idx").unwrap_or(0.0) as usize;
+                if idx == 0 { Some(Fill::None) } else { theme_style(deck, ctx, "a:fillStyleLst", idx, ph).or(ph.map(Fill::Solid)) }
+            }).unwrap_or(Fill::None);
+            if folio_page_render::shapes::outline(cr, &sh, sw, shh) {
+                self.paint_fill(deck, cr, &fill, sw, shh, (0.0, 0.0, sw, shh));
+            }
+            cr.new_path();
+            let line = d.child(sppr, "a:ln").and_then(|ln| if d.child(ln, "a:noFill").is_some() { None } else {
+                fill_of(deck, &ctx.scheme, &target, &d, ln, None).map(|f| (emu(&d, ln, "w").unwrap_or(12700.0) / EMU_PT, f))
+            }).or_else(|| {
+                let lr = path(&d, sp, &["dsp:style", "a:lnRef"])?;
+                let idx = emu(&d, lr, "idx").unwrap_or(0.0) as usize;
+                if idx == 0 { return None; }
+                let ph = ctx.scheme.color_in(&d, lr, None);
+                theme_line(deck, ctx, idx, ph).map(|(w, f, _)| (w, f))
+            });
+            if let Some((lw, Fill::Solid(c))) = line {
+                sh.fill = None;
+                sh.line = Some((lw, c.rgb, "solid".into()));
+                folio_page_render::shapes::draw(cr, &sh, sw, shh);
+            }
+            if let Some(tb) = d.child(sp, "dsp:txBody") {
+                let mut body = crate::scene::default_body();
+                if let Some(bp) = d.child(tb, "a:bodyPr") {
+                    crate::scene::apply_body(&mut body, &d, bp);
+                }
+                let mut lv: [crate::scene::ParaP; 9] = Default::default();
+                if let Some(fr) = path(&d, sp, &["dsp:style", "a:fontRef"]) {
+                    let c = ctx.scheme.color_in(&d, fr, None);
+                    for l in lv.iter_mut() {
+                        l.def.color = c;
+                    }
+                }
+                if let Some(ls) = d.child(tb, "a:lstStyle") {
+                    let more = crate::scene::read_levels(&d, ls, &ctx.scheme);
+                    crate::scene::merge_levels(&mut lv, &more);
+                }
+                let (tx, ty, tw, th) = match d.child(sp, "dsp:txXfrm") {
+                    Some(t) => {
+                        let o = d.child(t, "a:off");
+                        let e = d.child(t, "a:ext");
+                        (o.and_then(|o| emu(&d, o, "x")).unwrap_or(0.0) / EMU_PT - x, o.and_then(|o| emu(&d, o, "y")).unwrap_or(0.0) / EMU_PT - y,
+                         e.and_then(|o| emu(&d, o, "cx")).unwrap_or(0.0) / EMU_PT, e.and_then(|o| emu(&d, o, "cy")).unwrap_or(0.0) / EMU_PT)
+                    }
+                    None => (0.0, 0.0, sw, shh),
+                };
+                let paras = text::read_paras(&d, tb, &lv, &ctx.scheme, env);
+                let cc = ctx.clone();
+                let lay = text::layout(paras, &body, tw, th, &mut self.fonts, &move |f: &str| cc.font(f), env);
+                cr.save();
+                cr.translate(tx, ty);
+                self.draw_text(cr, &lay, tw, th, &body, false);
+                cr.restore();
+            }
+            cr.restore();
+        }
+    }
+}
+
+fn rect_shape() -> Shape {
+    Shape { geom: "rect".into(), fill: None, line: None, adj: Vec::new(), ends: (false, false), custom: Vec::new() }
+}
+
+/// The shapes of a tree in drawing order (alternate content: the fallback).
+pub fn kids(dom: &XmlDoc, tree: NodeId) -> Vec<NodeId> {
+    let mut out = Vec::new();
+    for c in dom.elements(tree) {
+        match dom.name(c) {
+            "p:sp" | "p:pic" | "p:graphicFrame" | "p:cxnSp" | "p:grpSp" => out.push(c),
+            "mc:AlternateContent" => {
+                let pick = dom.child(c, "mc:Choice").filter(|ch| {
+                    let req = dom.attr(*ch, "Requires").unwrap_or("");
+                    req.split_whitespace().all(|r| matches!(r, "p14" | "p15" | "a14" | "v" | "p159" | "cx1" | "cx2" | "cx3" | "cx4"))
+                        && !dom.elements(*ch).any(|e| dom.name(e) == "p:sp" && dom.child(e, "p:txBody")
+                            .is_some_and(|tb| has_math(dom, tb)))
+                }).or_else(|| dom.child(c, "mc:Fallback"));
+                if let Some(p) = pick {
+                    out.extend(kids(dom, p));
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+fn has_math(dom: &XmlDoc, n: NodeId) -> bool {
+    dom.elements(n).any(|c| dom.name(c) == "a14:m" || has_math(dom, c))
+}
+
+/// A blipFill: the picture part, its crop and tiling.
+pub fn blip_fill(deck: &mut Deck, part: &str, dom: &XmlDoc, bf: NodeId) -> Option<Fill> {
+    let blip = dom.child(bf, "a:blip")?;
+    let rid = dom.attr(blip, "r:embed").or_else(|| dom.attr(blip, "r:link"))?;
+    let target = Package::resolve(part, &deck.pkg.rel_target(part, rid)?);
+    let mut crop = [0.0; 4];
+    if let Some(sr) = dom.child(bf, "a:srcRect") {
+        for (i, k) in ["l", "t", "r", "b"].iter().enumerate() {
+            crop[i] = emu(dom, sr, k).unwrap_or(0.0) / 100000.0;
+        }
+    }
+    let alpha = dom.child(blip, "a:alphaModFix").and_then(|a| emu(dom, a, "amt")).map(|v| v / 100000.0).unwrap_or(1.0);
+    Some(Fill::Pic(target, crop, dom.child(bf, "a:tile").is_some(), alpha))
+}
+
+/// The fill named in a spPr-like element (None: not named here, inherit).
+pub fn fill_of(deck: &mut Deck, scheme: &Scheme, part: &str, dom: &XmlDoc, n: NodeId, ph: Option<Rgba>) -> Option<Fill> {
+    for c in dom.elements(n) {
+        match dom.name(c) {
+            "a:noFill" => return Some(Fill::None),
+            "a:solidFill" => return Some(scheme.color_in(dom, c, ph).map(Fill::Solid).unwrap_or(Fill::None)),
+            "a:gradFill" => {
+                let mut stops: Vec<(f64, Rgba)> = dom.child(c, "a:gsLst").map(|l| dom.children_named(l, "a:gs")
+                    .filter_map(|g| Some((emu(dom, g, "pos").unwrap_or(0.0) / 100000.0, scheme.color_in(dom, g, ph)?)))
+                    .collect()).unwrap_or_default();
+                stops.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+                let ang = dom.child(c, "a:lin").and_then(|l| emu(dom, l, "ang")).map(|v| v / 60000.0).unwrap_or(90.0);
+                let kind = dom.child(c, "a:path").map(|p| dom.attr(p, "path").unwrap_or("circle").to_string());
+                if stops.is_empty() {
+                    return Some(Fill::None);
+                }
+                return Some(Fill::Grad(stops, ang, kind));
+            }
+            "a:blipFill" => return blip_fill(deck, part, dom, c).or(Some(Fill::None)),
+            "a:pattFill" => {
+                let fg = dom.child(c, "a:fgClr").and_then(|f| scheme.color_in(dom, f, ph)).unwrap_or(Rgba::new(0));
+                let bg = dom.child(c, "a:bgClr").and_then(|f| scheme.color_in(dom, f, ph)).unwrap_or(Rgba::new(0xFFFFFF));
+                return Some(Fill::Patt(fg, bg, dom.attr(c, "prst").unwrap_or("pct50").to_string()));
+            }
+            "a:grpFill" => return Some(Fill::None),
+            _ => {}
+        }
+    }
+    None
+}
+
+/// A theme style list entry (fillStyleLst / bgFillStyleLst, 1-based) with phClr.
+fn theme_style(deck: &mut Deck, ctx: &Context, list: &str, idx: usize, ph: Option<Rgba>) -> Option<Fill> {
+    let t = ctx.theme.clone()?;
+    let dom = deck.pkg.xml(&t).ok()?.clone();
+    let l = path(&dom, dom.root, &["a:themeElements", "a:fmtScheme", list])?;
+    let entry = dom.elements(l).nth(idx.checked_sub(1)?)?;
+    // wrap: fill_of looks at children
+    let parent = dom.parent(entry)?;
+    let _ = parent;
+    let name = dom.name(entry).to_string();
+    match name.as_str() {
+        "a:noFill" => Some(Fill::None),
+        "a:solidFill" => ctx.scheme.color_in(&dom, entry, ph).map(Fill::Solid),
+        _ => {
+            // fill_of needs a container: find this entry among the list's children
+            let mut tmp = XmlDoc::with_root("x", &[]);
+            let imported = tmp.import_node(&dom, entry);
+            let root = tmp.root;
+            tmp.append(root, imported);
+            fill_of(deck, &ctx.scheme, &t, &tmp, root, ph)
+        }
+    }
+}
+
+fn theme_line(deck: &mut Deck, ctx: &Context, idx: usize, ph: Option<Rgba>) -> Option<(f64, Fill, String)> {
+    let t = ctx.theme.clone()?;
+    let dom = deck.pkg.xml(&t).ok()?.clone();
+    let l = path(&dom, dom.root, &["a:themeElements", "a:fmtScheme", "a:lnStyleLst"])?;
+    let ln = dom.elements(l).nth(idx.checked_sub(1)?)?;
+    let w = emu(&dom, ln, "w").unwrap_or(9525.0) / EMU_PT;
+    let f = fill_of(deck, &ctx.scheme, &t, &dom, ln, ph).unwrap_or(ph.map(Fill::Solid).unwrap_or(Fill::None));
+    let dash = dom.child(ln, "a:prstDash").and_then(|d| dom.attr(d, "val")).unwrap_or("solid").to_string();
+    Some((w, f, dash))
+}
+
+/// Unused helper kept for callers that only have a Ph.
+pub fn is_title(ph: &Option<Ph>) -> bool {
+    ph.as_ref().is_some_and(|p| p.kind == "title" || p.kind == "ctrTitle")
+}
+
+/// An 8x8 tile for a preset pattern (in points: one cell is one point).
+fn pattern_tile(fg: &Rgba, bg: &Rgba, prst: &str, w: f64, h: f64) -> Option<Pic> {
+    // rows of 8 bits, MSB at the left
+    let rows: [u8; 8] = match prst {
+        "horz" => [0xFF, 0, 0, 0, 0xFF, 0, 0, 0],
+        "ltHorz" => [0xFF, 0, 0, 0, 0, 0, 0, 0],
+        "narHorz" => [0xFF, 0, 0xFF, 0, 0xFF, 0, 0xFF, 0],
+        "dkHorz" => [0xFF, 0xFF, 0, 0, 0xFF, 0xFF, 0, 0],
+        "wdHorz" => [0xFF, 0xFF, 0xFF, 0, 0, 0, 0, 0],
+        "vert" => [0x88; 8],
+        "ltVert" => [0x80; 8],
+        "narVert" => [0xAA; 8],
+        "dkVert" => [0xCC; 8],
+        "wdVert" => [0xE0; 8],
+        "cross" | "smGrid" => [0xFF, 0x88, 0x88, 0x88, 0xFF, 0x88, 0x88, 0x88],
+        "lgGrid" => [0xFF, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80],
+        "dotGrid" => [0xAA, 0, 0x80, 0, 0x80, 0, 0x80, 0],
+        "dnDiag" | "ltDnDiag" => [0x80, 0x40, 0x20, 0x10, 0x08, 0x04, 0x02, 0x01],
+        "upDiag" | "ltUpDiag" => [0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80],
+        "dkDnDiag" | "wdDnDiag" => [0xC1, 0xE0, 0x70, 0x38, 0x1C, 0x0E, 0x07, 0x83],
+        "dkUpDiag" | "wdUpDiag" => [0x83, 0x07, 0x0E, 0x1C, 0x38, 0x70, 0xE0, 0xC1],
+        "diagCross" | "smCheck" => [0x81, 0x42, 0x24, 0x18, 0x18, 0x24, 0x42, 0x81],
+        "pct5" => [0x80, 0, 0, 0, 0x08, 0, 0, 0],
+        "pct10" => [0x80, 0, 0x08, 0, 0x80, 0, 0x08, 0],
+        "pct20" => [0x88, 0, 0x22, 0, 0x88, 0, 0x22, 0],
+        "pct25" => [0x88, 0x22, 0x88, 0x22, 0x88, 0x22, 0x88, 0x22],
+        "pct30" => [0xAA, 0x44, 0xAA, 0x11, 0xAA, 0x44, 0xAA, 0x11],
+        "pct40" => [0xAA, 0x55, 0xAA, 0x15, 0xAA, 0x55, 0xAA, 0x51],
+        "pct50" => [0xAA, 0x55, 0xAA, 0x55, 0xAA, 0x55, 0xAA, 0x55],
+        "pct60" => [0xEE, 0x55, 0xBB, 0x55, 0xEE, 0x55, 0xBB, 0x55],
+        "pct70" => [0x77, 0xFF, 0xDD, 0xFF, 0x77, 0xFF, 0xDD, 0xFF],
+        "pct75" => [0x77, 0xDD, 0x77, 0xDD, 0x77, 0xDD, 0x77, 0xDD],
+        "pct80" => [0xF7, 0xFF, 0x7F, 0xFF, 0xF7, 0xFF, 0x7F, 0xFF],
+        "pct90" => [0xFF, 0xF7, 0xFF, 0xFF, 0xFF, 0x7F, 0xFF, 0xFF],
+        "lgCheck" => [0xF0, 0xF0, 0xF0, 0xF0, 0x0F, 0x0F, 0x0F, 0x0F],
+        _ => return None,
+    };
+    // the 8x8 tile, repeated over the whole shape (the canvas has no repeating source)
+    let (pw, ph) = ((w.ceil() as u32).clamp(1, 4096), (h.ceil() as u32).clamp(1, 4096));
+    let mut pm = sk::Pixmap::new(pw, ph)?;
+    let px = |c: &Rgba| {
+        let a = c.a.clamp(0.0, 1.0);
+        let p = |v: f64| (v * a * 255.0).round() as u8;
+        [p(c.r()), p(c.g()), p(c.b()), (a * 255.0).round() as u8]
+    };
+    let (f, b) = (px(fg), px(bg));
+    let data = pm.pixels_mut();
+    for y in 0..ph {
+        let row = rows[(y % 8) as usize];
+        for x in 0..pw {
+            let on = row & (0x80 >> (x % 8)) != 0;
+            let v = if on { f } else { b };
+            data[(y * pw + x) as usize] = sk::PremultipliedColorU8::from_rgba(v[0], v[1], v[2], v[3])
+                .unwrap_or_else(|| sk::PremultipliedColorU8::from_rgba(0, 0, 0, 0).unwrap());
+        }
+    }
+    Some(std::sync::Arc::new(pm))
+}
+
+
+/// Today, as PowerPoint's default date placeholder writes it (M/D/YYYY).
+pub fn today_text() -> String {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let local = secs + folio_kit::platform::local_offset_secs(secs);
+    let (y, m, d) = civil_from_days(local.div_euclid(86400));
+    format!("{m}/{d}/{y}")
+}
+
+/// Days since 1970-01-01 as a year, month and day (Howard Hinnant's civil_from_days).
+fn civil_from_days(z: i64) -> (i64, i64, i64) {
+    let z = z + 719468;
+    let era = if z >= 0 { z } else { z - 146096 } / 146097;
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    (if m <= 2 { y + 1 } else { y }, m, d)
+}
+
+/// Now, as the OOXML parts stamp a time (2026-11-07T18:40:12.000).
+pub fn stamp_text() -> String {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+    let secs = now.as_secs() as i64;
+    let local = secs + folio_kit::platform::local_offset_secs(secs);
+    let (y, m, d) = civil_from_days(local.div_euclid(86400));
+    let t = local.rem_euclid(86400);
+    format!("{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}.{:03}", t / 3600, (t % 3600) / 60, t % 60, now.subsec_millis())
+}
