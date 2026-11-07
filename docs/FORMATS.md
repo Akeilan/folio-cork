@@ -28,6 +28,26 @@ All text is UTF-8. All binary integers are little-endian. JSON is written by `se
   - Ids are unsigned 64-bit integers.
   - Pictures are stored once, in `images`, as base64 of the original file bytes, keyed by a content hash.
 
+### What rides in the Visio parts as well
+
+So that another program sees them too, three things are written into the Visio shape sheets, not
+only into `folio/cork.json`:
+
+- **Shape data** (K4-02): a `<Section N='Property'>` per shape, one `Row` per property. The row's
+  `N` is a plain identifier made from the name; the name as typed is the row's `Label` cell.
+- **Hyperlinks** (K4-04): a `<Section N='Hyperlink'>` with one `Row N='Link'`. A file or a web
+  address is the `Address` cell; a page of this drawing is the `SubAddress` cell, holding the page
+  name. Cork reads both back, and a link never appears among the shape data rows.
+- **Linked spreadsheets** (K4-03): the files a drawing takes its shape data from are Cork's own
+  business, so they live in `folio/cork.json` under `links` as `{ "path", "key", "match_on" }`.
+  `match_on` empty means the shape's text is matched; otherwise it names a property.
+
+## Visio stencils: `.vssx` (read only)
+
+Insert > Import Stencil reads a stencil package (K4-06): `visio/masters/masters.xml` and one part
+per master. Each master becomes a named set of shapes in the Shapes pane, measured in page pixels
+with its top-left corner at the origin. Cork does not write `.vssx`.
+
 ## Diagrams inside other documents: PNG with a `foLK` chunk
 
 Page, Sheet and Show hold a Cork diagram as an ordinary PNG picture (K3-08). Office and other viewers just show the picture.
@@ -61,7 +81,7 @@ Each message is one frame:
 | File | Holds |
 |---|---|
 | `settings.json` | the Options pane and view choices: theme, author, grid, snapping, rulers, minimap, panes, recent files |
-| `my-shapes.json` | the user's saved shapes, as Cork shapes |
+| `my-shapes.json` | the user's saved shapes, as Cork shapes; each one may name the stencil it came from in `group`, which is how imported `.vssx` stencils appear in the pane (K4-06) |
 | `clipboard.json` | the last copied shapes, keyed to the picture placed on the clipboard (`hash`: 64-bit FNV-1a over every 7th byte of the picture's RGBA data, XOR the data length, plus `w` and `h`), so pasting that picture back gives editable shapes |
 | `clipboard.png` | the same copy as a diagram picture (above); Page, Sheet and Show paste it instead of the clipboard picture when the two match in size and pixels |
 

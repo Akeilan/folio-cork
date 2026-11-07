@@ -56,7 +56,7 @@ pub fn png(doc: &Document, pages: &[usize], path: &Path, text: &mut Text, images
 
 /// A picture of some shapes (clipboard, thumbnails), transparent around them.
 pub fn shapes_image(doc: &Document, shapes: &[Shape], imgs: &[(String, ImageData)], text: &mut Text, images: &mut Images, scale: f32) -> Option<sk::Pixmap> {
-    let mut d = Document { pages: vec![], images: doc.images.clone(), next_id: doc.next_id };
+    let mut d = Document { pages: vec![], images: doc.images.clone(), next_id: doc.next_id, ..Default::default() };
     for (k, v) in imgs {
         d.images.insert(k.clone(), v.clone());
     }

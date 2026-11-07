@@ -548,3 +548,266 @@ fn shape_data_comes_back_from_cork_s_own_copy() {
     let s = back.pages[0].shapes.iter().find(|s| s.id == a).unwrap();
     assert_eq!(s.prop("Cost"), "12.50");
 }
+
+// ---------------------------------------------------------------- hyperlinks (K4-04)
+#[test]
+fn a_shape_points_at_a_page_a_file_or_an_address() {
+    let mut e = ed();
+    let a = e.insert_kind_at("rect", 100.0, 100.0);
+    let b = e.insert_kind_at("rect", 300.0, 100.0);
+    e.sel = vec![a, b];
+    assert_eq!(e.set_link(LinkKind::Address, "https://example.org/plan"), 2);
+    assert_eq!(e.pg().get(a).unwrap().link(), Some((LinkKind::Address, "https://example.org/plan")));
+    // one shape at a time, and the link is read back from the selection
+    e.sel = vec![b];
+    e.set_link(LinkKind::File, "~/Documents/notes.pdf");
+    assert_eq!(e.link_of_selection(), Some((LinkKind::File, "~/Documents/notes.pdf".to_string())));
+    assert_eq!(e.clear_link(), 1);
+    assert_eq!(e.link_of_selection(), None);
+    // a link to another page takes you there
+    e.add_page(false);
+    e.rename_page("Details");
+    e.page = 0;
+    e.sel = vec![a];
+    e.set_link(LinkKind::Page, "Details");
+    assert!(e.goto_page_named("details"), "page names are matched whatever the case");
+    assert_eq!(e.pg().name, "Details");
+    assert!(!e.goto_page_named("Nowhere"));
+    // what a typed target plainly is
+    let pages = e.page_names();
+    assert_eq!(link_kind_of("Details", &pages), LinkKind::Page);
+    assert_eq!(link_kind_of("www.example.org", &pages), LinkKind::Address);
+    assert_eq!(link_kind_of("mailto:ron@example.org", &pages), LinkKind::Address);
+    assert_eq!(link_kind_of("/home/ron/plan.vsdx", &pages), LinkKind::File);
+}
+
+#[test]
+fn a_link_travels_in_the_vsdx_as_visio_writes_it() {
+    let mut e = ed();
+    let a = e.insert_kind_at("rect", 100.0, 100.0);
+    e.add_page(false);
+    e.rename_page("Details");
+    e.page = 0;
+    e.sel = vec![a];
+    e.set_link(LinkKind::Address, "https://example.org/plan");
+    let b = e.insert_kind_at("rect", 300.0, 100.0);
+    e.sel = vec![b];
+    e.set_link(LinkKind::Page, "Details");
+    let bytes = crate::vsdx::write(&e.doc).unwrap();
+
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes.clone())).unwrap();
+    let page = {
+        use std::io::Read;
+        let mut f = zip.by_name("visio/pages/page1.xml").unwrap();
+        let mut sx = String::new();
+        f.read_to_string(&mut sx).unwrap();
+        sx
+    };
+    assert!(page.contains("<Section N='Hyperlink'>"), "no Hyperlink section:\n{page}");
+    assert!(page.contains("N='Address' V='https://example.org/plan'"), "address missing:\n{page}");
+    assert!(page.contains("N='SubAddress' V='Details'"), "page link missing:\n{page}");
+    // and the link is not left lying about in the shape data rows
+    assert!(!page.contains("V='linkto'"), "link fields leaked into the shape data:\n{page}");
+
+    // read it back the way another program's file would be read
+    let stripped = {
+        let mut out = std::io::Cursor::new(Vec::new());
+        {
+            let mut w = zip::ZipWriter::new(&mut out);
+            for i in 0..zip.len() {
+                use std::io::{Read, Write};
+                let mut f = zip.by_index(i).unwrap();
+                let name = f.name().unwrap_or_default().to_string();
+                if name == "folio/cork.json" {
+                    continue;
+                }
+                let mut buf = vec![];
+                f.read_to_end(&mut buf).unwrap();
+                w.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
+                w.write_all(&buf).unwrap();
+            }
+            w.finish().unwrap();
+        }
+        out.into_inner()
+    };
+    let back = crate::vsdx::read(&stripped).unwrap();
+    let links: Vec<(LinkKind, String)> = back.pages[0].shapes.iter().filter_map(|s| s.link().map(|(k, t)| (k, t.to_string()))).collect();
+    assert!(links.contains(&(LinkKind::Address, "https://example.org/plan".to_string())), "links read back: {links:?}");
+    assert!(links.contains(&(LinkKind::Page, "Details".to_string())), "links read back: {links:?}");
+}
+
+// ---------------------------------------------------------------- find and replace (K4-05)
+#[test]
+fn find_walks_every_page_and_replace_changes_what_it_finds() {
+    let mut e = ed();
+    let a = e.insert_kind_at("rect", 100.0, 100.0);
+    e.pgm().get_mut(a).unwrap().text = "Draft plan".into();
+    let b = e.insert_kind_at("rect", 300.0, 100.0);
+    e.pgm().get_mut(b).unwrap().text = "draft again".into();
+    e.add_page(false);
+    let c = e.insert_kind_at("rect", 100.0, 100.0);
+    e.pgm().get_mut(c).unwrap().text = "Final DRAFT".into();
+    let d = e.insert_kind_at("rect", 300.0, 100.0);
+    e.pgm().get_mut(d).unwrap().text = "Redrafted".into();
+    e.page = 0;
+    e.sel.clear();
+
+    // case-blind, every page
+    assert_eq!(e.find_all("draft", false, false).len(), 4);
+    assert_eq!(e.find_all("draft", true, false).len(), 2, "with Match case only the two lower-case ones");
+    assert_eq!(e.find_all("draft", false, true).len(), 3, "whole words leaves Redrafted out");
+    assert_eq!(e.find_all("", false, false).len(), 0);
+
+    // Find Next walks them in order and wraps round
+    let first = e.find_next("draft", false, false, false).unwrap();
+    assert_eq!((first.page, first.shape), (0, a));
+    assert_eq!(e.sel, vec![a]);
+    let second = e.find_next("draft", false, false, false).unwrap();
+    assert_eq!((second.page, second.shape), (0, b));
+    let third = e.find_next("draft", false, false, false).unwrap();
+    assert_eq!(third.page, 1, "it carries on to the next page");
+    assert_eq!(e.page, 1, "and the window follows");
+    e.find_next("draft", false, false, false);
+    let wrapped = e.find_next("draft", false, false, false).unwrap();
+    assert_eq!((wrapped.page, wrapped.shape), (0, a), "and round again");
+    // backwards
+    let back = e.find_next("draft", false, false, true).unwrap();
+    assert_eq!(back.page, 1);
+    assert_eq!(e.find_next("nothing of the sort", false, false, false), None);
+
+    // Replace All across the drawing, keeping each word's own case alone
+    e.page = 0;
+    assert_eq!(e.replace_all("draft", "final", false, false, false), 4);
+    assert_eq!(e.pg().get(a).unwrap().text, "final plan");
+    assert_eq!(e.doc.pages[1].get(c).unwrap().text, "Final final");
+    assert_eq!(e.doc.pages[1].get(d).unwrap().text, "Refinaled");
+    assert!(e.can_undo());
+    e.undo();
+    assert_eq!(e.pg().get(a).unwrap().text, "Draft plan", "one undo puts the lot back");
+
+    // only the selection, and a locked shape is left alone
+    e.sel = vec![a];
+    assert_eq!(e.replace_all("Draft", "Final", true, false, true), 1);
+    assert_eq!(e.pg().get(a).unwrap().text, "Final plan");
+    assert_eq!(e.pg().get(b).unwrap().text, "draft again");
+    e.pgm().get_mut(b).unwrap().locked = true;
+    e.sel = vec![b];
+    assert_eq!(e.replace_all("draft", "nope", false, false, true), 0);
+    assert_eq!(e.pg().get(b).unwrap().text, "draft again");
+    // a replacement that changed nothing leaves no undo step of its own: one undo goes back
+    // past it, to before the replacement that did change something
+    e.undo();
+    assert_eq!(e.pg().get(a).unwrap().text, "Draft plan");
+}
+
+#[test]
+fn whole_words_and_case_are_matched_as_asked() {
+    let mut e = ed();
+    let a = e.insert_kind_at("rect", 100.0, 100.0);
+    e.pgm().get_mut(a).unwrap().text = "cat, cats and a cat_flap".into();
+    assert_eq!(e.replace_all("cat", "dog", false, true, false), 1, "only the word on its own");
+    assert_eq!(e.pg().get(a).unwrap().text, "dog, cats and a cat_flap");
+    e.pgm().get_mut(a).unwrap().text = "Straße und Straße".into();
+    assert_eq!(e.replace_all("straße", "Weg", false, false, false), 2, "a case-blind search works on other alphabets");
+    assert_eq!(e.pg().get(a).unwrap().text, "Weg und Weg");
+    // a letter that grows when it is lowered (Turkish I with a dot) must not shift the match
+    e.pgm().get_mut(a).unwrap().text = "\u{130}stanbul to Ankara, \u{130}stanbul again".into();
+    assert_eq!(e.replace_all("ankara", "Bursa", false, false, false), 1, "the word after it is found");
+    assert_eq!(e.pg().get(a).unwrap().text, "\u{130}stanbul to Bursa, \u{130}stanbul again");
+}
+
+// ---------------------------------------------------------------- link to a spreadsheet (K4-03)
+#[test]
+fn shape_data_comes_from_a_file_and_is_read_again_on_refresh() {
+    let dir = std::env::temp_dir().join(format!("cork-datalink-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let csv = dir.join("stock.csv");
+    std::fs::write(&csv, "Part,Owner,Cost\nA-120,Ron,12.50\nB-7,Mel,3.00\nC-9,Nobody,1.00\n").unwrap();
+
+    let mut e = ed();
+    let a = e.insert_kind_at("rect", 100.0, 100.0);
+    e.pgm().get_mut(a).unwrap().text = "A-120".into();
+    let b = e.insert_kind_at("rect", 300.0, 100.0);
+    e.pgm().get_mut(b).unwrap().text = "b-7\nspare".into();
+    let c = e.insert_kind_at("rect", 500.0, 100.0);
+    e.pgm().get_mut(c).unwrap().text = "Not in the file".into();
+
+    let rep = crate::datalink::link(&mut e, &csv, "Part", "").unwrap();
+    assert_eq!((rep.filled, rep.columns, rep.unmatched), (2, 2, 1), "two shapes filled, one row left over");
+    assert_eq!(e.pg().get(a).unwrap().prop("Owner"), "Ron");
+    assert_eq!(e.pg().get(a).unwrap().prop("Cost"), "12.50");
+    assert_eq!(e.pg().get(b).unwrap().prop("Owner"), "Mel", "the first line of the text is the key, whatever its case");
+    assert_eq!(e.pg().get(c).unwrap().props().len(), 0);
+    assert_eq!(e.pg().get(a).unwrap().prop("Part"), "", "the key column is not copied onto the shape");
+
+    // the link is remembered, and one undo puts the drawing back
+    assert_eq!(e.doc.links.len(), 1);
+    assert_eq!(e.doc.links[0].key, "Part");
+    e.undo();
+    assert_eq!(e.pg().get(a).unwrap().props().len(), 0);
+    crate::datalink::link(&mut e, &csv, "Part", "").unwrap();
+
+    // the file changes; Refresh brings the new values in
+    std::fs::write(&csv, "Part,Owner,Cost\nA-120,Mel,19.99\nB-7,Mel,3.00\n").unwrap();
+    let (rep, trouble) = crate::datalink::refresh(&mut e);
+    assert!(trouble.is_empty(), "{trouble:?}");
+    assert_eq!(rep.filled, 2);
+    assert_eq!(e.pg().get(a).unwrap().prop("Owner"), "Mel");
+    assert_eq!(e.pg().get(a).unwrap().prop("Cost"), "19.99");
+
+    // matching on a property instead of the text
+    let mut e2 = ed();
+    let s = e2.insert_kind_at("rect", 10.0, 10.0);
+    e2.sel = vec![s];
+    e2.set_prop("Part number", "B-7");
+    let rep = crate::datalink::link(&mut e2, &csv, "Part", "Part number").unwrap();
+    assert_eq!(rep.filled, 1);
+    assert_eq!(e2.pg().get(s).unwrap().prop("Owner"), "Mel");
+
+    // what the box offers, and what it says when the file doesn't fit
+    assert_eq!(crate::datalink::columns(&csv).unwrap(), vec!["Part", "Owner", "Cost"]);
+    assert!(crate::datalink::property_names(&e2).contains(&"Part number".to_string()));
+    assert!(crate::datalink::link(&mut e2, &csv, "Nothing", "").is_err());
+    std::fs::write(&csv, "Part\nA-120\n").unwrap();
+    assert!(crate::datalink::link(&mut e2, &csv, "Part", "").unwrap_err().contains("nothing but the key column"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_linked_file_is_kept_in_the_saved_drawing() {
+    let mut e = ed();
+    e.doc.links.push(DataLink { path: "/tmp/stock.csv".into(), key: "Part".into(), match_on: String::new() });
+    let bytes = crate::vsdx::write(&e.doc).unwrap();
+    let back = crate::vsdx::read(&bytes).unwrap();
+    assert_eq!(back.links, e.doc.links);
+}
+
+// ---------------------------------------------------------------- Visio stencils (K4-06)
+#[test]
+fn a_visio_stencil_is_read_into_shapes() {
+    let bytes = crate::uitest::sample_stencil();
+    let masters = crate::vsdx::read_stencil(&bytes).expect("stencil");
+    let names: Vec<&str> = masters.iter().map(|(n, _)| n.as_str()).collect();
+    assert_eq!(names, vec!["Server", "Firewall"]);
+    let (_, server) = &masters[0];
+    assert_eq!(server.len(), 1);
+    let s = &server[0];
+    // an inch is 96 pixels, and the shape sits at the top-left corner ready to be dropped
+    assert!((s.w - 96.0).abs() < 0.5 && (s.h - 144.0).abs() < 0.5, "size: {} x {}", s.w, s.h);
+    assert!(s.x.abs() < 0.5 && s.y.abs() < 0.5, "at {}, {}", s.x, s.y);
+    assert_eq!(s.text, "Server");
+    assert_eq!(s.style.fill, folio_kit::Color::hex(0x4472C4));
+    let (_, fw) = &masters[1];
+    assert!((fw[0].w - 192.0).abs() < 0.5);
+
+    // the shapes go into a drawing as they are
+    let mut e = ed();
+    e.paste_shapes(server, &[], Some((200.0, 150.0)), "Insert stencil shape");
+    let added = e.pg().shapes.last().unwrap();
+    assert!((added.w - 96.0).abs() < 0.5);
+    assert_eq!(added.text, "Server");
+
+    // and something that isn't a stencil says so rather than giving up in a heap
+    assert!(crate::vsdx::read_stencil(b"not a zip at all").is_err());
+    assert!(crate::vsdx::is_stencil_name("Network.vssx") && !crate::vsdx::is_stencil_name("plan.vsdx"));
+}

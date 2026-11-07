@@ -242,3 +242,20 @@ pub mod net {
             .unwrap_or_else(|_| "127.0.0.1".into())
     }
 }
+
+/// Open a web or mail address in whatever the desktop uses for it.
+pub fn open_address(url: &str) -> Result<(), String> {
+    use std::process::Command;
+    let url = url.trim();
+    if url.is_empty() {
+        return Err("No address.".into());
+    }
+    let r = if cfg!(target_os = "macos") {
+        Command::new("open").arg(url).spawn()
+    } else if cfg!(windows) {
+        Command::new("cmd").args(["/C", "start", ""]).arg(url).spawn()
+    } else {
+        Command::new("xdg-open").arg(url).spawn()
+    };
+    r.map(|_| ()).map_err(|_| "No web browser is set up on this computer.".to_string())
+}

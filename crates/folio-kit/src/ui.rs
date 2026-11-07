@@ -699,6 +699,12 @@ impl Dialog {
     pub fn checked(&self, id: &str) -> bool {
         self.value(id) == "true"
     }
+    /// Where a button sits, once the box has been painted (used by the window tests).
+    pub fn button_rect(&self, id: &str) -> Option<Rect> {
+        let i = self.buttons.iter().position(|(b, _)| b == id)?;
+        self.btn_rects.get(i).copied()
+    }
+
     /// Put words in a text field without typing them (used by the window tests).
     pub fn set_text_for_test(&mut self, id: &str, text: &str) {
         for f in self.fields.iter_mut() {
