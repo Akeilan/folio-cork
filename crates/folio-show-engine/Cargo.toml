@@ -1,0 +1,14 @@
+[package]
+name = "folio-show-engine"
+version = "0.3.0"
+edition = "2021"
+description = "Folio Show's presentation engine: the .pptx model, slide and text layout, drawing and editing"
+
+[dependencies]
+folio-canvas = { version = "0.1.0", path = "../folio-canvas" }
+folio-kit = { version = "0.3.0", path = "../folio-kit" }
+folio-math = { version = "0.3.0", path = "../folio-math" }
+folio-page-engine = { version = "0.1.0", path = "../folio-page-engine" }
+folio-page-render = { version = "0.1.0", path = "../folio-page-render" }
+unicode-linebreak = "0.1"
+unicode-segmentation = "1"

@@ -424,7 +424,11 @@ pub unsafe fn cairo_set_source_surface(cr: *mut cairo_t, s: *mut cairo_surface_t
 
 pub unsafe fn cairo_set_source(cr: *mut cairo_t, p: *mut cairo_pattern_t) {
     let pat = &*(p as *mut Pat);
-    cx(cr).set_source(Source::Linear(pat.a, pat.b, pat.stops.clone()));
+    // the pattern's points are in user coordinates; the canvas takes surface ones
+    let c = cx(cr);
+    let a = c.user_to_surface(pat.a.0, pat.a.1);
+    let b = c.user_to_surface(pat.b.0, pat.b.1);
+    c.set_source(Source::Linear(a, b, pat.stops.clone()));
 }
 
 // ---------------------------------------------------------------- text

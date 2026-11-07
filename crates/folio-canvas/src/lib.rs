@@ -343,6 +343,8 @@ pub trait Sink {
 /// A surface to draw on.
 pub struct Cx<'a> {
     pm: &'a mut sk::Pixmap,
+    /// transparent layers opened by `push_group`; drawing goes to the last one
+    groups: Vec<sk::Pixmap>,
     sink: Option<&'a mut dyn Sink>,
     st: State,
     stack: Vec<State>,
@@ -356,8 +358,8 @@ pub struct Cx<'a> {
 
 impl<'a> Cx<'a> {
     pub fn new(pm: &'a mut sk::Pixmap, glyphs: &'a mut Glyphs) -> Cx<'a> {
-        Cx { pm, sink: None, st: State::default(), stack: Vec::new(), path: Path::default(), start: None, glyphs,
-             scaled: HashMap::new() }
+        Cx { pm, groups: Vec::new(), sink: None, st: State::default(), stack: Vec::new(), path: Path::default(),
+             start: None, glyphs, scaled: HashMap::new() }
     }
 
     /// A surface that also writes down what it draws. The pixels are still
@@ -369,11 +371,50 @@ impl<'a> Cx<'a> {
     }
 
     pub fn width(&self) -> u32 {
-        self.pm.width()
+        self.target().width()
     }
 
     pub fn height(&self) -> u32 {
-        self.pm.height()
+        self.target().height()
+    }
+
+    /// Where drawing lands: the newest open group, else the surface itself.
+    fn target(&self) -> &sk::Pixmap {
+        self.groups.last().unwrap_or(&*self.pm)
+    }
+
+    fn target_mut(&mut self) -> &mut sk::Pixmap {
+        match self.groups.last_mut() {
+            Some(g) => g,
+            None => self.pm,
+        }
+    }
+
+    /// Start drawing on a transparent layer of the same size. The transform,
+    /// the clip and the source carry on; `pop_group_to_source` ends it.
+    pub fn push_group(&mut self) {
+        let (w, h) = (self.target().width(), self.target().height());
+        match sk::Pixmap::new(w, h) {
+            Some(pm) => self.groups.push(pm),
+            None => {}
+        }
+        self.save();
+    }
+
+    /// End the layer and make it the source, as cairo does: the usual next
+    /// call is `paint_with_alpha`, or a `fill` through a path.
+    pub fn pop_group_to_source(&mut self) {
+        self.restore();
+        let Some(g) = self.groups.pop() else { return };
+        // a source is in surface coordinates, and the layer is the whole surface
+        let (w, h) = (g.width() as f64, g.height() as f64);
+        self.st.src = Source::Image(Arc::new(g), (0.0, 0.0, w, h));
+    }
+
+    /// The layer on top, straight onto what is below it, at `alpha`.
+    pub fn pop_group_painted(&mut self, alpha: f64) {
+        self.pop_group_to_source();
+        self.paint_with_alpha(alpha);
     }
 
     pub fn save(&mut self) {
@@ -585,6 +626,10 @@ impl<'a> Cx<'a> {
         self.st.src = Source::Solid(c, a);
     }
 
+    /// What the next fill, stroke or paint draws with. A gradient's or a
+    /// picture's places are in SURFACE coordinates, not user ones: put user
+    /// coordinates through `user_to_surface` first (or use
+    /// `set_source_pixmap`, which does it for you).
     pub fn set_source(&mut self, s: Source) {
         self.st.src = s;
     }
@@ -659,7 +704,8 @@ impl<'a> Cx<'a> {
         let rule = if self.st.even_odd { sk::FillRule::EvenOdd } else { sk::FillRule::Winding };
         let src = self.st.src.clone();
         let paint = paint_of(&src, 1.0);
-        self.pm.fill_path(&path, &paint, rule, sk::Transform::identity(), self.st.clip.as_deref());
+        let clip = self.st.clip.clone();
+        self.target_mut().fill_path(&path, &paint, rule, sk::Transform::identity(), clip.as_deref());
     }
 
     pub fn stroke(&mut self) {
@@ -687,7 +733,8 @@ impl<'a> Cx<'a> {
         }
         let src = self.st.src.clone();
         let paint = paint_of(&src, 1.0);
-        self.pm.stroke_path(&path, &paint, &st, sk::Transform::identity(), self.st.clip.as_deref());
+        let clip = self.st.clip.clone();
+        self.target_mut().stroke_path(&path, &paint, &st, sk::Transform::identity(), clip.as_deref());
     }
 
     /// Fill everything inside the clip with the current source.
@@ -698,7 +745,7 @@ impl<'a> Cx<'a> {
     pub fn paint_with_alpha(&mut self, alpha: f64) {
         if self.sink.is_some() {
             // the whole of what the clip allows, in surface coordinates
-            let (w, h) = (self.pm.width() as f64, self.pm.height() as f64);
+            let (w, h) = (self.target().width() as f64, self.target().height() as f64);
             let whole = Path {
                 cmds: vec![Cmd::Move(0.0, 0.0), Cmd::Line(w, 0.0), Cmd::Line(w, h), Cmd::Line(0.0, h), Cmd::Close],
             };
@@ -707,11 +754,12 @@ impl<'a> Cx<'a> {
                 s.fill(&whole, &src, false);
             }
         }
-        let (w, h) = (self.pm.width() as f32, self.pm.height() as f32);
+        let (w, h) = (self.target().width() as f32, self.target().height() as f32);
         let Some(r) = sk::Rect::from_xywh(0.0, 0.0, w, h) else { return };
         let src = self.st.src.clone();
         let paint = paint_of(&src, alpha as f32);
-        self.pm.fill_rect(r, &paint, sk::Transform::identity(), self.st.clip.as_deref());
+        let clip = self.st.clip.clone();
+        self.target_mut().fill_rect(r, &paint, sk::Transform::identity(), clip.as_deref());
     }
 
     /// Narrow what can be drawn to the path (and keep the path).
@@ -724,7 +772,7 @@ impl<'a> Cx<'a> {
         let mut m = match &self.st.clip {
             Some(c) => (**c).clone(),
             None => {
-                let Some(mut m) = sk::Mask::new(self.pm.width(), self.pm.height()) else { return };
+                let Some(mut m) = sk::Mask::new(self.target().width(), self.target().height()) else { return };
                 m.fill_path(&path, rule, true, sk::Transform::identity());
                 self.st.clip = Some(Arc::new(m));
                 return;
@@ -759,11 +807,11 @@ impl<'a> Cx<'a> {
             }
             None => mask.clone(),
         };
-        let (w, h) = (self.pm.width() as f32, self.pm.height() as f32);
+        let (w, h) = (self.target().width() as f32, self.target().height() as f32);
         let Some(r) = sk::Rect::from_xywh(0.0, 0.0, w, h) else { return };
         let src = self.st.src.clone();
         let paint = paint_of(&src, 1.0);
-        self.pm.fill_rect(r, &paint, sk::Transform::identity(), Some(&joined));
+        self.target_mut().fill_rect(r, &paint, sk::Transform::identity(), Some(&joined));
     }
 
     /// Draw a picture into the box given, in user coordinates.
@@ -783,13 +831,14 @@ impl<'a> Cx<'a> {
         let mut paint = sk::PixmapPaint::default();
         paint.opacity = opacity as f32;
         paint.quality = if sx < 1.0 || sy < 1.0 { sk::FilterQuality::Bicubic } else { sk::FilterQuality::Bilinear };
-        self.pm.draw_pixmap(
+        let clip = self.st.clip.clone();
+        self.target_mut().draw_pixmap(
             0,
             0,
             img.as_ref(),
             &paint,
             sk::Transform::from_row(sx, 0.0, 0.0, sy, x0 as f32, y0 as f32),
-            self.st.clip.as_deref(),
+            clip.as_deref(),
         );
     }
 
@@ -945,7 +994,8 @@ impl<'a> Cx<'a> {
         }
         let src = self.st.src.clone();
         let paint = paint_of(&src, 1.0);
-        self.pm.fill_path(&tp, &paint, sk::FillRule::Winding, sk::Transform::identity(), self.st.clip.as_deref());
+        let clip = self.st.clip.clone();
+        self.target_mut().fill_path(&tp, &paint, sk::FillRule::Winding, sk::Transform::identity(), clip.as_deref());
     }
 
     /// A picture scaled once and kept, for a fill that repeats it.
