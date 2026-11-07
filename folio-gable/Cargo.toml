@@ -1,0 +1,16 @@
+[package]
+name = "folio-gable"
+version = "3.0.0"
+edition = "2021"
+description = "Folio Gable: the 3D modeller, on the portable base"
+
+[[bin]]
+name = "folio-gable"
+path = "src/main.rs"
+
+[dependencies]
+folio-canvas = { version = "0.1.0", path = "../crates/folio-canvas" }
+folio-gable-engine = { version = "0.3.0", path = "../crates/folio-gable-engine" }
+folio-kit = { version = "0.3.0", path = "../crates/folio-kit" }
+folio-math = { version = "0.3.0", path = "../crates/folio-math" }
+folio-platform = { version = "0.3.0", path = "../crates/folio-platform" }

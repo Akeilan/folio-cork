@@ -931,6 +931,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "folio-gable"
+version = "3.0.0"
+dependencies = [
+ "folio-canvas",
+ "folio-gable-engine",
+ "folio-kit",
+ "folio-math",
+ "folio-platform",
+]
+
+[[package]]
 name = "folio-gable-engine"
 version = "0.3.0"
 dependencies = [
