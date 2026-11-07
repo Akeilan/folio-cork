@@ -94,6 +94,8 @@ pub struct PageApp {
     view_mode: u8,
     nav: bool,
     ruler: bool,
+    read_mode: bool,
+    printers: Vec<String>,
     /// the headings in the navigation pane, with where each one sits
     nav_rows: Vec<(folio_page_editor::eng::xml::NodeId, Rect)>,
     nav_rect: Rect,
@@ -149,6 +151,8 @@ impl PageApp {
             view_mode: 0,
             nav: false,
             ruler: false,
+            read_mode: false,
+            printers: Vec::new(),
             nav_rows: Vec::new(),
             nav_rect: Rect::default(),
             ruler_rect: Rect::default(),
@@ -373,10 +377,10 @@ impl PageApp {
         let theme = self.theme.clone();
         let s = self.s;
         pm.fill(theme.window.to_sk());
-        let ribbon_h = self.ribbon.height(s);
+        let ribbon_h = if self.read_mode { 0.0 } else { self.ribbon.height(s) };
         let top = TITLE_H * s + ribbon_h;
-        let nav_w = if self.nav { NAV_W * s } else { 0.0 };
-        let ruler_h = if self.ruler { RULER_H * s } else { 0.0 };
+        let nav_w = if self.nav && !self.read_mode { NAV_W * s } else { 0.0 };
+        let ruler_h = if self.ruler && !self.read_mode { RULER_H * s } else { 0.0 };
         self.nav_rect = Rect::new(0.0, top, nav_w, (self.h - top - BAR_H * s).max(1.0));
         self.ruler_rect = Rect::new(nav_w, top, (self.w - nav_w).max(1.0), ruler_h);
         self.canvas = Rect::new(nav_w, top + ruler_h,
@@ -398,6 +402,14 @@ impl PageApp {
             self.paint_backstage(pm, r);
         } else {
             self.paint_pages(pm, r);
+            if self.read_mode {
+                self.paint_bar(pm, r);
+                let mut cx = Ctx { pm, text: &mut r.text, icons: &mut r.icons, theme: &theme, s };
+                let tip = "Reading. Esc goes back to the ribbon.";
+                cx.label(tip, Rect::new(0.0, TITLE_H * s + 4.0 * s, self.w, 20.0 * s), 12.0, Color::hex(0xDDDDDD),
+                         false, Align::Center);
+                return;
+            }
             if self.ruler {
                 self.paint_ruler(pm, r);
             }
@@ -553,7 +565,7 @@ impl PageApp {
         let Pane::Backstage(b) = &mut self.pane else { return };
         let page = b.page.clone();
         let items = [("new", "New"), ("open", "Open"), ("save", "Save"), ("saveas", "Save As"), ("pdf", "Export PDF"),
-                     ("print", "Print"), ("close", "Back")];
+                     ("close", "Back")];
         {
             let mut cx = Ctx { pm, text: &mut r.text, icons: &mut r.icons, theme: &theme, s };
             let mut y = area.y + 16.0 * s;
@@ -593,10 +605,7 @@ impl PageApp {
             f.paint(&mut cx, body);
         } else {
             let mut cx = Ctx { pm, text: &mut r.text, icons: &mut r.icons, theme: &theme, s };
-            let note = match page.as_str() {
-                "print" => "Printing writes a PDF: choose Export PDF, then send that to your printer.",
-                _ => "",
-            };
+            let note = "";
             cx.label(note, body, 14.0, theme.text, false, Align::Left);
         }
     }
@@ -752,6 +761,10 @@ impl PageApp {
                     host.redraw();
                 }
             }
+            Event::Key { key: Key::Escape, down: true, .. } if self.read_mode => {
+                self.read_mode = false;
+                host.redraw();
+            }
             Event::Key { key, mods, down: true, .. } => self.key(key.clone(), *mods, host),
             Event::CloseRequested => self.ask_to_close(),
             Event::FileDropped(p) => {
@@ -844,7 +857,7 @@ impl PageApp {
             let side = 190.0 * s;
             if *x < side {
                 let i = ((*y - area_y - 16.0 * s) / (34.0 * s)).floor();
-                let items = ["new", "open", "save", "saveas", "pdf", "print", "close"];
+                let items = ["new", "open", "save", "saveas", "pdf", "close"];
                 if i >= 0.0 && (i as usize) < items.len() {
                     let id = items[i as usize];
                     self.backstage_page(id, host);
@@ -903,12 +916,6 @@ impl PageApp {
                 let p = self.path.clone().unwrap();
                 self.save(&p);
                 self.pane = Pane::None;
-            }
-            "print" => {
-                if let Pane::Backstage(b) = &mut self.pane {
-                    b.page = "print".into();
-                    b.files = None;
-                }
             }
             "pdf" => {
                 let f = self.file_pane_named(true, "pdf");
@@ -982,6 +989,13 @@ impl PageApp {
                     self.exit = true;
                 }
                 _ => self.closing = false,
+            }
+            host.redraw();
+            return;
+        }
+        if d.id == "print" {
+            if id == "ok" {
+                self.print_now(&d);
             }
             host.redraw();
             return;
@@ -1113,6 +1127,24 @@ impl PageApp {
             }
         }
         self.cache.clear();
+    }
+
+    /// Printing: the pages go to the printer as a PDF, which is what the
+    /// system's printing takes.
+    fn print_now(&mut self, d: &Dialog) {
+        let copies = d.value("copies").trim().parse::<u32>().unwrap_or(1).clamp(1, 99);
+        let printer = self.printers.get(d.choice_index("printer")).cloned();
+        let pages = parse_pages(&d.value("pages"), self.ed.page_count());
+        let tmp = folio_kit::platform::temp_file("folio-page-print", "pdf");
+        let meta = self.ed.doc_properties();
+        if let Err(e) = self.ed.export_pdf_opts(&tmp.to_string_lossy(), pages, false, meta) {
+            self.say("Can't print", &e);
+            return;
+        }
+        match folio_kit::platform::print_pdf(&tmp, copies, printer.as_deref()) {
+            Ok(()) => self.flash("Sent to the printer"),
+            Err(e) => self.say("Can't print", &e),
+        }
     }
 
     /// What a dialog's OK does.
@@ -1277,7 +1309,7 @@ impl PageApp {
             None => (id, None),
         };
         match head {
-            "new" | "open" | "saveas" | "pdf" | "print" => {
+            "new" | "open" | "saveas" | "pdf" => {
                 self.pane = Pane::Backstage(Back { page: head.into(), files: None });
                 self.backstage_page(head, host);
                 return;
@@ -1507,6 +1539,43 @@ impl PageApp {
                     self.show_caret();
                 }
             }
+            "print" => {
+                let printers = folio_kit::platform::printers();
+                if printers.is_empty() {
+                    self.flash("No printer is set up on this computer. Export a PDF instead.");
+                    return;
+                }
+                let names: Vec<&str> = printers.iter().map(|p| p.as_str()).collect();
+                self.printers = printers.clone();
+                self.dialog = Some(
+                    Dialog::new("print", "Print")
+                        .note(&format!("{} pages", self.ed.page_count().max(1)))
+                        .choice("printer", "Printer", &names, 0)
+                        .text("copies", "Copies", "1")
+                        .text("pages", "Pages (blank for all)", "")
+                        .button("ok", "Print")
+                        .button("cancel", "Cancel"),
+                );
+            }
+            "read-mode" => {
+                self.read_mode = !self.read_mode;
+                self.cache.clear();
+            }
+            "accessibility" => {
+                let issues = self.ed.accessibility_issues();
+                if issues.is_empty() {
+                    self.flash("Nothing to put right: the document reads well");
+                } else {
+                    let mut d = Dialog::new("a11y", "Accessibility");
+                    for (what, why, _) in issues.iter().take(12) {
+                        d = d.note(&format!("{what}: {why}"));
+                    }
+                    if issues.len() > 12 {
+                        d = d.note(&format!("...and {} more", issues.len() - 12));
+                    }
+                    self.dialog = Some(d.button("ok", "Close"));
+                }
+            }
             "find" => {
                 self.dialog = Some(
                     Dialog::new("find", "Find and Replace")
@@ -1724,6 +1793,7 @@ impl PageApp {
             marks: self.marks,
             nav: self.nav,
             ruler: self.ruler,
+            read_mode: self.read_mode,
             track: self.ed.tracking(),
             painter: self.painter,
             view_mode: self.view_mode,
@@ -1744,6 +1814,7 @@ pub struct State {
     pub marks: bool,
     pub nav: bool,
     pub ruler: bool,
+    pub read_mode: bool,
     pub track: bool,
     pub painter: bool,
     pub view_mode: u8,
@@ -1768,6 +1839,7 @@ impl CommandState for State {
             "italic" => self.italic,
             "underline" => self.underline,
             "marks" => self.marks,
+            "read-mode" => self.read_mode,
             "nav" => self.nav,
             "ruler" => self.ruler,
             "track" => self.track,
@@ -1791,6 +1863,34 @@ impl CommandState for State {
             _ => None,
         }
     }
+}
+
+/// "2-5, 8" as page numbers, counting from zero. Empty means every page.
+fn parse_pages(spec: &str, count: usize) -> Vec<usize> {
+    let mut out = Vec::new();
+    for part in spec.split(',') {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+        match part.split_once('-') {
+            Some((a, b)) => {
+                let (a, b) = (a.trim().parse::<usize>().unwrap_or(1), b.trim().parse::<usize>().unwrap_or(count));
+                for p in a.max(1)..=b.min(count) {
+                    out.push(p - 1);
+                }
+            }
+            None => {
+                if let Ok(n) = part.parse::<usize>() {
+                    if n >= 1 && n <= count {
+                        out.push(n - 1);
+                    }
+                }
+            }
+        }
+    }
+    out.dedup();
+    out
 }
 
 fn name_of(p: &Path) -> String {

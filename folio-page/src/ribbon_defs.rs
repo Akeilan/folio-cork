@@ -209,6 +209,7 @@ pub fn tabs() -> Vec<Tab> {
                     "Views",
                     vec![
                         I::large("view-print", "Print Layout", "view-print"),
+                        I::small("read-mode", "Read Mode", "read-mode"),
                         I::small("view-draft", "Draft", "view-draft"),
                         I::small("view-web", "Web Layout", "view-web"),
                     ],
@@ -228,6 +229,8 @@ pub fn tabs() -> Vec<Tab> {
                     I::small("open", "Open", "open").key("Ctrl+O"),
                     I::small("new", "New", "new").key("Ctrl+N"),
                     I::small("properties", "Properties", "properties"),
+                    I::small("print", "Print", "print").key("Ctrl+Shift+P"),
+                    I::small("accessibility", "Accessibility", "accessibility"),
                 ],
             )],
         ),
