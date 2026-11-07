@@ -1,0 +1,16 @@
+[package]
+name = "folio-show"
+version = "3.0.0"
+edition = "2021"
+description = "Folio Show: the presentations app, on the portable base"
+
+[[bin]]
+name = "folio-show"
+path = "src/main.rs"
+
+[dependencies]
+folio-canvas = { version = "0.1.0", path = "../crates/folio-canvas" }
+folio-kit = { version = "0.3.0", path = "../crates/folio-kit" }
+folio-math = { version = "0.3.0", path = "../crates/folio-math" }
+folio-platform = { version = "0.3.0", path = "../crates/folio-platform" }
+folio-show-engine = { version = "0.3.0", path = "../crates/folio-show-engine" }
