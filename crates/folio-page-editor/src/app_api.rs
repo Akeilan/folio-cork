@@ -129,10 +129,65 @@ impl Editor {
         self.layout.pages.get(page).map(|p| (p.left, p.width - p.right)).map(|(l, r)| (l, r)).unwrap_or((72.0, 540.0))
     }
 
+    /// A page's top and bottom margins, in points.
+    pub fn page_vmargins(&self, page: usize) -> (f64, f64) {
+        self.layout.pages.get(page).map(|p| (p.top, p.height - p.bottom)).map(|(t, b)| (t, b)).unwrap_or((72.0, 720.0))
+    }
+
     /// All the body text, paragraph by paragraph: what a reader would see.
     pub fn text_of_document(&mut self) -> String {
         let paras: Vec<_> = self.body_blocks().iter().filter(|(k, _, _)| *k == "p").map(|(_, n, _)| *n).collect();
         paras.into_iter().map(|p| self.para_text_of(p)).collect::<Vec<_>>().join("\n")
+    }
+
+    /// The document's own properties: title, author, subject, keywords. Read
+    /// from the parsed part, so a change made here is seen straight away.
+    pub fn doc_properties(&mut self) -> [String; 4] {
+        const NAMES: [&str; 4] = ["dc:title", "dc:creator", "dc:subject", "cp:keywords"];
+        let mut out = [String::new(), String::new(), String::new(), String::new()];
+        let Ok(dom) = self.doc.pkg.xml("docProps/core.xml") else { return out };
+        for (i, name) in NAMES.iter().enumerate() {
+            let short = name.split(':').last().unwrap_or(name).to_string();
+            if let Some(n) = dom.elements(dom.root).find(|&c| dom.name(c) == *name || dom.name(c).ends_with(&format!(":{short}"))) {
+                out[i] = dom.text(n);
+            }
+        }
+        out
+    }
+
+    /// Write them back into the document.
+    pub fn set_doc_properties(&mut self, values: [String; 4]) {
+        const NAMES: [&str; 4] = ["dc:title", "dc:creator", "dc:subject", "cp:keywords"];
+        if self.doc.pkg.raw("docProps/core.xml").is_none() {
+            let head = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\r\n<cp:coreProperties                         xmlns:cp=\"http://schemas.openxmlformats.org/package/2006/metadata/core-properties\"                         xmlns:dc=\"http://purl.org/dc/elements/1.1/\"                         xmlns:dcterms=\"http://purl.org/dc/terms/\"                         xmlns:dcmitype=\"http://purl.org/dc/dcmitype/\"                         xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\"></cp:coreProperties>";
+            self.doc.pkg.put_raw("docProps/core.xml", head.as_bytes().to_vec());
+        }
+        let Ok(dom) = self.doc.pkg.xml_mut("docProps/core.xml") else { return };
+        let root = dom.root;
+        for (i, name) in NAMES.iter().enumerate() {
+            let short = name.split(':').last().unwrap_or(name).to_string();
+            let found = dom
+                .elements(root)
+                .find(|&c| dom.name(c) == *name || dom.name(c).ends_with(&format!(":{short}")));
+            let node = match found {
+                Some(n) => n,
+                None => {
+                    let n = dom.new_element(name, &[]);
+                    dom.append(root, n);
+                    n
+                }
+            };
+            // an element's words live in a text node of its own
+            let kids: Vec<_> = dom.children(node).to_vec();
+            for k in kids {
+                dom.detach(k);
+            }
+            if !values[i].is_empty() {
+                let t = dom.new_text(&values[i]);
+                dom.append(node, t);
+            }
+        }
+        self.modified = true;
     }
 
     /// Set or clear one run property across the selection.
