@@ -147,6 +147,21 @@ pub fn tabs() -> Vec<Tab> {
                          I::small("update-fields", "Update", "update-fields").desc("Work the fields out again.")],
                 ),
                 Group::new(
+                    "Captions",
+                    vec![
+                        I::large("caption", "Caption", "caption"),
+                        I::small("cross-ref", "Cross-reference", "cross-ref"),
+                        I::small("bookmark", "Bookmark", "bookmark"),
+                    ],
+                ),
+                Group::new(
+                    "Citations",
+                    vec![
+                        I::large("citation", "Citation", "citation"),
+                        I::small("bibliography", "Bibliography", "bibliography"),
+                    ],
+                ),
+                Group::new(
                     "Footnotes",
                     vec![
                         I::large("footnote", "Insert Footnote", "footnote").key("Alt+Ctrl+F"),

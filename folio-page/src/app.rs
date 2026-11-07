@@ -96,6 +96,8 @@ pub struct PageApp {
     ruler: bool,
     read_mode: bool,
     printers: Vec<String>,
+    /// what the cross-reference dialog is offering
+    ref_targets: Vec<String>,
     /// the headings in the navigation pane, with where each one sits
     nav_rows: Vec<(folio_page_editor::eng::xml::NodeId, Rect)>,
     nav_rect: Rect,
@@ -153,6 +155,7 @@ impl PageApp {
             ruler: false,
             read_mode: false,
             printers: Vec::new(),
+            ref_targets: Vec::new(),
             nav_rows: Vec::new(),
             nav_rect: Rect::default(),
             ruler_rect: Rect::default(),
@@ -1000,6 +1003,13 @@ impl PageApp {
             host.redraw();
             return;
         }
+        if matches!(d.id.as_str(), "caption" | "xref" | "bookmark" | "citation") {
+            if id == "ok" {
+                self.apply_dialog(&d);
+            }
+            host.redraw();
+            return;
+        }
         if d.id == "para" || d.id == "font" || d.id == "pagesetup" || d.id == "props" {
             if id == "ok" {
                 self.apply_dialog(&d);
@@ -1219,6 +1229,36 @@ impl PageApp {
             "props" => {
                 self.ed.set_doc_properties([d.value("title"), d.value("author"), d.value("subject"),
                                             d.value("keywords")]);
+            }
+            "caption" => {
+                let label = ["Figure", "Table", "Equation"][d.choice_index("label").min(2)];
+                let below = d.choice_index("where") == 0;
+                self.ed.insert_caption(label, &d.value("text"), below, "ARABIC", false);
+            }
+            "xref" => {
+                let i = d.choice_index("target");
+                let Some(target) = self.ref_targets.get(i).cloned() else { return };
+                let page = d.choice_index("kind") == 1;
+                let part = if page { "Page" } else { "Text" };
+                let marks = self.ed.bookmark_names().len();
+                let ok = if i < marks {
+                    self.ed.insert_cross_reference("Bookmark", &target, part, true)
+                } else {
+                    self.ed.insert_cross_reference("Heading", &format!("h{}", i - marks), part, true)
+                };
+                if !ok {
+                    self.flash("That reference couldn't be made");
+                }
+            }
+            "bookmark" => {
+                let name = d.value("name");
+                if !name.trim().is_empty() && !self.ed.add_bookmark(name.trim()) {
+                    self.flash("That name won't do: bookmarks start with a letter");
+                }
+            }
+            "citation" => {
+                let (a, t, y) = (d.value("author"), d.value("title"), d.value("year"));
+                self.ed.insert_citation(&a, &t, &y);
             }
             _ => {}
         }
@@ -1575,6 +1615,65 @@ impl PageApp {
                     }
                     self.dialog = Some(d.button("ok", "Close"));
                 }
+            }
+            "caption" => {
+                self.dialog = Some(
+                    Dialog::new("caption", "Caption")
+                        .choice("label", "Label", &["Figure", "Table", "Equation"], 0)
+                        .text("text", "Caption", "")
+                        .choice("where", "Put it", &["Below the selection", "Above the selection"], 0)
+                        .button("ok", "OK")
+                        .button("cancel", "Cancel"),
+                );
+            }
+            "cross-ref" => {
+                let names = self.ed.bookmark_names();
+                let heads: Vec<String> = self
+                    .ed
+                    .outline_paras()
+                    .into_iter()
+                    .filter(|(_, t, l, ..)| *l <= 9 && !t.trim().is_empty())
+                    .map(|(_, t, ..)| t.chars().take(40).collect::<String>())
+                    .collect();
+                if names.is_empty() && heads.is_empty() {
+                    self.flash("Nothing to refer to yet: add a heading or a bookmark first");
+                    return;
+                }
+                let all: Vec<String> = names.iter().cloned().chain(heads.iter().cloned()).collect();
+                let opts: Vec<&str> = all.iter().map(|s| s.as_str()).collect();
+                self.ref_targets = all.clone();
+                self.dialog = Some(
+                    Dialog::new("xref", "Cross-reference")
+                        .choice("target", "Refer to", &opts, 0)
+                        .choice("kind", "Insert", &["The text", "The page number"], 0)
+                        .button("ok", "Insert")
+                        .button("cancel", "Cancel"),
+                );
+            }
+            "bookmark" => {
+                self.dialog = Some(
+                    Dialog::new("bookmark", "Bookmark")
+                        .text("name", "Name", "")
+                        .note("A bookmark is a place you can refer to or jump back to.")
+                        .button("ok", "Add")
+                        .button("cancel", "Cancel"),
+                );
+            }
+            "bibliography" => {
+                if !self.ed.insert_table_field("BIBLIOGRAPHY", None, None, None, None, 1) {
+                    self.flash("A bibliography goes in the body of the document");
+                }
+                self.cache.clear();
+            }
+            "citation" => {
+                self.dialog = Some(
+                    Dialog::new("citation", "Citation")
+                        .text("author", "Author", "")
+                        .text("title", "Title", "")
+                        .text("year", "Year", "")
+                        .button("ok", "Insert")
+                        .button("cancel", "Cancel"),
+                );
             }
             "find" => {
                 self.dialog = Some(
