@@ -28,6 +28,7 @@ fn push_pull_turns_a_face_into_a_solid() {
     .expect("a square");
     let made = solids::push_pull(&mut m.ents, f, 300.0);
     assert_eq!(made.len(), 5, "four walls and a top");
+    assert_eq!(m.ents.faces.iter().filter(|f| f.alive).count(), 6, "with the square it started from as the bottom");
     let v = solids::volume(&m.ents);
     assert!((v - 1000.0 * 1000.0 * 300.0).abs() < 1.0, "the room inside: {v}");
 }

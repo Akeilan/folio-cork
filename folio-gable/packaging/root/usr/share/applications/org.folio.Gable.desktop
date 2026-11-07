@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Folio Gable
+GenericName=3D Modeller
+Comment=Draw in three dimensions
+Exec=folio-gable %F
+Icon=folio-gable
+Terminal=false
+Categories=Graphics;3DGraphics;Engineering;
+MimeType=model/obj;model/stl;
+Keywords=3d;model;sketch;cad;drawing;
+StartupWMClass=folio-gable

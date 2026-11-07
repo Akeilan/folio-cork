@@ -1,0 +1,16 @@
+Package: folio-gable
+Version: 3.0.0
+Section: graphics
+Priority: optional
+Architecture: amd64
+Installed-Size: 18000
+Depends: libc6 (>= 2.35), libgcc-s1, libx11-6, libx11-xcb1, libxcursor1, libxi6, libxcb1, libxkbcommon0, libxkbcommon-x11-0, libwayland-client0, folio-fonts
+Recommends: xdg-utils, fonts-dejavu-core, wl-clipboard
+Maintainer: Ron Shillings <ron.shillings@gmail.com>
+Description: 3D modeller in the manner of SketchUp
+ Folio Gable draws in three dimensions the way a pencil does: lines that close
+ into faces, and faces pushed and pulled into solids. Rectangles and circles,
+ move, erase and paint, the tape measure, orbit, pan and zoom, perspective or
+ parallel, shaded or wireframe, in millimetres, inches or feet. It draws
+ without a graphics card, so a drawing looks the same on every machine, and
+ writes .obj and .stl for other programs. Everything stays on this computer.

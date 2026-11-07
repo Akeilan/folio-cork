@@ -80,8 +80,28 @@ pub fn push_pull(ents: &mut Entities, f: usize, dist: f64) -> Vec<usize> {
     if let Some(t) = ents.add_face(&top_loop) {
         made.push(t);
     }
-    // the face that was pushed is now inside the solid
-    ents.remove_face(f);
+    // A face on its own becomes the bottom of the new solid, as it does when a
+    // rectangle on the ground is pulled up. A face that was already part of a
+    // shell is now inside it, so it goes.
+    let joined = ents
+        .faces
+        .get(f)
+        .map(|face| {
+            let mut shared = false;
+            for i in 0..face.outer.len() {
+                let (a, b) = (face.outer[i], face.outer[(i + 1) % face.outer.len()]);
+                if let Some(e) = ents.find_edge(a, b) {
+                    if ents.edges[e].faces.iter().any(|o| *o != f && !made.contains(o) && ents.faces[*o].alive) {
+                        shared = true;
+                    }
+                }
+            }
+            shared
+        })
+        .unwrap_or(false);
+    if joined {
+        ents.remove_face(f);
+    }
     ents.touch();
     made
 }
