@@ -2181,6 +2181,54 @@ impl Doc {
         true
     }
 
+    /// Magic Select (D4-02): the subject inside the box, cut out and lifted so it can be dragged.
+    /// The box's own border is what counts as background, so drawing it round the subject with a
+    /// little room to spare is all the aiming needed. `keep_original` leaves the picture whole and
+    /// lifts a copy. Returns false when no subject could be told from its background.
+    pub fn magic_select(&mut self, x: i64, y: i64, w: i64, h: i64, keep_original: bool) -> bool {
+        self.commit_float();
+        self.finish_pending();
+        if self.layers.is_empty() {
+            return false;
+        }
+        let x0 = x.clamp(0, self.w as i64) as usize;
+        let y0 = y.clamp(0, self.h as i64) as usize;
+        let x1 = (x + w).clamp(0, self.w as i64) as usize;
+        let y1 = (y + h).clamp(0, self.h as i64) as usize;
+        if x1 <= x0 + 2 || y1 <= y0 + 2 {
+            return false;
+        }
+        let (bw, bh) = (x1 - x0, y1 - y0);
+        let li = self.active;
+        let mut sub = Vec::with_capacity(bw * bh * 4);
+        for yy in y0..y1 {
+            let o = (yy * self.w + x0) * 4;
+            sub.extend_from_slice(&self.layers[li].px[o..o + bw * 4]);
+        }
+        let alpha = crate::cutout::subject_alpha(&sub, bw, bh);
+        let kept: usize = alpha.iter().filter(|&&a| a > 127).count();
+        if kept == 0 || kept == bw * bh {
+            return false;                       // all background, or nothing to separate
+        }
+        let mut m = vec![0u8; self.w * self.h];
+        for yy in 0..bh {
+            for xx in 0..bw {
+                m[(yy + y0) * self.w + xx + x0] = alpha[yy * bw + xx];
+            }
+        }
+        self.sel_mode = 0;
+        self.set_sel(m);
+        if self.sel.is_none() {
+            return false;
+        }
+        let mark = self.undo_mark();
+        let ok = self.float_lift(!keep_original);
+        if ok {
+            self.group_since(mark, "Magic Select");
+        }
+        ok
+    }
+
     pub fn invert_colors(&mut self) {
         if let Some(f) = self.float.as_mut() {
             for p in f.src.chunks_exact_mut(4) {
@@ -2936,6 +2984,48 @@ mod tests {
         assert!(d.remove_background());
         assert_eq!(d.layers[0].px[(5 * 80 + 5) * 4 + 3], 0);
         assert_eq!(d.layers[0].px[(5 * 80 + 75) * 4 + 3], 255);
+    }
+
+    #[test]
+    fn magic_select_lifts_the_subject_out_of_the_box() {
+        // a page of one colour with two subjects on it, far apart
+        let mut d = Doc::new(200, 120, [238, 238, 238, 255]);
+        // a diamond, so the cut-out's corners are background and its shape can be told from a box
+        d.shape(&[(45.0, 20.0), (72.0, 55.0), (45.0, 90.0), (18.0, 55.0)], true, 1.0, [0, 0, 0, 0], [30, 90, 200, 255], 2, false);
+        d.shape(&[(130.0, 30.0), (180.0, 30.0), (180.0, 80.0), (130.0, 80.0)], true, 1.0, [0, 0, 0, 0], [200, 60, 40, 255], 2, false);
+        let before = d.layers[0].px.clone();
+        let mark = d.undo_mark();
+        let at = |d: &Doc, x: usize, y: usize| {
+            let p = &d.layers[0].px[(y * 200 + x) * 4..][..4];
+            [p[0], p[1], p[2], p[3]]
+        };
+
+        // a box round the left subject, with room to spare
+        assert!(d.magic_select(10, 10, 70, 90, false), "the subject is found");
+        let f = d.float.as_ref().expect("it is lifted, ready to drag");
+        assert!((50..=60).contains(&f.sw) && (66..=76).contains(&f.sh), "the cut-out is the subject's size: {}x{}", f.sw, f.sh);
+        let mid = ((f.sh / 2) * f.sw + f.sw / 2) * 4;
+        assert_eq!(&f.src[mid..mid + 4], &[30, 90, 200, 255], "and holds the subject");
+        assert_eq!(f.src[3], 0, "its corners are see-through, not a square of background");
+        assert_eq!(at(&d, 45, 55)[3], 0, "the subject has gone from the picture");
+        assert_eq!(at(&d, 5, 5), [238, 238, 238, 255], "the background round it is untouched");
+        assert_eq!(at(&d, 155, 55), [200, 60, 40, 255], "and the other subject is untouched");
+
+        // dropping it back and undoing puts the picture back exactly
+        d.commit_float();
+        while d.undo_mark() > mark && d.undo() {}
+        assert_eq!(d.layers[0].px, before, "undo puts it all back");
+
+        // Ctrl: the picture stays whole and a copy is lifted
+        assert!(d.magic_select(10, 10, 70, 90, true));
+        assert!(d.float.is_some());
+        assert_eq!(at(&d, 45, 55), [30, 90, 200, 255], "keeping the original leaves it in place");
+        d.float_discard();
+
+        // a box of nothing but background finds nothing, and a box too small is refused
+        assert!(!d.magic_select(85, 10, 35, 100, false), "all background: nothing to cut out");
+        assert!(!d.magic_select(40, 40, 2, 2, false), "too small to tell anything from anything");
+        assert_eq!(at(&d, 45, 55), [30, 90, 200, 255], "and the picture is left alone either way");
     }
 
     #[test]

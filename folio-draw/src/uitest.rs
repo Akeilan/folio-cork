@@ -17,6 +17,21 @@ pub struct UiTest {
     dir: PathBuf,
 }
 
+/// Stands in for scanimage and ffmpeg in the capture test: records what it was asked for and
+/// writes a small PNG where the real tool would have written its picture.
+const STUB: &str = r#"# $1 is the tool Folio meant to run; the rest are its arguments. The last is the output file.
+dir=$(dirname "$0")
+printf '%s\n' "$*" > "$dir/capture-args.txt"
+# asked what is plugged in: answer as scanimage's own device list does
+case " $* " in
+  *--formatted-device-list*) printf 'stub:0|Folio Test Scanner\n'; exit 0;;
+esac
+out=""
+for a in "$@"; do out="$a"; done
+printf '\211PNG\r\n\032\n\0\0\0\015IHDR\0\0\0\001\0\0\0\001\010\002\0\0\0\220wS\336\0\0\0\014IDATx\234c\370\317\300\0\0\003\001\001\0\030\335\216\260\0\0\0\0IEND\256B\140\202' > "$out"
+exit 0
+"#;
+
 fn check(c: bool, msg: &str) -> Result<(), String> {
     if c {
         Ok(())
@@ -75,6 +90,13 @@ fn key(app: &mut DrawApp, host: &mut dyn Host, r: &mut Res, k: Key, mods: Mods) 
 
 fn ctrl() -> Mods {
     Mods { ctrl: true, ..Mods::NONE }
+}
+
+/// A pixel of the layer being drawn on, under anything floating above it.
+fn layer_px(app: &DrawApp, x: usize, y: usize) -> [u8; 4] {
+    let l = &app.doc.layers[app.doc.active];
+    let o = (y * app.doc.w + x) * 4;
+    [l.px[o], l.px[o + 1], l.px[o + 2], l.px[o + 3]]
 }
 
 fn px(app: &DrawApp, x: usize, y: usize) -> [u8; 4] {
@@ -587,6 +609,7 @@ impl UiTest {
             check(app.playing.is_none(), "a click didn't stop playback")
         });
         let d5 = dir.clone();
+        let d6 = dir.clone();
         step!("embroidery: a new hoop, a shape, its stitches, export and import", move |app: &mut DrawApp, h: &mut dyn Host, r: &mut Res| {
             app.saved_for_test();
             app.command("emb.new:0", h);
@@ -698,6 +721,65 @@ impl UiTest {
             let back = DrawApp::load(&ora)?;
             check(back.emb == app.doc.emb, &format!("the .ora lost the settings: {:?} vs {:?}", back.emb, app.doc.emb))?;
             check(crate::emb::layer_spec(&back, back.layers.len() - 1).is_some(), "the .ora lost the shapes")
+        });
+        step!("Crop and Canvas size reframe an embroidery hoop (D3-05)", |app: &mut DrawApp, h: &mut dyn Host, r: &mut Res| {
+            app.saved_for_test();
+            app.command("emb.new:0", h);
+            ev(app, h, r, Event::MouseMove { x: 1.0, y: 1.0 });
+            // a 20 mm square 10 mm up and left of the hoop's centre
+            let spec = serde_json::json!({"objects": [{"id": 1, "kind": "shape", "rings": [[[-30, -30], [-10, -30], [-10, -10], [-30, -10]]],
+                "thread": {"rgb": [30, 90, 200]}}], "next_id": 2});
+            crate::emb::add_shape_layer(&mut app.doc, "Patch", &spec);
+            let (w0, h0) = (app.doc.w, app.doc.h);
+            let patch = px(app, 508 - 200, 508 - 200);
+            check(patch[2] > 120 && patch[3] > 0, &format!("no patch on the hoop: {patch:?}"))?;
+            let hoop0 = crate::emb::hoop_mm(&crate::emb::settings(&app.doc).ok_or("not embroidery")?);
+
+            // crop to the top-left quarter: the hoop shrinks with it
+            app.set_tool(Tool::Select);
+            drag_on(app, h, r, (0.0, 0.0), (w0 as f32 / 2.0, h0 as f32 / 2.0), Button::Left);
+            app.command("crop", h);
+            check(app.doc.w == w0 / 2 && app.doc.h == h0 / 2, &format!("cropped to {}x{}", app.doc.w, app.doc.h))?;
+            let st = crate::emb::settings(&app.doc).ok_or("the crop lost the embroidery settings")?;
+            let (hw, hh2) = crate::emb::hoop_mm(&st);
+            check((hw - hoop0.0 / 2.0).abs() < 0.4 && (hh2 - hoop0.1 / 2.0).abs() < 0.4,
+                  &format!("the hoop is still {hw:.1} x {hh2:.1} mm"))?;
+            check(st["hoop"].as_str().unwrap_or("").starts_with("Custom"),
+                  &format!("the hoop isn't named for its size: {}", st["hoop"]))?;
+            // the patch is where it always was on the fabric: same pixel, now in a smaller canvas
+            let moved = px(app, 508 - 200, 508 - 200);
+            check(moved[2] > 120 && moved[3] > 0, &format!("the patch moved: {moved:?}"))?;
+            check(crate::emb::make_plan(&app.doc).is_some(), "the cropped design won't plan")?;
+            shot(app, r);
+
+            // one undo puts the canvas, the hoop and the patch back
+            key(app, h, r, Key::Char('z'), ctrl());
+            check(app.doc.w == w0 && app.doc.h == h0, &format!("undo left the canvas at {}x{}", app.doc.w, app.doc.h))?;
+            let back = crate::emb::hoop_mm(&crate::emb::settings(&app.doc).ok_or("not embroidery after undo")?);
+            check((back.0 - hoop0.0).abs() < 0.4 && (back.1 - hoop0.1).abs() < 0.4,
+                  &format!("the hoop came back as {:.1} x {:.1} mm", back.0, back.1))?;
+
+            // Canvas size: grow the hoop to the right and down, anchored top-left
+            app.command("canvas-size", h);
+            if let Some(dl) = app.dialog.as_mut() {
+                dl.set_text_for_test("w", &(w0 + 300).to_string());
+                dl.set_text_for_test("h", &(h0 + 200).to_string());
+                dl.set_choice("anchor", 0);     // the old picture sits at the top left
+            }
+            key(app, h, r, Key::Enter, Mods::NONE);
+            check(app.doc.w == w0 + 300 && app.doc.h == h0 + 200, &format!("canvas {}x{}", app.doc.w, app.doc.h))?;
+            let st2 = crate::emb::settings(&app.doc).ok_or("the resize lost the embroidery settings")?;
+            let (gw, gh) = crate::emb::hoop_mm(&st2);
+            check((gw - (hoop0.0 + 30.0)).abs() < 0.4 && (gh - (hoop0.1 + 20.0)).abs() < 0.4,
+                  &format!("the hoop grew to {gw:.1} x {gh:.1} mm"))?;
+            let still = px(app, 508 - 200, 508 - 200);
+            check(still[2] > 120 && still[3] > 0, &format!("the patch moved when the hoop grew: {still:?}"))?;
+            let plan = crate::emb::make_plan(&app.doc).ok_or("the resized design won't plan")?;
+            let (x0, y0, x1, y1) = plan.bounds();
+            check(x0 >= -gw / 2.0 - 0.6 && x1 <= gw / 2.0 + 0.6 && y0 >= -gh / 2.0 - 0.6 && y1 <= gh / 2.0 + 0.6,
+                  &format!("the design fell outside the hoop: {x0:.1}..{x1:.1}, {y0:.1}..{y1:.1}"))?;
+            check(!crate::emb::write(&plan, "pes", "Reframed", "20261108").unwrap_or_default().is_empty(),
+                  "the reframed design won't write a stitch file")
         });
         step!("the stitch-out simulator sews the design on screen", |app: &mut DrawApp, h: &mut dyn Host, r: &mut Res| {
             app.saved_for_test();
@@ -864,6 +946,169 @@ impl UiTest {
             check(px(app, 4, 4)[3] == 255, "undo didn't bring the background back")?;
             let (_, redo) = app.doc.history();
             check(redo == vec!["Remove background"], &format!("not one undo step: {redo:?}"))
+        });
+        step!("Magic Select lifts the subject out of a box round it (D4-02)", |app: &mut DrawApp, h: &mut dyn Host, r: &mut Res| {
+            app.saved_for_test();
+            app.command("new", h);
+            ev(app, h, r, Event::MouseMove { x: 1.0, y: 1.0 });
+            let (w, hh) = (app.doc.w as f32, app.doc.h as f32);
+            app.c2 = [30, 90, 200, 255];
+            app.shape_fill = true;
+            app.set_tool(Tool::Ellipse);
+            drag_on(app, h, r, (w * 0.3, hh * 0.3), (w * 0.6, hh * 0.7), Button::Left);
+            app.shape_fill = false;
+            app.commit_pending();
+            let inside = px(app, app.doc.w * 45 / 100, app.doc.h / 2);
+            check(inside[2] > 150 && inside[0] < 90, &format!("no subject to select: {inside:?}"))?;
+
+            // the tool is on the Select menu and the ribbon
+            let sel_menu = app.menu_for_test("tool.select");
+            check(sel_menu.iter().any(|m| m == "tool.magicselect"), &format!("not on the Select menu: {sel_menu:?}"))?;
+            app.command("tool.magicselect", h);
+            check(app.tool == Tool::MagicSelect, "the ribbon didn't pick the tool up")?;
+            shot(app, r);
+
+            // a box with room to spare round the subject. (A plain key event first: the app
+            // remembers which modifiers are held, and an earlier step pressed Ctrl.)
+            key(app, h, r, Key::Up, Mods::NONE);
+            drag_on(app, h, r, (w * 0.2, hh * 0.2), (w * 0.72, hh * 0.82), Button::Left);
+            let f = app.doc.float.as_ref().ok_or("nothing was lifted")?;
+            let (fw, fh) = (f.sw, f.sh);
+            check(fw < (w * 0.4) as usize && fh < (hh * 0.5) as usize,
+                  &format!("the cut-out is the whole box, not the subject: {fw}x{fh}"))?;
+            check(app.doc.float.as_ref().map(|f| f.src[3]) == Some(0), "the cut-out's corner isn't see-through")?;
+            // the cut-out floats above the picture, so the picture itself is what to look at
+            let (mx, my) = (app.doc.w * 45 / 100, app.doc.h / 2);
+            check(layer_px(app, mx, my)[3] == 0,
+                  &format!("the subject is still in the picture: {:?} at {mx},{my}", layer_px(app, mx, my)))?;
+            check(layer_px(app, 4, 4)[3] == 255, "the background went with it")?;
+            check(app.tool == Tool::Select, "it didn't hand over to the selection tool to drag with")?;
+            shot(app, r);
+
+            // dragging it moves the cut-out, and one undo puts everything back
+            let before = app.doc.float.as_ref().map(|f| (f.x, f.y)).unwrap_or((0, 0));
+            drag_on(app, h, r, (w * 0.45, hh * 0.5), (w * 0.45 + 60.0, hh * 0.5 + 40.0), Button::Left);
+            let after = app.doc.float.as_ref().map(|f| (f.x, f.y)).unwrap_or((0, 0));
+            check(after.0 > before.0 + 40 && after.1 > before.1 + 25, &format!("it didn't move: {before:?} -> {after:?}"))?;
+            app.doc.commit_float();
+            let (undo, _) = app.doc.history();
+            check(undo.iter().any(|u| *u == "Magic Select"), &format!("not one step called Magic Select: {undo:?}"))?;
+
+            // Ctrl lifts a copy and leaves the picture whole
+            app.doc.float_discard();
+            for _ in 0..8 {
+                if layer_px(app, mx, my)[3] == 255 {
+                    break;
+                }
+                app.doc.undo();
+            }
+            check(layer_px(app, mx, my)[3] == 255, "the picture wouldn't come back for the next try")?;
+            app.command("tool.magicselect", h);
+            key(app, h, r, Key::Up, ctrl());
+            drag_on(app, h, r, (w * 0.2, hh * 0.2), (w * 0.72, hh * 0.82), Button::Left);
+            check(app.doc.float.is_some(), "Ctrl lifted nothing")?;
+            check(layer_px(app, mx, my)[3] == 255, "Ctrl took the subject out of the picture anyway")?;
+            app.doc.float_discard();
+            key(app, h, r, Key::Up, Mods::NONE);
+
+            // a box of nothing but background says so and leaves the picture alone
+            app.command("tool.magicselect", h);
+            let w0 = px(app, 4, 4);
+            drag_on(app, h, r, (w * 0.80, hh * 0.05), (w * 0.97, hh * 0.25), Button::Left);
+            check(app.doc.float.is_none(), "it lifted background")?;
+            check(app.flash_text().contains("stood out"), &format!("no plain message: {:?}", app.flash_text()))?;
+            check(px(app, 4, 4) == w0, "the picture changed anyway")
+        });
+        step!("From a scanner or camera (D4-01)", move |app: &mut DrawApp, h: &mut dyn Host, r: &mut Res| {
+            use folio_kit::platform::{capture, services};
+            app.saved_for_test();
+            app.command("new", h);
+            ev(app, h, r, Event::MouseMove { x: 1.0, y: 1.0 });
+
+            // on a computer with neither tool installed, it names the packages rather than failing quietly
+            services::set_setting("FOLIO_NO_CAPTURE", std::path::Path::new("1"));
+            check(!capture::have_scanner_support() && !capture::have_camera_support(), "the test seam didn't take")?;
+            app.command("from-device", h);
+            let note = app.dialog.as_ref().map(|d| d.note_text()).unwrap_or_default();
+            check(note.contains("sane-utils") && note.contains("ffmpeg"), &format!("it didn't say what to install: {note:?}"))?;
+            shot(app, r);
+            key(app, h, r, Key::Enter, Mods::NONE);
+            check(app.dialog.is_none(), "the message wouldn't close")?;
+            check(app.capture.is_none(), "it started a capture with no tools")?;
+            services::set_setting("FOLIO_NO_CAPTURE", std::path::Path::new("0"));
+
+            // with the tools but nothing plugged in, it says that instead
+            if capture::devices().is_empty() {
+                app.command("from-device", h);
+                let note = app.dialog.as_ref().map(|d| d.note_text()).unwrap_or_default();
+                check(note.contains("Plug one in") || note.contains("sane-utils") || note.contains("ffmpeg"),
+                      &format!("no plain message with nothing plugged in: {note:?}"))?;
+                key(app, h, r, Key::Enter, Mods::NONE);
+            }
+
+            // with a stub standing in for scanimage and ffmpeg, the arguments Folio builds are run
+            // for real and the picture that comes back lands in the document
+            let stub = d6.join("capture-stub.sh");
+            std::fs::write(&stub, STUB).map_err(|e| e.to_string())?;
+            // run through sh, so nothing here has to make a file executable
+            services::set_setting("FOLIO_CAPTURE_STUB", std::path::Path::new(&format!("sh {}", stub.display())));
+            check(capture::have_scanner_support() && capture::have_camera_support(), "the stub wasn't picked up")?;
+            let devs = capture::devices();
+            check(devs.iter().any(|d| d.kind == capture::Kind::Scanner) && devs.iter().any(|d| d.kind == capture::Kind::Camera),
+                  &format!("the stub listed no devices: {devs:?}"))?;
+            let got = capture::scan("stub:0", 300, true).map_err(|e| format!("the stub scan failed: {e}"))?;
+            check(got.len() > 32 && &got[..4] == b"\x89PNG", "the scan came back as something other than a PNG")?;
+            let args = std::fs::read_to_string(d6.join("capture-args.txt")).unwrap_or_default();
+            check(args.contains("scanimage") && args.contains("--format=png") && args.contains("--resolution=300")
+                  && args.contains("Color") && args.contains("-d stub:0"),
+                  &format!("the scanner wasn't asked the right thing: {args}"))?;
+            let snapped = capture::snap("", 4).map_err(|e| format!("the stub snap failed: {e}"))?;
+            check(snapped.len() > 32 && &snapped[..4] == b"\x89PNG", "the camera picture came back as something else")?;
+            let args = std::fs::read_to_string(d6.join("capture-args.txt")).unwrap_or_default();
+            check(args.contains("ffmpeg") && args.contains("-f v4l2") && args.contains("/dev/video0")
+                  && args.contains("-frames:v 1"),
+                  &format!("the camera wasn't asked the right thing: {args}"))?;
+            services::set_setting("FOLIO_CAPTURE_STUB", std::path::Path::new(""));
+
+            // a picture arriving from the worker thread becomes the document
+            let (w, hh) = (120usize, 90usize);
+            let mut rgba = vec![0u8; w * hh * 4];
+            for p in rgba.chunks_exact_mut(4) {
+                p.copy_from_slice(&[20, 140, 60, 255]);
+            }
+            let png = folio_draw_engine::png::encode(w, hh, &rgba, 1);
+            let (tx, rx) = std::sync::mpsc::channel();
+            tx.send(Ok(png)).map_err(|e| e.to_string())?;
+            app.capture = Some(crate::app::CaptureJob { rx, what: "scanner", name: "Test Scanner".into() });
+            check(folio_kit::platform::App::next_tick(&*app).is_some(), "it stopped asking for ticks while waiting")?;
+            app.poll_capture();
+            check(app.capture.is_none(), "the job wasn't finished with")?;
+            check(app.doc.w == w && app.doc.h == hh, &format!("the scan didn't become the document: {}x{}", app.doc.w, app.doc.h))?;
+            let mid = px(app, w / 2, hh / 2);
+            check(mid[1] > 120 && mid[0] < 60, &format!("not the scanned picture: {mid:?}"))?;
+            check(app.flash_text().contains("Test Scanner"), &format!("it didn't say where it came from: {:?}", app.flash_text()))?;
+            shot(app, r);
+
+            // and a scanner that goes wrong says what happened, leaving the picture alone
+            let (w2, h2) = (app.doc.w, app.doc.h);
+            let (tx, rx) = std::sync::mpsc::channel();
+            tx.send(Err("The scanner: Device busy".to_string())).map_err(|e| e.to_string())?;
+            app.capture = Some(crate::app::CaptureJob { rx, what: "scanner", name: "Test Scanner".into() });
+            app.poll_capture();
+            let note = app.dialog.as_ref().map(|d| d.note_text()).unwrap_or_default();
+            check(note.contains("Device busy"), &format!("the trouble wasn't passed on: {note:?}"))?;
+            key(app, h, r, Key::Enter, Mods::NONE);
+            check(app.doc.w == w2 && app.doc.h == h2, "a failed scan changed the picture")?;
+
+            // a dropped thread is not silence either
+            let (tx, rx) = std::sync::mpsc::channel::<Result<Vec<u8>, String>>();
+            drop(tx);
+            app.capture = Some(crate::app::CaptureJob { rx, what: "camera", name: "Test Camera".into() });
+            app.poll_capture();
+            let note = app.dialog.as_ref().map(|d| d.note_text()).unwrap_or_default();
+            check(note.contains("stopped answering"), &format!("a dead worker said nothing: {note:?}"))?;
+            key(app, h, r, Key::Enter, Mods::NONE);
+            check(app.capture.is_none() && app.dialog.is_none(), "it is still waiting on nothing")
         });
         step!("the magic wand's tolerance and sample-all are kept", |app: &mut DrawApp, h: &mut dyn Host, r: &mut Res| {
             app.command("wand-settings", h);

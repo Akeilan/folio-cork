@@ -15,6 +15,11 @@ GTK version in 1.11.0 and does everything that one did.
   stabilizer for a steadier line.
 - **Selections**: rectangle, ellipse, lasso, polygon and magic wand, with tolerance and
   contiguous or not; move, crop, resize, rotate, flip.
+- **Magic Select**: drag a box round the subject and it is cut out, ready to drag where you want
+  it; Ctrl leaves the picture whole and lifts a copy.
+- **From a scanner or camera**: a page from a scanner (through SANE's `scanimage`) or a picture
+  from a webcam (through ffmpeg); the window keeps working while it comes in, and Draw says which
+  package to install when neither tool is there.
 - **Layers**: any number, with opacity, blend modes, groups and real transparency.
 - **Pictures**: colour adjustments, remove background, and a history pane.
 - **Files**: PNG, JPEG, BMP, GIF, WebP, TIFF, Windows icons, Photoshop PSD and OpenRaster (.ora,
@@ -24,7 +29,8 @@ GTK version in 1.11.0 and does everything that one did.
 - **Embroidery**: a picture becomes editable shapes with fill, satin and running stitches;
   lettering from a font, envelopes, node editing, a density view and a stitch-out simulator. Saves
   for the machine as PES, DST, JEF, EXP, VP3, XXX or PEC, with five hoop sizes and the PEC thread
-  chart.
+  chart. Crop and Canvas size work on a design too: the hoop is reframed round the new picture and
+  the stitching stays where it was on the fabric.
 
 Everything stays on this computer: no cloud, no sign-in, no telemetry.
 
