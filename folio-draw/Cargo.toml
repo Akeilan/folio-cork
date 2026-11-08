@@ -1,6 +1,6 @@
 [package]
 name = "folio-draw"
-version = "1.12.0"
+version = "1.13.0"
 edition = "2021"
 description = "Folio Draw on the portable base (D3-06): the Rust port of the drawing app"
 license.workspace = true

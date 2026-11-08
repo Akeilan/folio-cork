@@ -82,6 +82,23 @@
 | `memory_used`, `memory_peak` | Resident memory, for the budgets in PORTABILITY.md. |
 | `setting`, `set_setting` | The few environment overrides Folio reads. |
 
+### Pictures from a scanner or a camera (`capture`)
+
+| Function | Contract |
+|---|---|
+| `scanners()`, `cameras()`, `devices()` | What is plugged in. Empty is the usual answer; never an error. |
+| `have_scanner_support()`, `have_camera_support()` | Whether the system has the tool at all. |
+| `scanner_missing()`, `camera_missing()`, `nothing_found()` | What to tell the person when it has not. |
+| `scan(device, dpi, colour)`, `snap(device, warmup)` | One picture, as PNG bytes, or a plain message saying why not. |
+
+Linux drives scanners through SANE's `scanimage` and cameras through ffmpeg's `v4l2`, both from the
+distribution. Neither is a dependency: when one is absent the app says which package to install and
+leaves the picture alone. A port replaces this module with the system's own scanning and camera
+services (WIA and Media Foundation on Windows, ImageCaptureCore and AVFoundation on macOS); nothing
+above the platform layer changes. `FOLIO_NO_CAPTURE=1` makes a machine look as if it has neither
+tool, and `FOLIO_CAPTURE_STUB` points both at one program, which is how the window test proves the
+arguments Folio builds without a scanner on the bench.
+
 ## Backends
 
 | System | State |

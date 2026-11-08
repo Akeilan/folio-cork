@@ -52,6 +52,7 @@ pub enum Tool {
     FreeSelect,
     PolySelect,
     Wand,
+    MagicSelect,
     Text,
     Magnifier,
     Polygon,
@@ -74,6 +75,7 @@ impl Tool {
             Tool::FreeSelect => "freeselect",
             Tool::PolySelect => "polyselect",
             Tool::Wand => "wand",
+            Tool::MagicSelect => "magicselect",
             Tool::Text => "text",
             Tool::Magnifier => "zoom",
             Tool::Polygon => "polygon",
@@ -95,6 +97,7 @@ impl Tool {
             "freeselect" => Tool::FreeSelect,
             "polyselect" => Tool::PolySelect,
             "wand" => Tool::Wand,
+            "magicselect" => Tool::MagicSelect,
             "text" => Tool::Text,
             "zoom" => Tool::Magnifier,
             "polygon" => Tool::Polygon,
@@ -110,6 +113,8 @@ enum Drag {
     Stroke,
     Shape { tool: Tool, a: Pt, color: [u8; 4] },
     Select { a: Pt, b: Pt },
+    /// Magic Select's box: on release the subject inside it is cut out (D4-02).
+    MagicBox { a: Pt, b: Pt },
     Lasso(Vec<Pt>),
     Move { start: Pt, orig: (i32, i32) },
     Pan { start: (f32, f32), scroll: (f32, f32) },
@@ -159,6 +164,15 @@ impl Back {
     pub fn hit_rect(&self, id: &str) -> Option<Rect> {
         self.hits.iter().find(|(i, _)| i == id).map(|(_, r)| *r)
     }
+}
+
+/// A picture being fetched from a scanner or a camera. The work happens on its own thread so the
+/// window keeps drawing while a scanner takes its time (D4-01).
+pub struct CaptureJob {
+    pub rx: std::sync::mpsc::Receiver<Result<Vec<u8>, String>>,
+    /// "scanner" or "camera", for what is said while it runs and if it fails.
+    pub what: &'static str,
+    pub name: String,
 }
 
 pub enum After {
@@ -282,6 +296,10 @@ pub struct DrawApp {
     pub exit: bool,
     pub code: i32,
     pub flash: Option<(String, Duration)>,
+    /// A scan or a camera snap running on a worker thread (D4-01).
+    pub capture: Option<CaptureJob>,
+    /// What the From a scanner or camera dialog is choosing between.
+    pub devices: Vec<folio_kit::platform::capture::Device>,
     then: Option<After>,
     pub after: Option<After>,
     pub res: Option<Res>,
@@ -375,6 +393,8 @@ impl DrawApp {
             exit: false,
             code: 0,
             flash: None,
+            capture: None,
+            devices: Vec::new(),
             then: None,
             after: None,
             res: Some(Res { text: Text::bundled(), icons }),
@@ -577,6 +597,7 @@ impl DrawApp {
                 return;
             }
             Event::Tick => {
+                self.poll_capture();
                 if let (Some(at), Some(due)) = (self.stitch_out, self.stitch_due) {
                     if self.now >= due {
                         // 400 stitches a minute, ten times over: about 67 commands a tick at 40 ms
@@ -1068,6 +1089,11 @@ impl DrawApp {
                 self.doc.commit_float();
                 self.drag = Some(Drag::Lasso(vec![p]));
             }
+            Tool::MagicSelect => {
+                self.doc.commit_float();
+                self.doc.sel_none();
+                self.drag = Some(Drag::MagicBox { a: p, b: p });
+            }
             Tool::Select => {
                 if self.in_selection(p) && !self.mods.shift && !self.mods.alt {
                     if self.doc.float.is_none() {
@@ -1115,6 +1141,7 @@ impl DrawApp {
                 self.draw_shape(tool, a, b, color);
             }
             Some(Drag::Select { a, .. }) => self.drag = Some(Drag::Select { a, b: p }),
+            Some(Drag::MagicBox { a, .. }) => self.drag = Some(Drag::MagicBox { a, b: p }),
             Some(Drag::Lasso(mut pts)) => {
                 if pts.last().map(|q| (q.0 - p.0).abs() + (q.1 - p.1).abs() > 0.5).unwrap_or(true) {
                     pts.push(p);
@@ -1267,6 +1294,19 @@ impl DrawApp {
                 if x1 - x0 >= 1.0 && y1 - y0 >= 1.0 {
                     self.doc.sel_mode = self.sel_mode();
                     self.doc.sel_rect(x0 as i64, y0 as i64, (x1 - x0) as i64, (y1 - y0) as i64);
+                }
+            }
+            Drag::MagicBox { a, .. } => {
+                let b = self.to_doc(x, y);
+                let (x0, y0) = (a.0.min(b.0).max(0.0).floor(), a.1.min(b.1).max(0.0).floor());
+                let (x1, y1) = (a.0.max(b.0).min(self.doc.w as f32).ceil(), a.1.max(b.1).min(self.doc.h as f32).ceil());
+                if x1 - x0 < 8.0 || y1 - y0 < 8.0 {
+                    self.flash("Drag a box right round the subject, with a little room to spare.");
+                } else if self.doc.magic_select(x0 as i64, y0 as i64, (x1 - x0) as i64, (y1 - y0) as i64, self.mods.ctrl) {
+                    self.set_tool(Tool::Select);
+                    self.flash("The subject is cut out. Drag it where you want it.");
+                } else {
+                    self.flash("Nothing in that box stood out from its background. Leave more room round the subject.");
                 }
             }
             Drag::Lasso(pts) => {
@@ -1991,7 +2031,19 @@ impl DrawApp {
             }
             "crop" => {
                 self.doc.commit_float();
+                // where the crop starts, so an embroidery hoop can be reframed round it (D3-05)
+                let d0 = match (&self.doc.float, self.doc.sel_bounds()) {
+                    (Some(f), _) => Some((f.x as f32, f.y as f32)),
+                    (None, Some((x0, y0, _, _))) => Some((x0 as f32, y0 as f32)),
+                    _ => None,
+                };
+                let mark = self.doc.undo_mark();
+                let specs = crate::emb::shape_specs(&self.doc);
                 if self.doc.crop_to_selection() {
+                    if let Some(d0) = d0 {
+                        crate::emb::reframe(&mut self.doc, d0, specs);
+                    }
+                    self.doc.group_since(mark, "Crop");
                     self.doc.label_last("Crop");
                     self.fit();
                 } else {
@@ -2675,6 +2727,38 @@ impl DrawApp {
             }
             "save-as" => self.open_back(BackPage::SaveAs),
             "paste-file" => self.open_back(BackPage::PasteFrom),
+            "from-device" => {
+                use folio_kit::platform::capture;
+                if self.capture.is_some() {
+                    self.flash("A picture is already on its way in.");
+                    return;
+                }
+                let devs = capture::devices();
+                if devs.is_empty() {
+                    let msg = if !capture::have_scanner_support() && !capture::have_camera_support() {
+                        format!("{} {}", capture::scanner_missing(), capture::camera_missing())
+                    } else if !capture::have_scanner_support() {
+                        capture::scanner_missing()
+                    } else if !capture::have_camera_support() {
+                        capture::camera_missing()
+                    } else {
+                        capture::nothing_found()
+                    };
+                    self.dialog = Some(Dialog::new("info", "From a scanner or camera").note(&msg).button("ok", "Close"));
+                    return;
+                }
+                let names: Vec<String> = devs.iter().map(|d| format!("{} ({})", d.name, if d.kind == capture::Kind::Scanner { "scanner" } else { "camera" })).collect();
+                self.devices = devs;
+                self.dialog = Some(
+                    Dialog::new("from-device", "From a scanner or camera")
+                        .choice("device", "Device", &names.iter().map(|s| s.as_str()).collect::<Vec<_>>(), 0)
+                        .choice("dpi", "Scan at", &["150 dpi", "300 dpi", "600 dpi"], 1)
+                        .check("colour", "In colour (off scans in grey)", true)
+                        .note("A camera is read straight away; a scanner takes as long as the page does. The window keeps working while it comes in.")
+                        .button("ok", "Get the Picture")
+                        .button("cancel", "Cancel"),
+                );
+            }
             "close" => self.request(After::Close),
             _ => {}
         }
@@ -2808,6 +2892,7 @@ impl DrawApp {
                     MenuItem::new("tool.freeselect", "Free-form selection").check(self.tool == Tool::FreeSelect),
                     MenuItem::new("tool.polyselect", "Polygon selection").check(self.tool == Tool::PolySelect),
                     MenuItem::new("tool.wand", "Magic wand").check(self.tool == Tool::Wand),
+                    MenuItem::new("tool.magicselect", "Magic Select").check(self.tool == Tool::MagicSelect),
                     MenuItem::sep(),
                     MenuItem::new("select-all", "Select all").key("Ctrl+A"),
                     MenuItem::new("select-invert", "Invert selection"),
@@ -3028,6 +3113,22 @@ impl DrawApp {
                     self.fit();
                 }
             }
+            ("from-device", "ok") => {
+                use folio_kit::platform::capture;
+                let dev = self.devices.get(d.choice_index("device").min(self.devices.len().saturating_sub(1))).cloned();
+                let Some(dev) = dev else { return };
+                let dpi = [150u32, 300, 600][d.choice_index("dpi").min(2)];
+                let colour = d.checked("colour");
+                let (tx, rx) = std::sync::mpsc::channel();
+                let id = dev.id.clone();
+                let scanner = dev.kind == capture::Kind::Scanner;
+                folio_kit::platform::spawn("folio-capture", move || {
+                    let r = if scanner { capture::scan(&id, dpi, colour) } else { capture::snap(&id, 6) };
+                    let _ = tx.send(r);
+                });
+                self.flash(if scanner { "Scanning…" } else { "Taking the picture…" });
+                self.capture = Some(CaptureJob { rx, what: if scanner { "scanner" } else { "camera" }, name: dev.name.clone() });
+            }
             ("canvas-size", "ok") => {
                 let w: usize = d.value("w").trim().parse().unwrap_or(0);
                 let h: usize = d.value("h").trim().parse().unwrap_or(0);
@@ -3035,7 +3136,13 @@ impl DrawApp {
                 let (ax, ay) = ((a % 3) as f32 / 2.0, (a / 3) as f32 / 2.0);
                 if (1..=32768).contains(&w) && (1..=32768).contains(&h) {
                     self.doc.commit_float();
+                    // the old pixel that becomes (0, 0), for reframing an embroidery hoop (D3-05)
+                    let d0 = (-((w as f32 - self.doc.w as f32) * ax).round(), -((h as f32 - self.doc.h as f32) * ay).round());
+                    let mark = self.doc.undo_mark();
+                    let specs = crate::emb::shape_specs(&self.doc);
                     self.doc.canvas_size(w, h, ax, ay);
+                    crate::emb::reframe(&mut self.doc, d0, specs);
+                    self.doc.group_since(mark, "Canvas size");
                     self.doc.label_last("Canvas size");
                     self.fit();
                 } else {
@@ -3478,6 +3585,28 @@ impl DrawApp {
                 }
                 Err(e) => self.dialog = Some(Dialog::new("info", "Can't open the file").note(&e).button("ok", "Close")),
             },
+        }
+    }
+
+    /// Has the scan or the snap arrived? Called every tick while one is running (D4-01).
+    pub fn poll_capture(&mut self) {
+        let Some(job) = self.capture.as_ref() else { return };
+        let got = match job.rx.try_recv() {
+            Ok(r) => r,
+            Err(std::sync::mpsc::TryRecvError::Empty) => return,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => Err(format!("The {} stopped answering.", job.what)),
+        };
+        let job = self.capture.take().expect("just checked");
+        match got.and_then(|bytes| files::decode(&bytes).map_err(|e| format!("The {} sent a picture Folio can't read: {e}", job.what))) {
+            Ok((w, h, px)) => {
+                let name = if job.what == "scanner" { "Scan" } else { "Photo" };
+                self.replace(Doc::from_rgba(w, h, px, name), None);
+                self.layout();
+                self.flash(&format!("{} from {}.", if job.what == "scanner" { "Scanned" } else { "Taken" }, job.name));
+            }
+            Err(e) => {
+                self.dialog = Some(Dialog::new("info", "From a scanner or camera").note(&e).button("ok", "Close"));
+            }
         }
     }
 
@@ -3936,7 +4065,7 @@ impl DrawApp {
                 let stroke = sk::Stroke { width: 1.0, dash: sk::StrokeDash::new(vec![4.0, 4.0], 0.0), ..Default::default() };
                 cv.stroke_path(&path, &gfx::paint(Color::BLACK), &stroke, sk::Transform::identity(), None);
             }
-        } else if let Some(Drag::Select { a, b }) = &self.drag {
+        } else if let Some(Drag::Select { a, b }) | Some(Drag::MagicBox { a, b }) = &self.drag {
             let (p, q) = (to(*a), to(*b));
             ants(&mut cv, Rect::new(p.0.min(q.0), p.1.min(q.1), (p.0 - q.0).abs(), (p.1 - q.1).abs()));
         } else if let Some(f) = &self.doc.float {
@@ -4301,6 +4430,9 @@ impl folio_kit::platform::App for DrawApp {
     fn next_tick(&self) -> Option<Duration> {
         if self.test.is_some() || self.clip.is_some() {
             return Some(Duration::from_millis(60));
+        }
+        if self.capture.is_some() {
+            return Some(Duration::from_millis(120));
         }
         if let Some(due) = self.stitch_due {
             return Some(due.saturating_sub(self.now).max(Duration::from_millis(10)));

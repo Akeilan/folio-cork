@@ -696,6 +696,17 @@ impl Dialog {
         }
         String::new()
     }
+    /// Every note in the dialog, run together: what it is telling the person.
+    pub fn note_text(&self) -> String {
+        self.fields
+            .iter()
+            .filter_map(|f| match &f.kind {
+                FieldKind::Note(n) => Some(n.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
     pub fn checked(&self, id: &str) -> bool {
         self.value(id) == "true"
     }

@@ -81,6 +81,55 @@ pub fn new_doc(hoop: usize) -> Doc {
     d
 }
 
+/// The hoop's name for a size in mm: a standard hoop if it matches one, else its measurements.
+pub fn hoop_name(w: f32, h: f32) -> String {
+    for (n, hw, hh) in HOOPS.iter() {
+        if (hw - w).abs() < 0.3 && (hh - h).abs() < 0.3 {
+            return n.to_string();
+        }
+    }
+    format!("Custom ({:.0} × {:.0} mm)", w, h)
+}
+
+/// Every shape layer and what is on it. Changing the canvas shape turns text layers into their
+/// pixels (undo brings them back), so this is collected *before* a crop or a resize and handed to
+/// [`reframe`] after it.
+pub fn shape_specs(doc: &Doc) -> Vec<(usize, Value)> {
+    (0..doc.layers.len()).filter_map(|i| layer_spec(doc, i).map(|sp| (i, sp))).collect()
+}
+
+/// After the canvas has been cropped or resized (D3-05), make the hoop match the new picture and
+/// keep the stitching where it was on the fabric. `d0` is the old pixel that became pixel (0, 0):
+/// (x0, y0) for a crop, minus the offset for a canvas-size. `specs` comes from [`shape_specs`]
+/// called before the change. Returns false for a plain picture, which has no hoop to reframe.
+///
+/// Shapes are kept in millimetres from the hoop's centre, and the centre has just moved, so every
+/// object shifts by the difference between the old origin and the new one.
+pub fn reframe(doc: &mut Doc, d0: (f32, f32), specs: Vec<(usize, Value)>) -> bool {
+    let Some(mut s) = settings(doc) else { return false };
+    let (ox, oy) = origin(&s);
+    let (nw, nh) = (doc.w as f32 / PX_PER_MM, doc.h as f32 / PX_PER_MM);
+    s["hoop_mm"] = json!([nw, nh]);
+    s["hoop"] = json!(hoop_name(nw, nh));
+    let (nx, ny) = origin(&s);
+    let (dx, dy) = (nx - ox - d0.0 / PX_PER_MM, ny - oy - d0.1 / PX_PER_MM);
+    doc.set_emb(&s.to_string());
+    for (i, mut sp) in specs {
+        if i >= doc.layers.len() {
+            continue;
+        }
+        if dx.abs() > 1e-4 || dy.abs() > 1e-4 {
+            if let Some(objs) = sp["objects"].as_array_mut() {
+                for o in objs {
+                    move_object(o, dx, dy);
+                }
+            }
+        }
+        store_layer(doc, i, &sp);
+    }
+    true
+}
+
 pub fn layer_spec(doc: &Doc, i: usize) -> Option<Value> {
     let t = &doc.layers.get(i)?.text;
     if !t.starts_with('{') {
@@ -753,6 +802,59 @@ mod tests {
         assert!(hoop_from("5x7").map(|h| h.0).unwrap_or(0) > 0, "5x7 is a bigger hoop than 4x4");
         assert_eq!(hoop_from("nonsense"), None);
         assert_eq!(hoop_from("40x40"), None, "nothing holds a 40-inch design");
+    }
+
+    #[test]
+    fn cropping_an_embroidery_document_reframes_the_hoop() {
+        // a square patch in the top-left quarter of a 4x4 hoop
+        let mut doc = new_doc(0);
+        let s = settings(&doc).expect("an embroidery document");
+        let (hw, hh) = hoop_mm(&s);
+        let (w0, h0) = (doc.w, doc.h);
+        let ring = json!([[[-40.0, -40.0], [-20.0, -40.0], [-20.0, -20.0], [-40.0, -20.0]]]);
+        add_object(&mut doc, None, "Shapes", json!({"kind": "shape", "rings": ring, "thread": {"rgb": [30, 90, 200], "name": "Blue"}}));
+        let li = (0..doc.layers.len()).find(|i| layer_spec(&doc, *i).is_some()).expect("a shape layer");
+        let corner = |d: &Doc| {
+            let sp = layer_spec(d, li).unwrap();
+            let o = &sp["objects"][0];
+            let (x0, y0, _, _) = object_bounds(o);
+            (x0, y0)
+        };
+        assert_eq!(corner(&doc), (-40.0, -40.0));
+
+        // crop to the left half: the hoop becomes half as wide and the patch keeps its place on it
+        let specs = shape_specs(&doc);
+        doc.crop(0, 0, w0 / 2, h0);
+        assert!(reframe(&mut doc, (0.0, 0.0), specs), "the hoop is reframed");
+        let s2 = settings(&doc).expect("still an embroidery document");
+        let (nw, nh) = hoop_mm(&s2);
+        assert!((nw - hw / 2.0).abs() < 0.3 && (nh - hh).abs() < 0.3, "the hoop is now {nw:.1} x {nh:.1} mm");
+        assert!(s2["hoop"].as_str().unwrap_or("").starts_with("Custom"), "and says so: {}", s2["hoop"]);
+        let (cx, cy) = corner(&doc);
+        // the patch was 10.8 mm in from the left edge and stays there, measured from the new centre
+        assert!((cx - (-nw / 2.0 - (-hw / 2.0) + -40.0)).abs() < 0.2, "it moved: {cx:.2}");
+        assert!((cy - (-40.0)).abs() < 0.2, "nothing moved up or down: {cy:.2}");
+        let left_edge = mm_to_px(&s2, cx, cy).0;
+        assert!((left_edge - 108.0).abs() < 2.0, "still 10.8 mm in from the edge: {left_edge:.1} px");
+
+        // and it still plans and writes a file in the new hoop
+        let plan = make_plan(&doc).expect("a plan");
+        let (x0, y0, x1, y1) = plan.bounds();
+        assert!(x1 - x0 > 15.0 && y1 - y0 > 15.0, "the patch is still 20 mm across: {:.1} x {:.1}", x1 - x0, y1 - y0);
+        assert!(x0 >= -nw / 2.0 - 0.6 && x1 <= nw / 2.0 + 0.6 && y0 >= -nh / 2.0 - 0.6 && y1 <= nh / 2.0 + 0.6,
+                "and sits inside the new hoop: {x0:.1}..{x1:.1}, {y0:.1}..{y1:.1}");
+        assert!(!write(&plan, "pes", "Cropped", "20261108").expect("pes").is_empty());
+
+        // growing the canvas from the bottom-right anchor keeps it put too
+        let (w1, h1) = (doc.w, doc.h);
+        let specs = shape_specs(&doc);
+        doc.canvas_size(w1 + 200, h1 + 100, 1.0, 1.0);
+        assert!(reframe(&mut doc, (-200.0, -100.0), specs));
+        let s3 = settings(&doc).unwrap();
+        let (gx, gy) = corner(&doc);
+        let px_now = mm_to_px(&s3, gx, gy);
+        assert!((px_now.0 - (left_edge + 200.0)).abs() < 2.0, "it stayed where it was: {:.1} px", px_now.0);
+        assert!((px_now.1 - 108.0 - 100.0).abs() < 2.0, "and down the same: {:.1} px", px_now.1);
     }
 
     #[test]

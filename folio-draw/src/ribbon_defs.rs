@@ -28,6 +28,8 @@ pub fn tabs() -> Vec<Tab> {
                         I::small("email", "Send in email", "email").menu().desc("A new message with the picture attached."),
                         I::small("properties", "Properties", "page").key("Ctrl+E").desc("The picture's size, its layers and the file it came from."),
                         I::small("remove-bg", "Remove background", "nobg").desc("Cut the subject out of its background, leaving it transparent. With a selection, only the selected part is cut out."),
+                        I::small("tool.magicselect", "Magic Select", "select").desc("Drag a box round the subject and it is cut out, ready to drag where you want it. Ctrl leaves the picture whole and lifts a copy."),
+                        I::small("from-device", "From scanner or camera", "open").desc("Bring a page in from a scanner, or a picture from a camera on this computer."),
                     ],
                 ),
                 Group::rows(
