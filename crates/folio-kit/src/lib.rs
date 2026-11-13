@@ -3,6 +3,7 @@
 
 pub mod chrome;
 pub mod files;
+pub mod fonts;
 pub mod gfx;
 pub mod icons;
 pub mod ribbon;
