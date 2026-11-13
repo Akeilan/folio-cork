@@ -13,6 +13,7 @@ mod icons;
 mod layout;
 mod model;
 mod mood;
+mod relay;
 mod render;
 mod ribbon_defs;
 mod route;
@@ -30,7 +31,7 @@ use std::path::PathBuf;
 
 fn usage() {
     println!(
-        "Folio Cork {}\n\nUsage:\n  folio-cork [FILE.vsdx]          open a drawing\n  folio-cork --export IN OUT      export every page of IN to OUT (.png, .svg or .pdf)\n  folio-cork --ui-test [DIR]      run the window test, saving screenshots in DIR\n  folio-cork --ui-test DIR --headless   the same test with no window or display\n  folio-cork --bench              measure against the Raspberry Pi 4B budgets (X3-12)\n  folio-cork --version",
+        "Folio Cork {}\n\nUsage:\n  folio-cork [FILE.vsdx]          open a drawing\n  folio-cork --export IN OUT      export every page of IN to OUT (.png, .svg or .pdf)\n  folio-cork --ui-test [DIR]      run the window test, saving screenshots in DIR\n  folio-cork --ui-test DIR --headless   the same test with no window or display\n  folio-cork --bench              measure against the Raspberry Pi 4B budgets (X3-12)\n  folio-cork --relay [PORT]       be the go-between for people who cannot reach each other\n  folio-cork --version",
         app::VERSION
     );
 }
@@ -49,6 +50,15 @@ fn main() {
             }
             "--help" | "-h" => {
                 usage();
+                return;
+            }
+            "--relay" => {
+                // the go-between for people who cannot reach each other directly (K3-09)
+                let port = args.get(i + 1).and_then(|s| s.parse::<u16>().ok()).unwrap_or(7600);
+                if let Err(e) = relay::serve(port, &|m| println!("{m}")) {
+                    eprintln!("Can't be the go-between on port {port}: {e}");
+                    std::process::exit(1);
+                }
                 return;
             }
             "--write-icon" => {

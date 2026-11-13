@@ -1094,7 +1094,12 @@ impl CorkApp {
             }
             "share-host" => self.share_host(),
             "share-join" => {
-                self.dialog = Some(Dialog::new("join", "Join a board").text("addr", "Address shown on the host (computer:port)", "").text("code", "Board code", "").button("join", "Join").button("cancel", "Cancel"));
+                self.dialog = Some(Dialog::new("join", "Join a board")
+                    .text("addr", "Address shown on the host (computer:port)", "")
+                    .text("code", "Board code", "")
+                    .note("If the host cannot be reached directly, they will have given you the \
+                           address of a go-between instead. Type that here: it is the same box.")
+                    .button("join", "Join").button("cancel", "Cancel"));
             }
             "share-stop" => {
                 self.collab = None;
@@ -1442,7 +1447,27 @@ impl CorkApp {
             self.dialog = Some(Dialog::new("share-info", "Sharing this board").note(&info).button("ok", "Close").button("stop", "Stop Sharing"));
             return;
         }
-        match crate::collab::Collab::host(&self.ed, &self.ed.author.clone()) {
+        // Ask first how they should be reached: straight over the network, or through a
+        // go-between for people who cannot see this computer (K3-09).
+        self.dialog = Some(Dialog::new("share-how", "Share this board")
+            .note("Others on the same network can reach this computer directly. If they cannot, \
+                   run Folio Cork as a go-between on a computer you can both reach \
+                   (folio-cork --relay) and put its address below.")
+            .text("relay", "Go-between address (leave empty to share directly)",
+                  &self.settings.go_between.clone())
+            .button("share", "Share").button("cancel", "Cancel"));
+    }
+
+    fn share_host_now(&mut self, relay: &str) {
+        let relay = relay.trim().to_string();
+        self.settings.go_between = relay.clone();
+        self.settings.save();
+        let made = if relay.is_empty() {
+            crate::collab::Collab::host(&self.ed, &self.ed.author.clone())
+        } else {
+            crate::collab::Collab::host_via(&self.ed, &self.ed.author.clone(), &relay)
+        };
+        match made {
             Ok(c) => {
                 let info = c.info();
                 self.collab = Some(c);
@@ -1751,7 +1776,12 @@ impl CorkApp {
                     }
                 }
             }
-            ("join", "join") => match crate::collab::Collab::join(&d.value("addr"), &d.value("code"), &self.ed.author.clone()) {
+            ("share-how", "share") => {
+                let relay = d.value("relay");
+                self.share_host_now(&relay);
+                return;
+            }
+            ("join", "join") => match crate::collab::Collab::join_any(&d.value("addr"), &d.value("code"), &self.ed.author.clone()) {
                 Ok(c) => {
                     self.collab = Some(c);
                     self.flash("Joined. The board appears in a moment.");

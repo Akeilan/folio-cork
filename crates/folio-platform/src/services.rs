@@ -236,6 +236,12 @@ pub mod net {
         TcpStream::connect_timeout(addr, timeout)
     }
 
+    /// The first address a name like "boards.example.com:7600" stands for, or None (K3-09).
+    pub fn first_address(name: &str) -> Option<SocketAddr> {
+        use std::net::ToSocketAddrs;
+        name.to_socket_addrs().ok()?.next()
+    }
+
     /// This computer's address on the local network (no packet is sent).
     pub fn local_ip() -> String {
         std::net::UdpSocket::bind("0.0.0.0:0")

@@ -106,3 +106,29 @@ arguments Folio builds without a scanner on the bench.
 | Linux, X11 and Wayland | Done (winit + softbuffer + arboard, cpal for sound). |
 | Windows | Builds and runs, proven once on 6 November and not to be tested again — releases are held to Linux (see PORTABILITY.md rule 5). The workspace cross-builds for `x86_64-pc-windows-gnu` with no code changes, every test passed under wine, and Cork's and Draw's window tests ran start to finish; the files written match the Linux ones byte for byte. To repeat it by hand: `RUSTC_BOOTSTRAP=1 CARGO_TARGET_DIR=/tmp/cork-win FOLIO_FONTS='Z:\path\to\fonts' cargo test --config tools/win64.toml -Z build-std=std,panic_abort,panic_unwind --target x86_64-pc-windows-gnu --workspace`. What remains: printing (currently "export to PDF"), the conformance suite on a real Windows machine, and an installer that puts the fonts beside the .exe. |
 | macOS | Not a target and not to be proven (Product Owner, 2026-11-06). The rules keep it reachable — the same crates cover it and the layer has no per-OS code — but nobody is to spend time on it. |
+
+## The go-between (`--relay`), K3-09
+
+Sharing a board directly needs the person joining to be able to reach the person hosting. On one
+network that holds; across two it usually does not, and neither end can do anything about the
+other's router. So Folio Cork can be run as a go-between on a computer both ends can reach:
+
+```
+folio-cork --relay 7600
+```
+
+What it carries, it cannot read. A board's words are sealed end to end with a key made from the
+board code; the go-between never sees the code and is never given the key. All it is told is a
+room — the SHA-256 of the code, which it cannot turn back into the code — and it copies bytes
+between the people in that room. It keeps nothing.
+
+The person hosting opens one connection and says which room they are hosting. Each person joining
+opens a connection asking for that room, and is answered with one byte: *here*, or *nobody is
+sharing that board*. That byte is also how Folio Cork tells a go-between from a host sharing
+directly, so the person joining types one address either way and does not need to know which kind
+they were handed. The go-between then tells the host that someone has arrived; the host opens one
+more connection for that person, and the two streams are joined. That is the same shape as the
+listener a host uses on a local network, so the board itself does not know the difference.
+
+Nothing about this needs an account, a service, or anything outside the two computers and the one
+in the middle, which is the Product Owner's own.
