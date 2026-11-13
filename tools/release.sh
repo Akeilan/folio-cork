@@ -20,7 +20,7 @@ if [ -z "${INSTALLED_ONLY:-}" ]; then
   (cd $R && RUSTC_BOOTSTRAP=1 CARGO_TARGET_DIR=/tmp/cork-arm64 cargo test -q --config tools/arm64.toml -Z build-std=std,panic_abort,panic_unwind --target aarch64-unknown-linux-gnu --workspace 2>&1 | grep -E "test result: FAILED|panicked|differ"; echo "  $(cd $R && RUSTC_BOOTSTRAP=1 CARGO_TARGET_DIR=/tmp/cork-arm64 cargo test -q --config tools/arm64.toml -Z build-std=std,panic_abort,panic_unwind --target aarch64-unknown-linux-gnu --workspace 2>&1 | grep -c 'test result: ok') test groups ok on arm64"; rm -rf /tmp/cork-arm64)
   fi
   echo "== window conformance (X11)"
-  (cd $R && cargo build -q -p folio-platform --example conform && DISPLAY=:$XD WAYLAND_DISPLAY= tools/conformance.sh | tail -1)
+  (cd $R && cargo build -q -p folio-platform --example conform && DISPLAY=:$XD WAYLAND_DISPLAY= tools/conformance.sh 2>&1 | grep -E "^FAIL|^conformance:" | grep . || echo "FAILED: the window conformance run gave no verdict")
   if [ -n "${PORTS:-}" ]; then
   echo "== Pi 4B budgets, measured here (X3-12)"
   (cd $R && cargo build -q --release -p folio-cork && ./target/release/folio-cork --bench)
