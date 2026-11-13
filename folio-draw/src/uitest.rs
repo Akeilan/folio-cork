@@ -20,7 +20,9 @@ pub struct UiTest {
 /// Stands in for scanimage and ffmpeg in the capture test: records what it was asked for and
 /// writes a small PNG where the real tool would have written its picture.
 const STUB: &str = r#"# $1 is the tool Folio meant to run; the rest are its arguments. The last is the output file.
-dir=$(dirname "$0")
+# Nothing here is an outside program: the shell alone can run it, so the stub works on a machine
+# that holds only Folio, a shell and the C runtime (X3-16).
+dir=${0%/*}
 printf '%s\n' "$*" > "$dir/capture-args.txt"
 # asked what is plugged in: answer as scanimage's own device list does
 case " $* " in

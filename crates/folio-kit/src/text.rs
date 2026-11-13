@@ -156,10 +156,18 @@ pub const BUNDLED_MONO: &str = "Liberation Mono";
 
 /// Without a single font nothing can be drawn, and the text library's own error deep inside says
 /// only "no default font found". Say where fonts are looked for instead.
+/// The faces compiled into the program (X3-16).
+fn load_bundled(db: &mut cosmic_text::fontdb::Database) {
+    for (_name, data) in crate::fonts::bundled() {
+        db.load_font_data(data.to_vec());
+    }
+}
+
 fn no_fonts_check(n: usize) {
     if n == 0 {
         panic!(
-            "No fonts found. Folio looks in the folder named by FOLIO_FONTS, in \"fonts\" beside \
+            "No fonts found, not even the ones inside the program. Folio also looks in the folder \
+             named by FOLIO_FONTS, in \"fonts\" beside \
              the program, and in ../share/folio/fonts, as well as the system's own fonts."
         );
     }
@@ -175,7 +183,9 @@ impl Text {
             return Text::bundled();
         }
         let mut fonts = FontSystem::new();
-        // Fonts shipped next to the app (X3-16) come first.
+        // The faces inside the program are always there (X3-16), so Carlito and Liberation can be
+        // asked for on any machine, and a computer with no fonts at all still draws.
+        load_bundled(fonts.db_mut());
         for dir in folio_platform::font_dirs() {
             fonts.db_mut().load_fonts_dir(&dir);
         }
@@ -193,9 +203,9 @@ impl Text {
     /// use, so a page draws the same on every machine.
     pub fn bundled() -> Text {
         let mut db = cosmic_text::fontdb::Database::new();
-        let mut dirs = folio_platform::font_dirs();
-        dirs.push(std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../fonts")));
-        for d in dirs.iter().filter(|d| d.is_dir()) {
+        load_bundled(&mut db);
+        // a folder of fonts beside the program may add to these, but is not needed
+        for d in folio_platform::font_dirs().iter().filter(|d| d.is_dir()) {
             db.load_fonts_dir(d);
         }
         no_fonts_check(db.len());
