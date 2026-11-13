@@ -128,6 +128,23 @@ fn reader(mut stream: TcpStream, key: [u8; 32], idx: usize, tx: Sender<(usize, M
     });
 }
 
+/// Let one person who has arrived onto the board, however they reached us: over the local
+/// network, or through a go-between (K3-09). The first frame must decrypt with the board code,
+/// so a connection that does not know it gets no further than this.
+fn take_peer(s: TcpStream, key: [u8; 32], peers: &Arc<Mutex<Vec<Peer>>>, tx: &Sender<(usize, Msg)>) {
+    let mut s = s;
+    let _ = s.set_nodelay(true);
+    let Some(Msg::Hello { name }) = read_frame(&mut s, &key) else { return };
+    let Ok(copy) = s.try_clone() else { return };
+    let idx = {
+        let mut p = peers.lock().unwrap();
+        p.push(Peer { stream: copy, name: name.clone() });
+        p.len() - 1
+    };
+    reader(s, key, idx, tx.clone());
+    let _ = tx.send((idx, Msg::Hello { name }));
+}
+
 impl Collab {
     /// Share the open board. Others join with the address and code this shows.
     pub fn host(ed: &Editor, name: &str) -> Result<Collab, String> {
@@ -148,18 +165,8 @@ impl Collab {
                 let first_doc = Arc::new(Mutex::new(doc));
                 let _ = &first_doc;
                 for s in listener.incoming().flatten() {
-                    let mut s = s;
-                    let _ = s.set_nodelay(true);
-                    // The first frame must decrypt with the board code.
-                    let Some(Msg::Hello { name }) = read_frame(&mut s, &key) else { continue };
-                    let idx = {
-                        let mut p = peers.lock().unwrap();
-                        p.push(Peer { stream: s.try_clone().unwrap(), name: name.clone() });
-                        p.len() - 1
-                    };
                     let _ = &counter;
-                    reader(s, key, idx, tx.clone());
-                    let _ = tx.send((idx, Msg::Hello { name }));
+                    take_peer(s, key, &peers, &tx);
                 }
             });
         }
@@ -184,6 +191,71 @@ impl Collab {
         })
     }
 
+    /// Share the open board through a go-between, for people who cannot reach this computer
+    /// directly (K3-09). Others join with the go-between's address and the code this shows; the
+    /// go-between carries the board without being able to read it.
+    pub fn host_via(ed: &Editor, name: &str, relay: &str) -> Result<Collab, String> {
+        let code = make_code();
+        let key = derive_key(&code);
+        let (mut control, sock) = crate::relay::host_at(relay, &code)?;
+        let (tx, rx) = channel();
+        let peers: Arc<Mutex<Vec<Peer>>> = Arc::new(Mutex::new(vec![]));
+        let counter = Arc::new(Mutex::new(0u64));
+        let me = seed() as u32;
+        {
+            let peers = peers.clone();
+            let tx = tx.clone();
+            let code = code.clone();
+            folio_kit::platform::spawn("folio-cork-board", move || {
+                // one byte from the go-between for each person who arrives
+                let mut one = [0u8; 1];
+                while control.read_exact(&mut one).is_ok() {
+                    match crate::relay::back_for_one(&sock, &code) {
+                        Ok(s) => take_peer(s, key, &peers, &tx),
+                        Err(_) => break,
+                    }
+                }
+            });
+        }
+        Ok(Collab {
+            host: true,
+            addr: relay.trim().to_string(),
+            code,
+            name: name.into(),
+            key,
+            me,
+            counter,
+            peers,
+            rx,
+            rev: 1,
+            sent_version: ed.version,
+            last_change: None,
+            cursors: HashMap::new(),
+            last_cursor: Instant::now(),
+            pending: None,
+            error: String::new(),
+        })
+    }
+
+    /// Join a board through a go-between (K3-09): the address is the go-between's, not the
+    /// address of the computer sharing the board.
+    pub fn join_via(relay: &str, code: &str, name: &str) -> Result<Collab, String> {
+        let s = crate::relay::guest_at(relay, code)?;
+        Self::take_host_stream(s, relay, code, name)
+    }
+
+    /// Join a board at whatever address was given: the computer sharing it, or a go-between
+    /// (K3-09). One box, because the person typing it does not need to know which they were
+    /// handed — a go-between answers the board code with a room and a direct host does not.
+    pub fn join_any(addr: &str, code: &str, name: &str) -> Result<Collab, String> {
+        match Self::join_via(addr, code, name) {
+            Ok(c) => Ok(c),
+            // whatever is there did not answer as a go-between, so try it as the host itself
+            Err(e) if e == crate::relay::NOT_A_GO_BETWEEN => Self::join(addr, code, name),
+            Err(e) => Err(e),
+        }
+    }
+
     pub fn join(addr: &str, code: &str, name: &str) -> Result<Collab, String> {
         let addr = addr.trim();
         if addr.is_empty() {
@@ -191,7 +263,15 @@ impl Collab {
         }
         let key = derive_key(code);
         let sock: net::SocketAddr = addr.parse().map_err(|_| "The address should look like 192.168.1.20:40123.".to_string())?;
-        let mut s = net::connect(&sock, Duration::from_secs(4)).map_err(|e| format!("Can't reach {addr}: {e}"))?;
+        let s = net::connect(&sock, Duration::from_secs(4)).map_err(|e| format!("Can't reach {addr}: {e}"))?;
+        Self::take_host_stream(s, addr, code, name)
+    }
+
+    /// The guest's half, once there is a stream to the board: the same whether it came straight
+    /// from the computer sharing it or through a go-between (K3-09).
+    fn take_host_stream(s: TcpStream, addr: &str, code: &str, name: &str) -> Result<Collab, String> {
+        let key = derive_key(code);
+        let mut s = s;
         let _ = s.set_nodelay(true);
         let counter = Arc::new(Mutex::new(0u64));
         let me = seed() as u32;

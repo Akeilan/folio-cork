@@ -176,6 +176,76 @@ fn working_together_over_loopback() {
 }
 
 #[test]
+fn working_together_through_a_go_between() {
+    // K3-09: neither end can reach the other, so both reach a go-between instead. Here it runs
+    // in this process on a loopback port; in life it is `folio-cork --relay` on a computer both
+    // can see.
+    let listener = folio_kit::platform::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let relay_port = listener.local_addr().unwrap().port();
+    folio_kit::platform::spawn("test-relay", move || {
+        let _ = crate::relay::serve_on(listener, &|_| {});
+    });
+    let relay = format!("127.0.0.1:{relay_port}");
+
+    let mut host_ed = ed();
+    let a = host_ed.insert_kind_at("rect", 100.0, 100.0);
+    host_ed.pgm().get_mut(a).unwrap().text = "Through the middle".into();
+    let mut host = crate::collab::Collab::host_via(&host_ed, "Host", &relay).unwrap();
+    let info = host.info();
+    let code = info.lines().find(|l| l.contains("Code:")).and_then(|l| l.split("Code:").nth(1)).unwrap().trim().to_string();
+    assert!(info.contains(&relay), "the address people are given is the go-between's: {info}");
+
+    let mut guest_ed = ed();
+    let mut guest = crate::collab::Collab::join_via(&relay, &code, "Guest").unwrap();
+    let start = std::time::Instant::now();
+    while start.elapsed() < std::time::Duration::from_secs(10) {
+        host.poll(&mut host_ed);
+        guest.poll(&mut guest_ed);
+        if guest_ed.pg().shapes.iter().any(|s| s.text == "Through the middle") {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(guest_ed.pg().shapes.iter().any(|s| s.text == "Through the middle"),
+            "the board did not reach the guest through the go-between");
+
+    // and back the other way
+    let id = guest_ed.pg().shapes[0].id;
+    guest_ed.checkpoint("x", "");
+    guest_ed.pgm().get_mut(id).unwrap().text = "Answered".into();
+    guest_ed.changed();
+    let start = std::time::Instant::now();
+    while start.elapsed() < std::time::Duration::from_secs(10) {
+        guest.poll(&mut guest_ed);
+        host.poll(&mut host_ed);
+        if host_ed.pg().shapes.iter().any(|s| s.text == "Answered") {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(host_ed.pg().shapes.iter().any(|s| s.text == "Answered"),
+            "the edit did not come back through the go-between");
+
+    // the wrong code is a different room, and the go-between says so rather than hanging
+    let bad = crate::collab::Collab::join_via(&relay, "AAAA-BBBB-CCCC", "Bad");
+    assert!(bad.is_err(), "a different code must not reach the board");
+    let why = bad.err().unwrap();
+    assert!(why.contains("nobody sharing a board with that code"), "{why}");
+
+    // one box for both kinds of address: the go-between answers as one, a direct host does not
+    let mut direct_ed = ed();
+    direct_ed.insert_kind_at("rect", 0.0, 0.0);
+    let direct = crate::collab::Collab::host(&direct_ed, "Direct").unwrap();
+    let dinfo = direct.info();
+    let dport = dinfo.lines().find(|l| l.contains("Address:")).and_then(|l| l.rsplit(':').next()).unwrap().trim().to_string();
+    let dcode = dinfo.lines().find(|l| l.contains("Code:")).and_then(|l| l.split("Code:").nth(1)).unwrap().trim().to_string();
+    assert!(crate::collab::Collab::join_any(&format!("127.0.0.1:{dport}"), &dcode, "G2").is_ok(),
+            "the same box reaches a host sharing directly");
+    assert!(crate::collab::Collab::join_any(&relay, &code, "G3").is_ok(),
+            "and reaches a board through a go-between");
+}
+
+#[test]
 fn pdf_tiles_large_pages() {
     let mut e = ed();
     e.insert_kind_at("rect", 0.0, 0.0);

@@ -14,6 +14,9 @@ fn dir() -> PathBuf {
 pub struct Settings {
     pub theme: String,
     pub author: String,
+    /// The go-between to use when the other computer cannot be reached directly (K3-09).
+    #[serde(default)]
+    pub go_between: String,
     pub recent: Vec<String>,
     pub grid: bool,
     pub snap: bool,
@@ -35,6 +38,7 @@ impl Default for Settings {
         Settings {
             theme: "system".into(),
             author: String::new(),
+            go_between: String::new(),
             recent: vec![],
             grid: true,
             snap: true,
